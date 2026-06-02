@@ -56,7 +56,7 @@ final class TerminalSessionBackendTests: XCTestCase {
         let snapshot = TerminalSessionSnapshot(
             sessionId: "session-a",
             surfaceId: "surface-a",
-            backend: .legacyInternal,
+            backend: .ghosttySurface,
             status: "running",
             pid: 42,
             cwd: "/tmp/project",
@@ -68,7 +68,7 @@ final class TerminalSessionBackendTests: XCTestCase {
             updatedAt: now
         )
 
-        XCTAssertEqual(snapshot.backend, .legacyInternal)
+        XCTAssertEqual(snapshot.backend, .ghosttySurface)
         XCTAssertEqual(snapshot.surfaceId, "surface-a")
         XCTAssertNil(snapshot.fallbackReason)
     }
@@ -88,17 +88,40 @@ final class TerminalSessionBackendTests: XCTestCase {
             nodeId: "node-a",
             createdAt: now,
             updatedAt: now,
-            fallbackReason: "legacy fallback"
+            fallbackReason: "startup failed"
         )
 
         let data = try JSONEncoder().encode(snapshot)
         let decoded = try JSONDecoder().decode(TerminalSessionSnapshot.self, from: data)
 
         XCTAssertEqual(decoded.backend, .ghosttySurface)
-        XCTAssertEqual(decoded.fallbackReason, "legacy fallback")
+        XCTAssertEqual(decoded.fallbackReason, "startup failed")
     }
 
-    func testStaleInternalSessionDTODoesNotFallBackToExternal() {
+    func testGhosttyPreferredBackendRequiresRegisteredBackend() {
+        TerminalSessionBackendRegistry.shared.setPreferredKind(.ghosttySurface)
+        defer {
+            TerminalSessionBackendRegistry.shared.setPreferredKind(nil)
+        }
+
+        XCTAssertThrowsError(try TerminalSessionBackendRegistry.shared.createSession(
+            request: TerminalSessionRequest(
+                provider: "claude",
+                cwd: NSTemporaryDirectory(),
+                command: "shell",
+                canvasId: "canvas-a",
+                nodeId: "node-a",
+                initialPrompt: nil
+            )
+        )) { error in
+            XCTAssertEqual(
+                error as? TerminalSessionBackendError,
+                .backendUnavailable("ghostty-surface backend is not registered in this process")
+            )
+        }
+    }
+
+    func testStaleInternalSessionDTOIsNotNativeWorkspaceOpenable() {
         let now = Date(timeIntervalSince1970: 10)
         let terminalInfo = PluginTerminalInfo(
             tty: nil,
@@ -131,7 +154,7 @@ final class TerminalSessionBackendTests: XCTestCase {
             providerResumeSessionId: "provider-session-a",
             canvasId: "canvas-a",
             nodeId: "node-a",
-            backend: TerminalSessionBackendKind.legacyInternal.rawValue,
+            backend: TerminalSessionBackendKind.external.rawValue,
             fallbackReason: nil,
             cmuxSocketPath: nil,
             cmuxSurfaceId: "surface-a"
@@ -146,6 +169,7 @@ final class TerminalSessionBackendTests: XCTestCase {
         XCTAssertFalse(dto.canOpenExternal)
         XCTAssertFalse(dto.nativeWorkspaceAvailable)
         XCTAssertEqual(dto.openTarget, "web-fallback")
+        XCTAssertNil(dto.providerResumeSessionId)
     }
 
     func testNonJumpableExternalSessionKeepsResolvedLiveStatus() {

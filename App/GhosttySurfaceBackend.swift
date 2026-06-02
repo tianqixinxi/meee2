@@ -216,6 +216,8 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     let nodeId: String?
     let view: NSView
     var paneView: NSView { view }
+    var terminalSurfaceId: String { surfaceId }
+    var terminalSessionId: String? { sessionId }
 
     private let terminalView: TerminalView
     private let terminalController: GhosttyTerminal.TerminalController
@@ -228,14 +230,14 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var didSendCommand = false
     private var didSendInitialPrompt = false
     private var detached = false
+    private var lastLayoutFrame: NSRect = .zero
 
-    // BUG A — ready-gated initialPrompt delivery (mirrors InternalTerminalRuntime
-    // `deliverInitialPromptWhenReady`). Ghostty exec surfaces do NOT expose
+    // Ready-gated initialPrompt delivery. Ghostty exec surfaces do not expose
     // stdout, so we can't poll PTY bytes; instead we treat any surface signal
     // (grid resize / title / pwd / progress / command-finished) as "the TUI is
     // rendering" and update `lastSurfaceActivityAt`. The poller waits until the
-    // surface has produced activity AND gone quiet for a settle window (TUI
-    // finished booting its input box), then submits `prompt + \r`. A hard
+    // surface has produced activity and gone quiet for a settle window, then
+    // sends the prompt text and real Return key events separately. A hard
     // ceiling guarantees delivery even if signals never arrive; abort on exit.
     private var lastSurfaceActivityAt: Date?
     private var promptDeliveryStartedAt: Date?
@@ -272,7 +274,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         self.command = command
         self.canvasId = canvasId
         self.nodeId = nodeId
-        self.initialPrompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.initialPrompt = Self.normalizedPromptForPaste(initialPrompt)
         self.onExit = onExit
         self.onStatusChange = onStatusChange
         self.terminalController = Self.makeTerminalController()
@@ -315,13 +317,20 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     func layout(in frame: NSRect, hidden: Bool, reason: String) {
         guard !detached else { return }
         let startedAt = Date()
-        terminalView.frame = frame
-        terminalView.isHidden = hidden
+        let frameChanged = frame != lastLayoutFrame
+        let visibilityChanged = terminalView.isHidden != hidden
+        lastLayoutFrame = frame
+        if frameChanged {
+            terminalView.frame = frame
+        }
+        if visibilityChanged {
+            terminalView.isHidden = hidden
+        }
         terminalView.setSurfaceVisible(!hidden)
-        if !hidden {
+        if !hidden && (frameChanged || visibilityChanged) {
             fitToCurrentSize()
         }
-        logPerf("layout", startedAt: startedAt, extra: "reason=\(reason) hidden=\(hidden)")
+        logPerf("layout", startedAt: startedAt, extra: "reason=\(reason) hidden=\(hidden) frameChanged=\(frameChanged) visibilityChanged=\(visibilityChanged)")
     }
 
     func focus() {
@@ -330,6 +339,13 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         terminalView.window?.makeFirstResponder(terminalView)
         terminalView.setSurfaceVisible(true)
         logPerf("focus", startedAt: startedAt)
+    }
+
+    func scrollWheel(with event: NSEvent) {
+        guard !detached, !terminalView.isHidden else { return }
+        terminalView.window?.makeFirstResponder(terminalView)
+        terminalView.setSurfaceVisible(true)
+        terminalView.scrollWheel(with: event)
     }
 
     func hide() {
@@ -382,8 +398,9 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if shouldSendLaunchCommand(trimmedCommand) {
             let startedAt = Date()
-            terminalView.sendText(trimmedCommand + "\n")
-            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(trimmedCommand.utf8.count)")
+            let launchCommand = commandWithSurfaceIdentity(trimmedCommand)
+            terminalView.sendText(launchCommand + "\n")
+            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(launchCommand.utf8.count)")
             _ = scheduleWorkspaceTrustAutoAcceptIfNeeded(command: trimmedCommand)
         }
         guard let initialPrompt, !initialPrompt.isEmpty else { return }
@@ -401,13 +418,16 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     /// ready, retrying until then. Replaces the old blind fixed-delay write that
     /// dropped the prompt on a fresh canvas (TUI not yet rendered at 1.2s).
     private func scheduleInitialPromptDeliveryWhenReady(_ rawPrompt: String) {
-        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !didSendInitialPrompt, promptDeliveryStartedAt == nil else { return }
+        guard let prompt = Self.normalizedPromptForPaste(rawPrompt),
+              !prompt.isEmpty,
+              !didSendInitialPrompt,
+              promptDeliveryStartedAt == nil
+        else { return }
         promptDeliveryStartedAt = Date()
 
         // Output (here: surface signals) must be quiet this long before we treat
         // the TUI as "ready". Hard ceiling delivers anyway even if no signal ever
-        // arrives. Both mirror InternalTerminalRuntime.deliverInitialPromptWhenReady.
+        // arrives.
         let settleWindow: TimeInterval = 0.8
         let ceiling: TimeInterval = 20.0
         let firstProbe: DispatchTimeInterval = .milliseconds(700)
@@ -434,7 +454,15 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
             if trustReady, settled || pastCeiling {
                 didSendInitialPrompt = true
                 let startedAt = Date()
-                terminalView.sendText(prompt + "\r")
+                terminalView.sendText(prompt)
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
+                    guard let self, !self.detached else { return }
+                    self.pressReturnKey(reason: "initial_prompt_submit")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+                        guard let self, !self.detached else { return }
+                        self.pressReturnKey(reason: "initial_prompt_submit_retry")
+                    }
+                }
                 touch()
                 logPerf("initial_prompt", startedAt: startedAt,
                         extra: "bytes=\(prompt.utf8.count) reason=\(pastCeiling ? "ceiling" : "settled")")
@@ -469,7 +497,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1_100)) { [weak self] in
             guard let self, !self.detached else { return }
             let startedAt = Date()
-            self.terminalView.sendText("\r")
+            self.pressReturnKey(reason: "auto_accept_workspace_trust")
             self.touch()
             self.trustAutoAcceptSentAt = Date()
             // The Enter itself counts as surface activity → the poller's settle
@@ -480,10 +508,39 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         return true
     }
 
+    private func pressReturnKey(reason: String) {
+        let startedAt = Date()
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: terminalView.window?.windowNumber ?? 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        ) else {
+            terminalView.sendText("\r")
+            logPerf("return_key_fallback", startedAt: startedAt, extra: "reason=\(reason)")
+            return
+        }
+        terminalView.keyDown(with: event)
+        logPerf("return_key", startedAt: startedAt, extra: "reason=\(reason)")
+    }
+
     private func shouldSendLaunchCommand(_ command: String) -> Bool {
         guard !command.isEmpty else { return false }
         let lower = command.lowercased()
         return lower != "shell" && lower != "/bin/zsh" && lower != "/bin/bash"
+    }
+
+    private func commandWithSurfaceIdentity(_ rawCommand: String) -> String {
+        [
+            "CMUX_SURFACE_ID=\(Self.shellQuote(surfaceId))",
+            rawCommand
+        ].joined(separator: " ")
     }
 
     private func touch() {
@@ -518,6 +575,28 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         return GhosttyTerminal.TerminalController(
             theme: TerminalTheme(light: embeddedDarkTheme, dark: embeddedDarkTheme)
         )
+    }
+
+    private static func normalizedPromptForPaste(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        var lines = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+        while let first = lines.first,
+              first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.removeFirst()
+        }
+        while let last = lines.last,
+              last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.removeLast()
+        }
+        let prompt = lines.joined(separator: "\n")
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    private static func shellQuote(_ raw: String) -> String {
+        "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func configureGhosttyResourcesIfNeeded() {

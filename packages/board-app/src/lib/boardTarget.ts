@@ -47,6 +47,7 @@ export type BoardOpenTarget =
   | {
     kind: 'session'
     sessionId: string
+    canvasId?: string | null
     source?: GuideSource
   }
 

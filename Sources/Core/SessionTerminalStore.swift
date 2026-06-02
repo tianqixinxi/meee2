@@ -169,6 +169,38 @@ class SessionTerminalStore {
         }
     }
 
+    @discardableResult
+    func setProviderResumeSessionIdForSurface(
+        cmuxSurfaceId: String?,
+        providerResumeSessionId: String
+    ) -> String? {
+        let surfaceId = cmuxSurfaceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resumeId = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !surfaceId.isEmpty,
+              let validResumeId = Self.validProviderResumeSessionId(resumeId) else {
+            return nil
+        }
+        return performSyncReturning {
+            guard let sessionId = store.first(where: { _, info in
+                info.cmuxSurfaceId == surfaceId
+                    && InternalSessionIdentity.isSurfaceTerminal(
+                        termProgram: info.termProgram,
+                        termBundleId: info.termBundleId
+                    )
+            })?.key else {
+                return nil
+            }
+            var info = store[sessionId]!
+            guard info.providerResumeSessionId != validResumeId else { return sessionId }
+            info.providerResumeSessionId = validResumeId
+            info.lastActivityAt = Date()
+            store[sessionId] = info
+            save()
+            NSLog("[SessionTerminalStore] Linked surface \(surfaceId.prefix(12)) session \(sessionId.prefix(8)) to provider resume id \(validResumeId.prefix(8))")
+            return sessionId
+        }
+    }
+
     /// 清理过期 session (超过 24 小时无活动)
     func cleanupExpired() {
         performSync {
@@ -218,6 +250,13 @@ class SessionTerminalStore {
         }
     }
 
+    private func performSyncReturning<T>(_ work: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            return work()
+        }
+        return queue.sync(execute: work)
+    }
+
     private func migrateInvalidInternalResumeCommandsLocked() -> Bool {
         var changed = false
         for (sessionId, var info) in store {
@@ -248,7 +287,7 @@ class SessionTerminalStore {
 
     private static func validProviderResumeSessionId(_ raw: String?) -> String? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, !AgentLaunchCommand.isMeee2InternalSessionId(trimmed) else {
+        guard AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) else {
             return nil
         }
         return trimmed
@@ -263,8 +302,6 @@ class SessionTerminalStore {
 
     private static func inferBackend(termProgram: String?) -> String? {
         switch termProgram?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "meee2-internal":
-            return TerminalSessionBackendKind.legacyInternal.rawValue
         case "meee2-ghostty-surface":
             return TerminalSessionBackendKind.ghosttySurface.rawValue
         case .some:

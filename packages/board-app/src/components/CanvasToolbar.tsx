@@ -34,7 +34,6 @@ import { readLlmSettings } from '../lib/llmSettings'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, CanvasInfo, CanvasKind, CanvasScope, PlannerGraphState } from '../types'
 import type { TeamMember, UserProfile } from '../api'
-import { AIRecapDrawer } from './planner/AIRecapDrawer'
 import {
   buildAIRecapPrompt,
   buildCanvasStatusRecap as buildCoreCanvasStatusRecap,
@@ -66,16 +65,10 @@ interface Props {
     input: { name?: string; description?: string; tags?: string[]; defaultCanvasKind?: Exclude<CanvasKind, 'template'> },
   ) => Promise<void | string> | void
   onResolveCanvasConflict?: (canvasId: string, choice: 'current' | 'remote') => Promise<void> | void
-  // AI Recap Drawer needs richer context. Optional so narrower callers can
-  // still render the toolbar without canvas monitor wiring.
   userProfile?: UserProfile | null
   boardState?: BoardState | null
   plannerState?: PlannerGraphState | null
   canvasMonitor?: CanvasMonitor | null
-  /** Switch the workspace rail to `SessionsView`. Forwarded to the drawer's
-   *  "View all sessions" CTA so it can hand off instead of duplicating the
-   *  global session list. */
-  onOpenAllSessions?: () => void
 }
 
 type CanvasRecap = CoreCanvasStatusRecap & {
@@ -124,7 +117,6 @@ export function CanvasToolbar({
   boardState = null,
   plannerState = null,
   canvasMonitor = null,
-  onOpenAllSessions,
 }: Props) {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -170,7 +162,6 @@ export function CanvasToolbar({
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
   const [recapAgeNow, setRecapAgeNow] = useState(() => Date.now())
-  const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
   const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
   const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
   const [ownerDirectory, setOwnerDirectory] = useState<Record<string, OwnerIdentity>>({})
@@ -756,13 +747,9 @@ export function CanvasToolbar({
       </div>
       <div className="canvas-toolbar__context" aria-live="polite">
         <div className="canvas-toolbar__recap">
-          <button
-            type="button"
+          <div
             className="canvas-toolbar__recap-trigger"
-            aria-label={t('canvas.openRecap')}
-            aria-expanded={recapDrawerOpen}
             title={recap?.headline ?? t('canvas.readingState')}
-            onClick={() => setRecapDrawerOpen((value) => !value)}
           >
             <Sparkles size={13} aria-hidden />
             <span className="canvas-toolbar__recap-copy">
@@ -776,7 +763,7 @@ export function CanvasToolbar({
             <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
               {monitorBadge.label}
             </span>
-          </button>
+          </div>
           <button
             type="button"
             className="canvas-toolbar__recap-refresh"
@@ -806,8 +793,8 @@ export function CanvasToolbar({
           ))}
           {/* UI-simplification §1 — session 是隐藏词,对外口径统一叫「进展」。
            *  这里把 boardState.sessions 里 status 异常 / 等待权限的条目转译成
-           *  「需关注的进展」pill,点击直接跳到对应 session 详情:
-           *  - 1 条:直接 dispatch meee2:open-session(切到 SessionsView + 选中)
+           *  「需关注的进展」pill,点击直接在当前 canvas 弹出 session terminal overlay:
+           *  - 1 条:直接 dispatch meee2:open-session(带 active canvas)
            *  - 多条:展开 dropdown 列出节点名 + 状态,点一条跳过去
            *  仅在非 0 时显示,不挤占空间。 */}
           {(() => {
@@ -820,7 +807,7 @@ export function CanvasToolbar({
             const count = attentionSessions.length
             const openSession = (sessionId: string) => {
               window.dispatchEvent(new CustomEvent('meee2:open-session', {
-                detail: { sessionId },
+                detail: { sessionId, canvasId: activeCanvas.id },
               }))
               setAttentionMenuOpen(false)
             }
@@ -873,18 +860,6 @@ export function CanvasToolbar({
           })()}
         </div>
       )}
-
-      <AIRecapDrawer
-        open={recapDrawerOpen}
-        onClose={() => setRecapDrawerOpen(false)}
-        canvasId={activeCanvas.id}
-        canvasName={displayCanvasName(activeCanvas)}
-        plannerState={plannerState}
-        monitor={canvasMonitor}
-        boardState={boardState}
-        userProfile={userProfile}
-        onOpenAllSessions={onOpenAllSessions}
-      />
 
       {/* UI-simplification — hover canvas item in dropdown → semantic recap popover */}
       {hoveredCanvasId && hoverAnchor && (() => {

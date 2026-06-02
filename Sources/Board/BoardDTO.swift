@@ -53,6 +53,7 @@ struct SessionDTO: Encodable {
     /// session still lives in Ghostty/iTerm/Terminal/cmux.
     let terminalKind: String
     let surfaceId: String?
+    let providerResumeSessionId: String?
     let surfaceStatus: String?
     let canOpenExternal: Bool
     let terminalBackend: String
@@ -941,9 +942,7 @@ enum BoardDTOBuilder {
         let displayStatus = orphanedInternalResume ? SessionStatus.dead : resolvedStatus
         let externalSurfaceStatus = orphanedInternalResume || resolvedStatus.isHistorical ? "exited" : nil
         let terminalKind = orphanedInternalResume ? "internal" : "external"
-        let terminalBackend = orphanedInternalResume
-            ? TerminalSessionBackendKind.legacyInternal.rawValue
-            : TerminalSessionBackendKind.external.rawValue
+        let terminalBackend = TerminalSessionBackendKind.external.rawValue
         let openTarget = orphanedInternalResume ? "web-fallback" : "external"
         let sync = syncInfo(forSessionId: session.id)
         let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
@@ -971,6 +970,7 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             terminalKind: terminalKind,
             surfaceId: nil,
+            providerResumeSessionId: nil,
             surfaceStatus: externalSurfaceStatus,
             canOpenExternal: canOpenExternal,
             terminalBackend: terminalBackend,
@@ -1039,6 +1039,7 @@ enum BoardDTOBuilder {
             termProgram: nil,
             terminalKind: "external",
             surfaceId: nil,
+            providerResumeSessionId: nil,
             surfaceStatus: "exited",
             canOpenExternal: true,
             terminalBackend: TerminalSessionBackendKind.external.rawValue,
@@ -1085,11 +1086,10 @@ enum BoardDTOBuilder {
                sessionData.terminalInfo?.termProgram?.lowercased() == "meee2-ghostty-surface" {
                 return TerminalSessionBackendKind.ghosttySurface.rawValue
             }
-            return TerminalSessionBackendKind.legacyInternal.rawValue
+            return TerminalSessionBackendKind.external.rawValue
         }()
         let sync = syncInfo(forSessionId: sessionData.sessionId)
-        let providerResumeId = terminalInfo?.providerResumeSessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerResumeId = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId)
         let controlIds = [sessionData.sessionId, terminalInfo?.cmuxSurfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -1127,6 +1127,7 @@ enum BoardDTOBuilder {
             termProgram: sessionData.terminalInfo?.termProgram ?? terminalInfo?.termProgram ?? "meee2-internal",
             terminalKind: "internal",
             surfaceId: nil,
+            providerResumeSessionId: providerResumeId?.isEmpty == false ? providerResumeId : nil,
             surfaceStatus: surfaceStatus,
             canOpenExternal: false,
             terminalBackend: backend,
@@ -1160,15 +1161,16 @@ enum BoardDTOBuilder {
             }
         }()
         let sync = syncInfo(forSessionId: surface.sessionId)
-        let providerResumeId = SessionTerminalStore.shared.get(sessionId: surface.sessionId)?
-            .providerResumeSessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerResumeId = validProviderResumeSessionId(
+            SessionTerminalStore.shared.get(sessionId: surface.sessionId)?.providerResumeSessionId
+        )
         let controlIds = [surface.sessionId, surface.surfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
         let controlState = SessionControlStore.shared.state(for: controlIds)
         let backend = TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? surface.backend
-        let termProgram = backend == .ghosttySurface ? "meee2-ghostty-surface" : "meee2-internal"
+        let nativeWorkspaceAvailable = backend == .ghosttySurface
+        let termProgram = nativeWorkspaceAvailable ? "meee2-ghostty-surface" : "meee2-internal"
         return SessionDTO(
             id: surface.sessionId,
             title: "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)",
@@ -1192,11 +1194,12 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             terminalKind: "internal",
             surfaceId: surface.surfaceId,
+            providerResumeSessionId: providerResumeId?.isEmpty == false ? providerResumeId : nil,
             surfaceStatus: surface.status,
             canOpenExternal: false,
             terminalBackend: backend.rawValue,
-            nativeWorkspaceAvailable: true,
-            openTarget: "native-workspace",
+            nativeWorkspaceAvailable: nativeWorkspaceAvailable,
+            openTarget: nativeWorkspaceAvailable ? "native-workspace" : "web-fallback",
             controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
@@ -1270,6 +1273,7 @@ enum BoardDTOBuilder {
             termProgram: surface.termProgram,
             terminalKind: surface.terminalKind,
             surfaceId: surface.surfaceId,
+            providerResumeSessionId: validProviderResumeSessionId(surface.providerResumeSessionId),
             surfaceStatus: surface.surfaceStatus,
             canOpenExternal: surface.canOpenExternal,
             terminalBackend: surface.terminalBackend,
@@ -1283,6 +1287,11 @@ enum BoardDTOBuilder {
             syncTeamId: surface.syncTeamId,
             syncTeamName: surface.syncTeamName
         )
+    }
+
+    private static func validProviderResumeSessionId(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) ? trimmed : nil
     }
 
     private static func externalSessionCanOpen(

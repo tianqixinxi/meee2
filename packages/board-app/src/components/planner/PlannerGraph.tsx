@@ -584,6 +584,7 @@ function PlannerGraphInner({
           detail: {
             sessionId: result.sessionId,
             surfaceId: result.surfaceId,
+            canvasId,
           },
         }))
         void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
@@ -1389,6 +1390,7 @@ function PlannerGraphInner({
             detail: {
               sessionId: first.sessionId,
               surfaceId: first.surfaceId,
+              canvasId,
             },
           }))
           loadState()
@@ -1428,6 +1430,7 @@ function PlannerGraphInner({
                 detail: {
                   sessionId: first.sessionId,
                   surfaceId: first.surfaceId,
+                  canvasId,
                 },
               }))
             }

@@ -9,6 +9,13 @@ enum AgentLaunchCommand {
             : "claude --dangerously-skip-permissions"
     }
 
+    static func resumeCommand(forProvider provider: String, sessionId: String) -> String {
+        let quotedSessionId = "'\(sessionId.replacingOccurrences(of: "'", with: "'\\''"))'"
+        return normalizedProvider(provider) == "codex"
+            ? "codex \(codexAutomationFlags) resume \(quotedSessionId)"
+            : "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+    }
+
     static func normalizedProvider(_ raw: String) -> String {
         raw.lowercased().contains("codex") ? "codex" : "claude"
     }
@@ -19,7 +26,10 @@ enum AgentLaunchCommand {
 
     static func isMeee2InternalSessionId(_ raw: String) -> Bool {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
+        return lower.hasPrefix("claude-internal-")
+            || lower.hasPrefix("codex-internal-")
+            || lower.hasPrefix("claude-ghostty-")
+            || lower.hasPrefix("codex-ghostty-")
     }
 
     static func isLikelyProviderResumeSessionId(_ raw: String) -> Bool {
@@ -40,7 +50,10 @@ enum AgentLaunchCommand {
     static func commandUsesInternalResumeId(_ rawCommand: String) -> Bool {
         let lower = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard commandRequestsResume(lower) else { return false }
-        return lower.contains("claude-internal-") || lower.contains("codex-internal-")
+        return lower.contains("claude-internal-")
+            || lower.contains("codex-internal-")
+            || lower.contains("claude-ghostty-")
+            || lower.contains("codex-ghostty-")
     }
 
     static func normalize(command rawCommand: String, fallbackProvider: String = "claude") -> (provider: String, command: String) {

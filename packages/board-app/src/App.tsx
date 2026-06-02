@@ -11,7 +11,7 @@ import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView } from './components/ArtifactsView'
-import { NativeSessionsWorkspaceHost } from './components/NativeSessionsWorkspaceHost'
+import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
@@ -29,6 +29,12 @@ import {
 } from './lib/boardTarget'
 import { requestBoardGuide, requestPlannerNodeSelection } from './lib/guide'
 import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
+import {
+  findSessionByTarget,
+  isLiveInternalTerminalSession,
+  resolveSessionCanvasId,
+  type SessionOpenTarget,
+} from './lib/sessionTerminal'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
 import type {
@@ -76,12 +82,14 @@ import {
   uploadClaudeWorkflow,
   updateCanvas,
   updateTemplateMetadata,
+  activateSession,
   type UserProfile,
   type TemplateMetadataInput,
 } from './api'
 
 declare global {
   interface Window {
+    __meee2PendingSessionTerminalOverlay?: SessionOpenTarget | null
     __meee2PendingSessionsWorkspace?: { sessionId?: string; surfaceId?: string } | null
   }
 }
@@ -408,7 +416,7 @@ export default function App() {
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [sessionTerminalTarget, setSessionTerminalTarget] = useState<SessionOpenTarget | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -420,7 +428,6 @@ export default function App() {
   const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null)
   const [readinessRepairLogs, setReadinessRepairLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  // Session unread state still drives session list ordering and rail attention tone.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     if (hydrated) setUnreadSids(hydrated.unreadSids)
@@ -580,35 +587,78 @@ export default function App() {
     return () => window.removeEventListener('meee2:nav-templates', navTemplates)
   }, [])
 
-  const openSessionsWorkspaceFromDetail = useCallback((detail?: { sessionId?: string; surfaceId?: string } | null) => {
-    const surfaceId = detail?.surfaceId?.trim()
-    const sessionId = detail?.sessionId?.trim()
+  const handleSetActiveCanvas = useCallback((canvasId: string) => {
+    updateCanvas(canvasId, { active: true })
+      .then((list) => {
+        applyCanvasList(list)
+      })
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
+  }, [applyCanvasList, pushToast])
+
+  const openSessionTerminalOverlay = useCallback((detail?: SessionOpenTarget | null) => {
+    const target = {
+      sessionId: detail?.sessionId?.trim() || undefined,
+      surfaceId: detail?.surfaceId?.trim() || undefined,
+      canvasId: detail?.canvasId?.trim() || undefined,
+    }
+    if (!target.sessionId && !target.surfaceId) return
     setDegradedEntry(true)
-    setSelectedSessionId(sessionId || surfaceId || null)
-    setWorkspaceMode('sessions')
+    const session = findSessionByTarget(boardState.state?.sessions ?? [], target)
+    if (session && !isLiveInternalTerminalSession(session)) {
+      void activateSession(session.id).then((ok) => {
+        if (!ok) pushToast('error', t('sessions.nativeTerminalUnavailable'))
+      })
+      return
+    }
+    const targetCanvasId = resolveSessionCanvasId({
+      target,
+      session,
+      memberships: canvasList?.memberships ?? [],
+      canvases: workspaceCanvases,
+      activePlannerState: currentPlannerState,
+      fallbackCanvasId: activeWorkspaceCanvasId,
+    })
+    if (targetCanvasId !== activeCanvasId) {
+      handleSetActiveCanvas(targetCanvasId)
+    }
+    setWorkspaceMode('planner')
+    setSessionTerminalTarget({ ...target, canvasId: targetCanvasId })
     boardState.refresh()
-  }, [boardState.refresh])
+  }, [
+    activeCanvasId,
+    activeWorkspaceCanvasId,
+    boardState,
+    canvasList?.memberships,
+    currentPlannerState,
+    handleSetActiveCanvas,
+    pushToast,
+    t,
+    workspaceCanvases,
+  ])
 
   useEffect(() => {
     const openSession = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
-      openSessionsWorkspaceFromDetail(detail)
+      const detail = (event as CustomEvent<SessionOpenTarget>).detail
+      openSessionTerminalOverlay(detail)
     }
     window.addEventListener('meee2:open-session', openSession)
     return () => window.removeEventListener('meee2:open-session', openSession)
-  }, [openSessionsWorkspaceFromDetail])
+  }, [openSessionTerminalOverlay])
 
   useEffect(() => {
     const openSessionsWorkspace = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
-      openSessionsWorkspaceFromDetail(detail)
+      const detail = (event as CustomEvent<SessionOpenTarget>).detail
+      openSessionTerminalOverlay(detail)
     }
     window.addEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
-    if (window.__meee2PendingSessionsWorkspace) {
-      openSessionsWorkspaceFromDetail(window.__meee2PendingSessionsWorkspace)
+    const pending = window.__meee2PendingSessionTerminalOverlay ?? window.__meee2PendingSessionsWorkspace
+    if (pending) {
+      openSessionTerminalOverlay(pending)
+      window.__meee2PendingSessionTerminalOverlay = null
+      window.__meee2PendingSessionsWorkspace = null
     }
     return () => window.removeEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
-  }, [openSessionsWorkspaceFromDetail])
+  }, [openSessionTerminalOverlay])
 
   const completeFirstRunOnboarding = useCallback(() => {
     if (readinessReport?.ready !== true) return
@@ -675,14 +725,6 @@ export default function App() {
     setAgentRuntimeInstallTarget(null)
   }, [refreshAgentRuntimeStatus])
 
-  const handleSetActiveCanvas = useCallback((canvasId: string) => {
-    updateCanvas(canvasId, { active: true })
-      .then((list) => {
-        applyCanvasList(list)
-      })
-      .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
-  }, [applyCanvasList, pushToast])
-
   const handleResolveCanvasConflict = useCallback((canvasId: string, choice: 'current' | 'remote') => {
     return resolveCanvasConflict(canvasId, choice)
       .then((list) => {
@@ -703,10 +745,10 @@ export default function App() {
 
   const handleOpenBoardTarget = useCallback((target: BoardOpenTarget) => {
     if (target.kind === 'session') {
-      setWorkspaceMode('sessions')
-      window.dispatchEvent(new CustomEvent('meee2:open-session', {
-        detail: { sessionId: target.sessionId },
-      }))
+      openSessionTerminalOverlay({
+        sessionId: target.sessionId,
+        canvasId: target.canvasId ?? undefined,
+      })
       return
     }
 
@@ -788,9 +830,18 @@ export default function App() {
         openInspector: target.guide?.openInspector,
       })
     }, 50)
-  }, [activeCanvasId, handleSetActiveCanvas])
+  }, [activeCanvasId, handleSetActiveCanvas, openSessionTerminalOverlay])
 
   const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
+    if (item.kind === 'session' && item.sessionId?.trim()) {
+      requestBoardTarget({
+        kind: 'session',
+        sessionId: item.sessionId,
+        canvasId: item.canvasId,
+        source: 'monitor',
+      })
+      return
+    }
     const target = resolveMonitorItemOpenTarget(item)
     if (target.kind === 'node') {
       requestBoardTarget({
@@ -887,9 +938,13 @@ export default function App() {
     handleOpenBoardTarget({ kind: 'planner-node', canvasId, nodeId, source: 'palette' })
   }, [handleOpenBoardTarget])
 
-  const handlePaletteOpenSession = useCallback((sessionId: string) => {
-    handleOpenBoardTarget({ kind: 'session', sessionId, source: 'palette' })
+  const handlePaletteOpenSession = useCallback((sessionId: string, canvasIdHint?: string | null) => {
+    handleOpenBoardTarget({ kind: 'session', sessionId, canvasId: canvasIdHint, source: 'palette' })
   }, [handleOpenBoardTarget])
+
+  const openQuickSessionSearch = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('meee2:open-command-palette'))
+  }, [])
 
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {
@@ -1168,11 +1223,9 @@ export default function App() {
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
         <WorkspaceRail
-          state={boardState.state}
           canvases={canvasList.canvases}
           activeCanvasId={activeCanvasId}
           mode={workspaceMode}
-          unreadSids={unreadSids}
           userProfile={userProfile}
           collapsed={workspaceRailCollapsed}
           onCollapsedChange={handleWorkspaceRailCollapsedChange}
@@ -1197,7 +1250,7 @@ export default function App() {
                 canvases={workspaceCanvases}
                 refreshTick={activeCanvasRefreshTick}
                 onOpenItem={handleOpenMonitorItem}
-                onOpenAllSessions={() => setWorkspaceMode('sessions')}
+                onOpenAllSessions={openQuickSessionSearch}
               />
             ) : (
               <PlannerGraph
@@ -1228,12 +1281,6 @@ export default function App() {
 	              onImportClaudeWorkflow={handleImportClaudeWorkflow}
 	              onUploadClaudeWorkflow={handleUploadClaudeWorkflow}
 	            />
-          ) : workspaceMode === 'sessions' ? (
-            <NativeSessionsWorkspaceHost
-              state={boardState.state}
-              selectedSessionId={selectedSessionId}
-              onSelectedSessionChange={setSelectedSessionId}
-            />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView
               canvases={workspaceCanvases}
@@ -1295,9 +1342,20 @@ export default function App() {
               boardState={boardState.state}
               plannerState={currentPlannerState}
               canvasMonitor={activeCanvasMonitor}
-              onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
+          {sessionTerminalTarget && (() => {
+            const session = findSessionByTarget(boardState.state?.sessions ?? [], sessionTerminalTarget)
+            const canvas = workspaceCanvases.find((item) => item.id === sessionTerminalTarget.canvasId) ?? activeWorkspaceCanvas ?? null
+            return (
+              <SessionTerminalOverlay
+                target={sessionTerminalTarget}
+                session={session}
+                canvas={canvas}
+                onClose={() => setSessionTerminalTarget(null)}
+              />
+            )
+          })()}
           {showCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />

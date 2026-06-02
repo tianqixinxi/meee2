@@ -3,7 +3,6 @@ import Meee2PluginKit
 
 enum BoardSessionSnapshotProvider {
     static func currentBoardSessions() -> [SessionDTO] {
-        _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
         let terminalInfos = SessionTerminalStore.shared.getAll()
         let internalSessions = TerminalSessionBackendRegistry.shared
             .listSnapshots()

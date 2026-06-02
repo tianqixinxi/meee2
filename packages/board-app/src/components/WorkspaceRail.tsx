@@ -2,7 +2,6 @@ import {
   Cable,
   Archive,
   LayoutTemplate,
-  List,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -11,19 +10,16 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo } from 'react'
-import { WORKING_STATUSES } from '../notifications'
-import type { BoardState, CanvasInfo } from '../types'
+import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
 
-export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'artifacts' | 'team' | 'integrations' | 'settings'
+export type WorkspaceMode = 'planner' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
 
 interface WorkspaceRailProps {
-  state: BoardState | null
   canvases: CanvasInfo[]
   activeCanvasId: string
   mode: WorkspaceMode
-  unreadSids: Set<string>
   userProfile: UserProfile | null
   collapsed: boolean
   onCollapsedChange: (collapsed: boolean) => void
@@ -34,9 +30,7 @@ const RAIL_WIDTH = 208
 const RAIL_COLLAPSED_WIDTH = 52
 
 export function WorkspaceRail({
-  state,
   mode,
-  unreadSids,
   userProfile,
   collapsed,
   onCollapsedChange,
@@ -72,11 +66,6 @@ export function WorkspaceRail({
     ? userProfile.userAvatarUrl
     : ''
   const showFallbackUserIcon = !avatarUrl && !avatarInitials
-
-  const hasSessionAttention = useMemo(() => {
-    const sessions = state?.sessions ?? []
-    return sessions.some((session) => sessionNeedsAttention(session) || unreadSids.has(session.id))
-  }, [state?.sessions, unreadSids])
 
   return (
     <nav className={`workspace-rail${collapsed ? ' is-collapsed' : ''}`} aria-label={t('rail.workspace')}>
@@ -116,14 +105,6 @@ export function WorkspaceRail({
           <LayoutTemplate size={20} />
         </RailButton>
         <RailButton
-          label={t('rail.sessions')}
-          active={mode === 'sessions'}
-          onClick={() => onModeChange('sessions')}
-          tone={hasSessionAttention ? 'attention' : 'default'}
-        >
-          <List size={20} />
-        </RailButton>
-        <RailButton
           label={t('rail.artifacts')}
           active={mode === 'artifacts'}
           onClick={() => onModeChange('artifacts')}
@@ -155,13 +136,6 @@ export function WorkspaceRail({
       </RailButton>
     </nav>
   )
-}
-
-function sessionNeedsAttention(session: { status: string; inboxPending: number; pendingPermissionTool?: string | null }): boolean {
-  return session.status === 'permissionRequired'
-    || session.status === 'waitingForUser'
-    || session.inboxPending > 0
-    || Boolean(session.pendingPermissionTool)
 }
 
 function initialsFor(value: string): string {

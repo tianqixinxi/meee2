@@ -356,6 +356,13 @@ class ClaudePlugin: SessionPlugin {
         hookStates[sessionId] = event
         hookStatesLock.unlock()
 
+        if let linkedSurfaceSessionId = SessionTerminalStore.shared.setProviderResumeSessionIdForSurface(
+            cmuxSurfaceId: event.cmuxSurfaceId,
+            providerResumeSessionId: sessionId
+        ) {
+            NSLog("[ClaudePlugin] Linked provider session \(sessionId.prefix(8)) to managed surface session \(linkedSurfaceSessionId.prefix(8)) via surface \(event.cmuxSurfaceId ?? "-")")
+        }
+
         // 更新 SessionTerminalStore（用于终端跳转）
         if event.tty != nil || event.termProgram != nil || event.cmuxSocketPath != nil {
             SessionTerminalStore.shared.update(

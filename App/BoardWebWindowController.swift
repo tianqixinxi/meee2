@@ -221,11 +221,11 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private let nativeTerminalBridge = NativeTerminalBridge()
     private let nativeWorkspaceBridge = NativeWorkspaceBridge()
     private let nativeSessionsController = NativeSessionsWorkspaceViewController()
-    private var embeddedTerminals: [String: EmbeddedNativeTerminalController] = [:]
+    private var embeddedTerminals: [String: NativeTerminalPaneControlling] = [:]
     private var embeddedTerminalLRU: [String] = []
     private var activeEmbeddedTerminalKey: String?
     private var terminalScrollMonitor: Any?
-    private var embeddedTerminal: EmbeddedNativeTerminalController? {
+    private var embeddedTerminal: NativeTerminalPaneControlling? {
         guard let activeEmbeddedTerminalKey else { return nil }
         return embeddedTerminals[activeEmbeddedTerminalKey]
     }
@@ -454,9 +454,9 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private func forwardScrollWheelToEmbeddedTerminal(_ event: NSEvent) -> Bool {
         guard let window else { return false }
         guard event.window === window else { return false }
-        guard let terminal = embeddedTerminal, !terminal.view.isHidden else { return false }
+        guard let terminal = embeddedTerminal, !terminal.paneView.isHidden else { return false }
         let pointInHost = terminalHostView.convert(event.locationInWindow, from: nil)
-        guard terminal.view.frame.contains(pointInHost) else { return false }
+        guard terminal.paneView.frame.contains(pointInHost) else { return false }
         terminal.scrollWheel(with: event)
         return true
     }
@@ -602,7 +602,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         var hostedDuringAttach = false
         if activeEmbeddedTerminalKey != key {
             embeddedTerminal?.hide()
-            let controller: EmbeddedNativeTerminalController
+            let controller: NativeTerminalPaneControlling
             if let cached = embeddedTerminals[key] {
                 controller = cached
             } else {
@@ -667,22 +667,25 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         return true
     }
 
-    private func makeEmbeddedTerminal(surfaceId: String, sessionId: String?) -> EmbeddedNativeTerminalController? {
-        EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) { [weak self] exitedSurfaceId, exitedSessionId in
-            self?.removeEmbeddedTerminal(surfaceId: exitedSurfaceId, sessionId: exitedSessionId)
+    private func makeEmbeddedTerminal(surfaceId: String, sessionId: String?) -> NativeTerminalPaneControlling? {
+        if let ghostty = GhosttySurfaceBackend.shared.paneController(id: surfaceId)
+            ?? sessionId.flatMap({ GhosttySurfaceBackend.shared.paneController(id: $0) }) {
+            return ghostty
         }
+        return nil
     }
 
-    private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, frame: NSRect, hidden: Bool) {
+    private func hostEmbeddedTerminalView(_ controller: NativeTerminalPaneControlling, frame: NSRect, hidden: Bool) {
         let initialFrame = frame.width >= 8 && frame.height >= 8 ? frame : defaultHiddenTerminalFrame()
-        if controller.view.superview == nil {
-            controller.view.frame = initialFrame
-            controller.view.autoresizingMask = []
-            terminalHostView.addSubview(controller.view)
-        } else if controller.view.superview !== terminalHostView {
-            controller.view.removeFromSuperview()
-            controller.view.frame = initialFrame
-            terminalHostView.addSubview(controller.view)
+        let view = controller.paneView
+        if view.superview == nil {
+            view.frame = initialFrame
+            view.autoresizingMask = []
+            terminalHostView.addSubview(view)
+        } else if view.superview !== terminalHostView {
+            view.removeFromSuperview()
+            view.frame = initialFrame
+            terminalHostView.addSubview(view)
         }
         controller.layout(in: hidden && (frame.width < 8 || frame.height < 8) ? initialFrame : frame, hidden: hidden)
     }
@@ -728,8 +731,8 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         for key in matchingKeys {
             if let removed = embeddedTerminals.removeValue(forKey: key) {
                 dispatchNativeTerminalPrewarmAck(
-                    surfaceId: removed.surfaceId,
-                    sessionId: removed.sessionId,
+                    surfaceId: removed.terminalSurfaceId,
+                    sessionId: removed.terminalSessionId,
                     ready: false,
                     cacheHit: false,
                     reason: "removed"
@@ -758,8 +761,8 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             embeddedTerminalLRU.removeAll { $0 == evictedKey }
             if let evicted = embeddedTerminals.removeValue(forKey: evictedKey) {
                 dispatchNativeTerminalPrewarmAck(
-                    surfaceId: evicted.surfaceId,
-                    sessionId: evicted.sessionId,
+                    surfaceId: evicted.terminalSurfaceId,
+                    sessionId: evicted.terminalSessionId,
                     ready: false,
                     cacheHit: false,
                     reason: "evicted"

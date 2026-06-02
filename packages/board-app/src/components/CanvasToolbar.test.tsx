@@ -105,7 +105,7 @@ describe('CanvasToolbar template save flow', () => {
     expect(screen.queryByRole('button', { name: 'Save as template' })).not.toBeInTheDocument()
   })
 
-  it('keeps AI recap available on monitor canvases', () => {
+  it('keeps AI recap visible on monitor canvases without opening a drawer', () => {
     render(
       <I18nProvider>
         <CanvasToolbar
@@ -128,8 +128,13 @@ describe('CanvasToolbar template save flow', () => {
       </I18nProvider>,
     )
 
-    expect(screen.getByRole('button', { name: 'Open AI recap' })).toBeInTheDocument()
+    const recap = document.querySelector('.canvas-toolbar__recap-trigger')
+    expect(recap).toBeInstanceOf(HTMLDivElement)
+    expect(recap).toHaveTextContent(/AI recap|Reading canvas state/i)
+    expect(screen.queryByRole('button', { name: 'Open AI recap' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Refresh canvas recap' })).toBeInTheDocument()
+    fireEvent.click(recap as HTMLElement)
+    expect(screen.queryByRole('dialog', { name: /AI recap/i })).not.toBeInTheDocument()
   })
 
   it('switches between My and Team canvas tabs in the canvas menu', async () => {
