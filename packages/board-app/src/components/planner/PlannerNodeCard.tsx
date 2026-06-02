@@ -215,7 +215,6 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         <NodeResizer
           minWidth={180}
           minHeight={120}
-          isVisible={selected}
           lineClassName="planner-node__resize-line"
           handleClassName="planner-node__resize-handle"
         />
@@ -444,7 +443,6 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       <NodeResizer
         minWidth={220}
         minHeight={140}
-        isVisible={selected}
         lineClassName="planner-node__resize-line"
         handleClassName="planner-node__resize-handle"
       />
@@ -1806,7 +1804,6 @@ function SubCanvasRefCard({
       <NodeResizer
         minWidth={220}
         minHeight={140}
-        isVisible={selected}
         lineClassName="planner-node__resize-line"
         handleClassName="planner-node__resize-handle"
       />

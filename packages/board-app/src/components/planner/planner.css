@@ -1635,8 +1635,25 @@
   cursor: grabbing;
 }
 
-/* 宽高自由调整 — NodeResizer 把手/边框只在节点选中时显示(isVisible={selected}),
- * 配色对齐深色画布:边框用强调描边、角把手用浅色小方块。 */
+/* 宽高自由调整 — NodeResizer 把手/边框默认隐藏,鼠标悬停节点(或节点被选中)时
+ * 才显示。不用 isVisible={selected} 是因为点节点会直接弹出 NodeInspectorModal、
+ * 盖住画布,选中态根本看不到把手;hover 揭示既可发现又不打扰,而且抓角缩放是
+ * 拖拽不是点击,不会触发 modal。配色对齐深色画布。 */
+.react-flow__node .react-flow__resize-control.handle,
+.react-flow__node .react-flow__resize-control.line {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.react-flow__node:hover .react-flow__resize-control.handle,
+.react-flow__node.selected .react-flow__resize-control.handle,
+.react-flow__node:hover .react-flow__resize-control.line,
+.react-flow__node.selected .react-flow__resize-control.line {
+  opacity: 1;
+  pointer-events: all;
+}
+
 .planner-node__resize-line {
   border-color: rgba(245, 244, 239, 0.45);
 }
