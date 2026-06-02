@@ -107,6 +107,28 @@ describe('NodeInspectorModal 进展 live-block gating', () => {
     expect(screen.getByRole('button', { name: /打开会话查看进展/ })).toBeInTheDocument()
   })
 
+  it('shows low-contrast terminal ids for a bound session', () => {
+    const surfaceId = 'ghostty-surface-node-abcdef1234567890'
+    const providerResumeSessionId = 'provider-session-claude-1234567890abcdef'
+    const { container } = renderModal({
+      node: node({
+        sessionId: 'sess-abcdef1234',
+        workflowRunState: 'ready_to_start' as PlannerWorkflowRunState,
+      }),
+      boundSession: session({
+        currentTask: 'runtime task hidden outside live states',
+        surfaceId,
+        providerResumeSessionId,
+      }),
+    })
+
+    expect(screen.getByText('Surface')).toBeInTheDocument()
+    expect(screen.getByText('Provider')).toBeInTheDocument()
+    expect(container.querySelector(`[title="${surfaceId}"]`)).not.toBeNull()
+    expect(container.querySelector(`[title="${providerResumeSessionId}"]`)).not.toBeNull()
+    expect(screen.queryByText('runtime task hidden outside live states')).not.toBeInTheDocument()
+  })
+
   it('(b) done node with a bound session shows recent message + 最后活动 but NOT currentTask/currentTool', () => {
     const sess = session({
       status: 'idle',

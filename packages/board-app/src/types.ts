@@ -163,6 +163,7 @@ export interface Session {
   termProgram?: string | null
   terminalKind?: 'internal' | 'external' | string
   surfaceId?: string | null
+  providerResumeSessionId?: string | null
   surfaceStatus?: 'starting' | 'running' | 'exited' | 'failed' | string | null
   canOpenExternal?: boolean
   terminalBackend?: 'ghostty-surface' | 'external' | string

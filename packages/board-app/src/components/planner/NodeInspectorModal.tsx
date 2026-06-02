@@ -350,6 +350,8 @@ export function NodeInspectorModal({
               // isDone 仅用于「进展」实时信息块的取舍(完成的会话只留最近消息+最后活动,
               // 不显示过期的 currentTask/currentTool),不再驱动「完成」标签或绿色样式。
               const isDone = wfs === 'done'
+              const showLiveDetails = isRunning || isAwaiting || isDone
+              const hasRuntimeDebugIds = Boolean(boundSession?.surfaceId || boundSession?.providerResumeSessionId)
               // step / session 工作节点没有「完成」态(canvas 是账本不是 PM):
               // done = 会话结束 = 回到「未启动」,产物留在账本。本块仅渲染 step/session。
               const wfsLabel =
@@ -383,19 +385,41 @@ export function NodeInspectorModal({
                    *    · running / awaiting:在干什么 / 工具(实时)+ 最近消息 + 最后活动
                    *    · done:不显示 currentTask/currentTool(对完成节点是过期的),
                    *      只留最近消息 + 完成/最后活动时间,外加下方的「打开会话」导航。 */}
-                  {hasSession && boundSession && (isRunning || isAwaiting || isDone) && (
+                  {hasSession && boundSession && (showLiveDetails || hasRuntimeDebugIds) && (
                     <div className="planner-node-modal__progress-runtime-live">
-                      {!isDone && boundSession.currentTask && (
+                      {showLiveDetails && !isDone && boundSession.currentTask && (
                         <span className="planner-node-modal__progress-runtime-live-row">
                           <Route size={11} aria-hidden /> {boundSession.currentTask}
                         </span>
                       )}
-                      {!isDone && boundSession.currentTool && (
+                      {showLiveDetails && !isDone && boundSession.currentTool && (
                         <span className="planner-node-modal__progress-runtime-live-row">
                           <Settings2 size={11} aria-hidden /> {boundSession.currentTool}
                         </span>
                       )}
-                      {(boundSession.recentMessages ?? [])
+                      {(boundSession.surfaceId || boundSession.providerResumeSessionId) && (
+                        <div className="planner-node-modal__progress-runtime-debug">
+                          {boundSession.surfaceId && (
+                            <span
+                              className="planner-node-modal__progress-runtime-debug-row"
+                              title={boundSession.surfaceId}
+                            >
+                              <span>Surface</span>
+                              <code>{compactRuntimeId(boundSession.surfaceId)}</code>
+                            </span>
+                          )}
+                          {boundSession.providerResumeSessionId && (
+                            <span
+                              className="planner-node-modal__progress-runtime-debug-row"
+                              title={boundSession.providerResumeSessionId}
+                            >
+                              <span>Provider</span>
+                              <code>{compactRuntimeId(boundSession.providerResumeSessionId)}</code>
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {showLiveDetails && (boundSession.recentMessages ?? [])
                         .slice(-2)
                         .filter((m) => m.text?.trim())
                         .map((m, i) => (
@@ -407,7 +431,7 @@ export function NodeInspectorModal({
                             {truncateMessageText(m.text)}
                           </span>
                         ))}
-                      {boundSession.lastActivity && (
+                      {showLiveDetails && boundSession.lastActivity && (
                         <span className="planner-node-modal__progress-runtime-live-row planner-node-modal__progress-runtime-live-muted">
                           <CalendarClock size={11} aria-hidden /> {isDone ? '最后活动 ' : ''}{relativeTimeLabel(boundSession.lastActivity)}
                         </span>
@@ -873,6 +897,12 @@ export function truncateMessageText(text: string, max = 80): string {
   const flat = text.replace(/\s+/g, ' ').trim()
   if (flat.length <= max) return flat
   return `${flat.slice(0, max).trimEnd()}…`
+}
+
+export function compactRuntimeId(value: string, max = 28): string {
+  const trimmed = value.trim()
+  if (trimmed.length <= max) return trimmed
+  return `${trimmed.slice(0, 14)}…${trimmed.slice(-8)}`
 }
 
 export function dedupeStrings(values: Array<string | null | undefined>): string[] {

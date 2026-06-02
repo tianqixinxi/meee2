@@ -53,6 +53,7 @@ struct SessionDTO: Encodable {
     /// session still lives in Ghostty/iTerm/Terminal/cmux.
     let terminalKind: String
     let surfaceId: String?
+    let providerResumeSessionId: String?
     let surfaceStatus: String?
     let canOpenExternal: Bool
     let terminalBackend: String
@@ -969,6 +970,7 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             terminalKind: terminalKind,
             surfaceId: nil,
+            providerResumeSessionId: nil,
             surfaceStatus: externalSurfaceStatus,
             canOpenExternal: canOpenExternal,
             terminalBackend: terminalBackend,
@@ -1037,6 +1039,7 @@ enum BoardDTOBuilder {
             termProgram: nil,
             terminalKind: "external",
             surfaceId: nil,
+            providerResumeSessionId: nil,
             surfaceStatus: "exited",
             canOpenExternal: true,
             terminalBackend: TerminalSessionBackendKind.external.rawValue,
@@ -1125,6 +1128,7 @@ enum BoardDTOBuilder {
             termProgram: sessionData.terminalInfo?.termProgram ?? terminalInfo?.termProgram ?? "meee2-internal",
             terminalKind: "internal",
             surfaceId: nil,
+            providerResumeSessionId: providerResumeId?.isEmpty == false ? providerResumeId : nil,
             surfaceStatus: surfaceStatus,
             canOpenExternal: false,
             terminalBackend: backend,
@@ -1191,6 +1195,7 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             terminalKind: "internal",
             surfaceId: surface.surfaceId,
+            providerResumeSessionId: providerResumeId?.isEmpty == false ? providerResumeId : nil,
             surfaceStatus: surface.status,
             canOpenExternal: false,
             terminalBackend: backend.rawValue,
@@ -1269,6 +1274,7 @@ enum BoardDTOBuilder {
             termProgram: surface.termProgram,
             terminalKind: surface.terminalKind,
             surfaceId: surface.surfaceId,
+            providerResumeSessionId: surface.providerResumeSessionId,
             surfaceStatus: surface.surfaceStatus,
             canOpenExternal: surface.canOpenExternal,
             terminalBackend: surface.terminalBackend,
