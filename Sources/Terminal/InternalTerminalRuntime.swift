@@ -640,7 +640,19 @@ final class InternalTerminalSurface {
     }
 
     private func performDeferredSpawn(cols: UInt16, rows: UInt16, secondary: Int32) {
-        guard primaryFD >= 0, secondary >= 0 else { return }
+        // Recheck cancellation UNDER LOCK right before spawning. The user can
+        // close a just-opened session during the deferred window: terminate()→
+        // handleExit() then closes the PTY (primaryFD = -1, status = .exited).
+        // The old unlocked `primaryFD >= 0` guard could race past that and
+        // posix_spawn an orphan agent that survives the closed session. Take a
+        // consistent snapshot under the lock instead.
+        lock.lock()
+        let cancelled = status == .exited || status == .failed || primaryFD < 0
+        lock.unlock()
+        guard !cancelled, secondary >= 0 else {
+            if secondary >= 0 { Darwin.close(secondary) }
+            return
+        }
 
         // Size the PTY before exec so the agent boots straight into the right width.
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
@@ -658,8 +670,16 @@ final class InternalTerminalSurface {
                 secondaryFD: secondary
             )
             Darwin.close(secondary)
-            let exitSource = makeProcessExitSource(pid: launchedPid)
+            // If termination won the race while we were spawning, don't resurrect
+            // the surface — reap the child we just created so it isn't orphaned.
             lock.lock()
+            if status == .exited || status == .failed || primaryFD < 0 {
+                lock.unlock()
+                _ = Darwin.kill(-pid_t(launchedPid), SIGTERM)
+                _ = Darwin.kill(pid_t(launchedPid), SIGTERM)
+                return
+            }
+            let exitSource = makeProcessExitSource(pid: launchedPid)
             pid = Int(launchedPid)
             processSource = exitSource
             status = .running
