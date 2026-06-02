@@ -1565,6 +1565,11 @@
    * 保持原来的自适应高度。NodeResizer 调整后把显式 px 写到外框,卡片随之填满。 */
   width: 100%;
   height: 100%;
+  /* 缩小高度时内容会溢出卡片 —— 用 flex column + 内层 .planner-node__content 滚动,
+   * 把内容裁在卡片里。padding 留在外层,内容在 padding 内滚动;连接点 / NodeResizer
+   * 把手是外层的绝对定位子元素,不在 content 里,所以不会被滚动区裁掉。 */
+  display: flex;
+  flex-direction: column;
   padding: 12px;
   /* UI-simplification — min-height 让 Push 1 精简内容后卡片不缩成几十像素的小条:
    * 内容变短了但点击 / 拖动目标仍需有合理高度。也让 layout 上的相对位置稳定,
@@ -1578,6 +1583,16 @@
   color: var(--text);
   cursor: grab;
   transition: opacity 140ms ease, filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+/* 卡片内容滚动容器 —— 填满卡片可用高度;min-height:0 是关键,否则 flex 子元素
+ * 不肯缩到内容高度以下,overflow 永远不触发。横向交给 width 固定 + 文案换行,
+ * 这里只兜底裁掉。 */
+.planner-node__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* UI-simplification — artifact 折叠/展开按钮 */

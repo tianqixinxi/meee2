@@ -219,6 +219,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           handleClassName="planner-node__resize-handle"
         />
         <Handle type="target" position={Position.Left} className="planner-node__handle" />
+        <div className="planner-node__content">
         <div className="planner-node__header">
           <span className="planner-node__status planner-node__status--design">
             <ArtifactIcon kind={renderKind} size={13} />
@@ -321,6 +322,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             展开 ▾
           </button>
         )}
+        </div>
         <Handle type="source" position={Position.Right} className="planner-node__handle" />
       </div>
     )
@@ -448,6 +450,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       />
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
 
+      <div className="planner-node__content">
       <div className="planner-node__header">
         {/* nodeKind 视觉分辨 (2026-05-28) — 让用户一眼看出 artifact 是数据 /
             session 是 AI 会话 / step 是动作 / external 是外部引用 / subCanvas
@@ -831,6 +834,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           )}
         </div>
       )}
+      </div>
       <Handle type="source" position={Position.Right} className="planner-node__handle" />
     </div>
   )
@@ -1808,6 +1812,7 @@ function SubCanvasRefCard({
         handleClassName="planner-node__resize-handle"
       />
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
+      <div className="planner-node__content">
       <div className="planner-node__header">
         <span className="planner-node__status planner-node__status--design">
           <Lock size={12} aria-hidden />
@@ -1861,6 +1866,7 @@ function SubCanvasRefCard({
           </button>
         </div>
       )}
+      </div>
       <Handle type="source" position={Position.Right} className="planner-node__handle" />
     </div>
   )
