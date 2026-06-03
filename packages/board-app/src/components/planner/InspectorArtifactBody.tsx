@@ -32,6 +32,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { proposePlannerGraphChange } from '../../api'
 import { useToast } from '../../App'
+import { TypedPayloadPreview } from '../artifacts/TypedPayloadPreview'
 import type {
   ArtifactPayload,
   ContextSource,
@@ -1038,137 +1039,6 @@ function PayloadBodySwitch({
 }
 
 // ---------------------------------------------------------------------------
-// TypedPayloadPreview — 局部副本(与 ArtifactsView 同语义,避免再导出 internal)。
-// ---------------------------------------------------------------------------
-function TypedPayloadPreview({ payload }: { payload: ArtifactPayload }) {
-  switch (payload.type) {
-    case 'prd':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--prd">
-          <div className="artifacts-typed-payload__tldr">{payload.tldr}</div>
-          <ul className="artifacts-typed-payload__sections">
-            {payload.sections.map((s) => (
-              <li key={s.heading}>
-                <strong>{s.heading}</strong>
-                <em>{s.lines} 行</em>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )
-    case 'kanban':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--kanban">
-          {payload.columns.map((col) => (
-            <div key={col.name} className="artifacts-typed-payload__kanban-col">
-              <header>
-                <span>{col.name}</span>
-                <em>{col.items.length}</em>
-              </header>
-              {col.items.slice(0, 5).map((item) => (
-                <div key={item} className="artifacts-typed-payload__kanban-item">
-                  {item}
-                </div>
-              ))}
-              {col.items.length > 5 && (
-                <div className="artifacts-typed-payload__kanban-more">
-                  +{col.items.length - 5}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )
-    case 'impl-pr':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--pr">
-          <div className="artifacts-typed-payload__pr-line">
-            <strong>#{payload.number}</strong>
-            <code>{payload.branch}</code>
-            <span>← {payload.baseBranch}</span>
-          </div>
-          <div className="artifacts-typed-payload__pr-stats">
-            <strong>{payload.filesChanged}</strong> files ·
-            <span className="artifacts-typed-payload__pr-add"> +{payload.insertions}</span> ·
-            <span className="artifacts-typed-payload__pr-del"> −{payload.deletions}</span>
-          </div>
-          <div className={`artifacts-typed-payload__ci is-${payload.ciStatus}`}>
-            CI {payload.ciStatus}
-          </div>
-          <div className="artifacts-typed-payload__pr-reviewers">
-            评审 · {payload.reviewers.join(', ') || '(无)'}
-          </div>
-        </div>
-      )
-    case 'check-result':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--check">
-          <div className="artifacts-typed-payload__check-pills">
-            <span className="is-pass">{payload.pass} pass</span>
-            <span className="is-fail">{payload.fail} fail</span>
-            <span className="is-skip">{payload.skip} skip</span>
-          </div>
-          {payload.failing.length > 0 && (
-            <ul className="artifacts-typed-payload__failing">
-              {payload.failing.slice(0, 5).map((f) => (
-                <li key={f}>✗ {f}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )
-    case 'file':
-      return (
-        <dl className="artifacts-typed-payload artifacts-typed-payload--file">
-          <div>
-            <dt>filename</dt>
-            <dd>{payload.filename}</dd>
-          </div>
-          <div>
-            <dt>mime</dt>
-            <dd>{payload.mime}</dd>
-          </div>
-          <div>
-            <dt>size</dt>
-            <dd>{formatBytesPlain(payload.sizeBytes)}</dd>
-          </div>
-          {payload.lines != null && (
-            <div>
-              <dt>lines</dt>
-              <dd>{payload.lines}</dd>
-            </div>
-          )}
-        </dl>
-      )
-    case 'markdown':
-      return (
-        <pre className="artifacts-typed-payload artifacts-typed-payload--markdown">
-          {payload.preview}
-        </pre>
-      )
-    case 'integration':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--integration">
-          <div className="artifacts-typed-payload__integration-line">
-            <strong>{payload.connector}</strong>
-            <code>{payload.externalId}</code>
-          </div>
-          {payload.externalUrl && (
-            <a href={payload.externalUrl} target="_blank" rel="noopener noreferrer">
-              {payload.externalUrl}
-            </a>
-          )}
-          {payload.summary && (
-            <div className="artifacts-typed-payload__integration-summary">
-              {payload.summary}
-            </div>
-          )}
-        </div>
-      )
-  }
-}
-
-// ---------------------------------------------------------------------------
 // LegacyPayloadPreview — 旧 PlannerArtifactPayloadType(text / html / json / file)
 // 走只读 fallback,不走编辑器。
 // ---------------------------------------------------------------------------
@@ -1427,11 +1297,6 @@ function formatDateShort(value: string): string {
   })
 }
 
-function formatBytesPlain(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
-}
 
 // ---------------------------------------------------------------------------
 // deriveExternalInputs — 复用 InputCardSections 的同名 helper 的语义,生成与

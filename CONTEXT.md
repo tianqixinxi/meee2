@@ -89,11 +89,11 @@ A Canvas-scoped modal that opens one meee2-managed local session terminal in pla
 _Avoid_: Sessions page, terminal workspace, session list modal
 
 **Canvas Workspace**:
-A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and evidence. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
+A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and Artifacts. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
 _Avoid_: Graph editor as the product, separate monitor workspace
 
 **Monitor Canvas**:
-The default Canvas Workspace that aggregates active live sessions, subcanvases, blocked work, approvals, recap, and evidence into a top-level operating view.
+The default Canvas Workspace that aggregates active live sessions, subcanvases, blocked work, approvals, recap, and Artifacts into a top-level operating view.
 _Avoid_: Separate Monitor product, history dashboard
 
 **Subcanvas Node**:
@@ -101,12 +101,12 @@ A node in one Canvas Workspace that represents another Canvas Workspace and surf
 _Avoid_: Link-only shortcut, nested graph detail
 
 **Aggregated Node State**:
-The explainable state of a node derived from its bound live session, workflow state, subcanvas state, approvals, blockers, and evidence rather than only from manual status.
+The explainable state of a node derived from its bound live session, workflow state, subcanvas state, approvals, blockers, and Artifacts rather than only from manual status.
 _Avoid_: Manual status as truth, done-only workflow state
 
-**Canvas Evidence**:
+**Artifact**:
 Traceable work proof attached to a Canvas Workspace or node, such as file diffs, command results, tool calls, documents, screenshots, pull requests, and node outputs.
-_Avoid_: Status without proof, hidden artifact
+_Avoid_: Canvas Evidence, status without proof, hidden artifact
 
 ## Example Dialogue
 
@@ -192,4 +192,8 @@ Domain expert: "No. Monitor is the default Monitor Canvas inside the Canvas Work
 
 Developer: "Can a node be marked done just because the workflow says done?"
 
-Domain expert: "Not always. Aggregated Node State must explain which evidence or child state produced it, and live-session or monitor templates are not forced into a done-only lifecycle."
+Domain expert: "Not always. Aggregated Node State must explain which Artifact or child state produced it, and live-session or monitor templates are not forced into a done-only lifecycle."
+
+Developer: "Should Artifacts be their own workspace for managing generated material?"
+
+Domain expert: "No. Artifacts are traceable work proof attached to Canvas Workspaces or nodes. The Artifacts rail entry is a global index for finding them, while editing and workflow decisions stay in Canvas."

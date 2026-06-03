@@ -28,6 +28,7 @@ describe('WorkspaceRail', () => {
     )
 
     expect(screen.getByRole('button', { name: 'Canvas' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
   })
 

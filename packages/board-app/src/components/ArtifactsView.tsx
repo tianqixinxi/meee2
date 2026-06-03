@@ -3,61 +3,45 @@ import {
   ExternalLink,
   FileText,
   GitCompare,
-  Layers,
   Loader2,
   Search,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   fetchPlannerGraphState,
   getArtifactVersion,
   getPlannerArtifactContent,
   listArtifactVersions,
 } from '../api'
+import { requestBoardTarget } from '../lib/boardTarget'
+import {
+  ARTIFACT_TYPE_GROUPS,
+  artifactGroupCounts,
+  buildArtifactIndex,
+  filterArtifactIndex,
+  type ArtifactIndexItem,
+  type ArtifactTypeGroupId,
+  type CanvasArtifactsSource,
+} from '../lib/artifactIndex'
 import { useI18n } from '../lib/i18n'
 import type {
-  ArtifactPayload,
+  ArtifactReviewStatus,
   CanvasInfo,
   PlannerArtifact,
   PlannerArtifactContent,
-  PlannerArtifactKind,
   PlannerArtifactVersion,
-  PlanningNode,
 } from '../types'
+import { TypedPayloadPreview } from './artifacts/TypedPayloadPreview'
 
-type ArtifactFilter = 'all' | PlannerArtifactKind
-type SlotDisplayMode = 'latest' | 'merged' | 'compare'
+type ReviewFilter = ArtifactReviewStatus | 'all'
+type StatusFilter = string | 'all'
+type CanvasFilter = string | 'all'
 
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
   activeCanvasId: string
   onOpenCanvas: (canvasId: string) => void
 }
-
-interface CanvasArtifacts {
-  canvas: CanvasInfo
-  nodes: PlanningNode[]
-  artifacts: PlannerArtifact[]
-  error?: string
-}
-
-interface ArtifactSlot {
-  key: string
-  canvas: CanvasInfo
-  node?: PlanningNode
-  latest: PlannerArtifact
-  artifacts: PlannerArtifact[]
-}
-
-const KIND_FILTERS: ArtifactFilter[] = [
-  'all',
-  'prd',
-  'kanban',
-  'impl-pr',
-  'check-result',
-  'lark-doc',
-  'generic',
-]
 
 export function ArtifactsView({
   canvases,
@@ -66,12 +50,14 @@ export function ArtifactsView({
 }: ArtifactsViewProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
-  const [kindFilter, setKindFilter] = useState<ArtifactFilter>('all')
-  const [canvasArtifacts, setCanvasArtifacts] = useState<CanvasArtifacts[]>([])
+  const [activeGroup, setActiveGroup] = useState<ArtifactTypeGroupId | 'all'>('all')
+  const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [sources, setSources] = useState<CanvasArtifactsSource[]>([])
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [displayModes, setDisplayModes] = useState<Record<string, SlotDisplayMode>>({})
-  const [expandedSlots, setExpandedSlots] = useState<Set<string>>(() => new Set())
   const [contentByArtifactId, setContentByArtifactId] = useState<Record<string, PlannerArtifactContent>>({})
   const [contentLoading, setContentLoading] = useState<Set<string>>(() => new Set())
   const [versionsBySlot, setVersionsBySlot] = useState<Record<string, PlannerArtifactVersion[]>>({})
@@ -95,19 +81,19 @@ export function ArtifactsView({
           canvas,
           nodes: state.nodes,
           artifacts: state.artifacts ?? [],
-        } satisfies CanvasArtifacts
+        } satisfies CanvasArtifactsSource
       } catch (err) {
         return {
           canvas,
           nodes: [],
           artifacts: [],
           error: (err as Error).message || t('artifacts.loadFailed'),
-        } satisfies CanvasArtifacts
+        } satisfies CanvasArtifactsSource
       }
     }))
       .then((items) => {
         if (cancelled) return
-        setCanvasArtifacts(items)
+        setSources(items)
         const failures = items.filter((item) => item.error)
         setError(failures.length ? t('artifacts.groupLoadFailed', { count: failures.length }) : null)
       })
@@ -122,61 +108,41 @@ export function ArtifactsView({
     }
   }, [canvasSignature, t])
 
-  const canvasGroups = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-    return canvasArtifacts.map((item) => {
-      const nodesById = new Map(item.nodes.map((node) => [node.id, node]))
-      const slots = new Map<string, ArtifactSlot>()
-      for (const artifact of item.artifacts) {
-        if (kindFilter !== 'all' && artifact.kind !== kindFilter) continue
-        const node = nodesById.get(artifact.nodeId)
-        const haystack = [
-          artifact.title,
-          artifact.reference,
-          artifact.kind,
-          artifact.status,
-          item.canvas.name,
-          item.canvas.id,
-          node?.title,
-          node?.id,
-        ].filter(Boolean).join(' ').toLowerCase()
-        if (normalizedQuery && !haystack.includes(normalizedQuery)) continue
-        const key = slotKey(artifact)
-        const current = slots.get(key)
-        if (current) {
-          current.artifacts.push(artifact)
-          current.artifacts.sort(sortArtifactsNewestFirst)
-          current.latest = current.artifacts[0]
-        } else {
-          slots.set(key, {
-            key,
-            canvas: item.canvas,
-            node,
-            latest: artifact,
-            artifacts: [artifact],
-          })
-        }
-      }
-      return {
-        ...item,
-        slots: Array.from(slots.values()).sort((a, b) => sortArtifactsNewestFirst(a.latest, b.latest)),
-      }
-    }).filter((item) => item.slots.length > 0 || item.error)
-  }, [canvasArtifacts, kindFilter, query])
+  const allItems = useMemo(() => buildArtifactIndex(sources), [sources])
+  const counts = useMemo(() => artifactGroupCounts(allItems), [allItems])
+  const filteredItems = useMemo(
+    () => filterArtifactIndex(allItems, {
+      query,
+      groupId: activeGroup,
+      canvasId: canvasFilter,
+      reviewStatus: reviewFilter,
+      status: statusFilter,
+    }),
+    [activeGroup, allItems, canvasFilter, query, reviewFilter, statusFilter],
+  )
+  const selectedItem = useMemo(
+    () => filteredItems.find((item) => item.key === selectedKey) ?? filteredItems[0] ?? null,
+    [filteredItems, selectedKey],
+  )
+  const canvasOptions = useMemo(
+    () => canvases.filter((canvas) => allItems.some((item) => item.canvas.id === canvas.id)),
+    [allItems, canvases],
+  )
+  const statusOptions = useMemo(
+    () => Array.from(new Set(allItems.map((item) => item.latest.status).filter(Boolean))).sort(),
+    [allItems],
+  )
 
-  const totalSlots = canvasGroups.reduce((count, group) => count + group.slots.length, 0)
+  useEffect(() => {
+    if (!selectedItem) {
+      setSelectedKey(null)
+    } else if (selectedItem.key !== selectedKey) {
+      setSelectedKey(selectedItem.key)
+    }
+  }, [selectedItem, selectedKey])
 
-  const toggleSlot = (key: string) => {
-    setExpandedSlots((current) => {
-      const next = new Set(current)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
-  const loadContent = (artifact: PlannerArtifact) => {
-    if (contentByArtifactId[artifact.id] || contentLoading.has(artifact.id)) return
+  const loadContent = useCallback((artifact: PlannerArtifact) => {
+    if (artifact.typedPayload || contentByArtifactId[artifact.id] || contentLoading.has(artifact.id)) return
     setContentLoading((current) => new Set(current).add(artifact.id))
     getPlannerArtifactContent(artifact.canvasId, artifact.id)
       .then((content) => {
@@ -200,48 +166,73 @@ export function ArtifactsView({
           return next
         })
       })
-  }
+  }, [contentByArtifactId, contentLoading])
 
-  const loadVersions = (slot: ArtifactSlot) => {
-    if (versionsBySlot[slot.key] || versionsLoading.has(slot.key)) return
-    setVersionsLoading((current) => new Set(current).add(slot.key))
-    listArtifactVersions(slot.canvas.id, slot.latest.nodeId, slot.latest.reference)
+  const loadVersions = useCallback((item: ArtifactIndexItem) => {
+    if (versionsBySlot[item.key] || versionsLoading.has(item.key)) return
+    setVersionsLoading((current) => new Set(current).add(item.key))
+    listArtifactVersions(item.canvas.id, item.latest.nodeId, item.latest.reference)
       .then(({ versions }) => {
-        setVersionsBySlot((current) => ({ ...current, [slot.key]: versions }))
+        setVersionsBySlot((current) => ({ ...current, [item.key]: versions }))
         const newest = versions[0]
         if (newest) {
-          setSelectedVersionBySlot((current) => ({ ...current, [slot.key]: newest.version_id }))
+          setSelectedVersionBySlot((current) => ({ ...current, [item.key]: newest.version_id }))
           setVersionDetailById((current) => ({ ...current, [newest.version_id]: newest }))
         }
       })
       .catch(() => {
-        setVersionsBySlot((current) => ({ ...current, [slot.key]: [] }))
+        setVersionsBySlot((current) => ({ ...current, [item.key]: [] }))
       })
       .finally(() => {
         setVersionsLoading((current) => {
           const next = new Set(current)
-          next.delete(slot.key)
+          next.delete(item.key)
           return next
         })
       })
-  }
+  }, [versionsBySlot, versionsLoading])
 
-  const selectVersion = (slot: ArtifactSlot, versionId: string) => {
-    setSelectedVersionBySlot((current) => ({ ...current, [slot.key]: versionId }))
+  useEffect(() => {
+    if (!selectedItem) return
+    loadContent(selectedItem.latest)
+    loadVersions(selectedItem)
+  }, [loadContent, loadVersions, selectedItem])
+
+  const selectVersion = (item: ArtifactIndexItem, versionId: string) => {
+    setSelectedVersionBySlot((current) => ({ ...current, [item.key]: versionId }))
     if (versionDetailById[versionId]) return
-    getArtifactVersion(slot.canvas.id, versionId)
+    getArtifactVersion(item.canvas.id, versionId)
       .then((version) => setVersionDetailById((current) => ({ ...current, [version.version_id]: version })))
       .catch(() => undefined)
   }
 
+  const openSourceArtifact = (item: ArtifactIndexItem) => {
+    requestBoardTarget({
+      kind: 'planner-artifact',
+      canvasId: item.canvas.id,
+      nodeId: item.latest.nodeId,
+      artifactId: item.latest.id,
+      source: 'system',
+      guide: {
+        enabled: true,
+        title: item.latest.title,
+        body: item.latest.reference,
+      },
+    })
+  }
+
   return (
     <section className="artifacts-workspace" aria-label={t('artifacts.title')}>
-      <div className="artifacts-workspace__inner">
-        <header className="artifacts-workspace__header">
+      <div className="artifacts-workspace__inner artifacts-index">
+        <header className="artifacts-workspace__header artifacts-index__header">
           <div>
             <span>{t('artifacts.scope')}</span>
             <h1>{t('artifacts.title')}</h1>
-            <p>{loading ? t('artifacts.loadingSlots') : t('artifacts.summary', { slots: totalSlots, canvases: canvasArtifacts.length })}</p>
+            <p>
+              {loading
+                ? t('artifacts.loadingSlots')
+                : t('artifacts.summary', { slots: filteredItems.length, canvases: sources.length })}
+            </p>
           </div>
           <div className="artifacts-workspace__tools">
             <label className="artifacts-search">
@@ -252,17 +243,36 @@ export function ArtifactsView({
                 placeholder={t('artifacts.searchPlaceholder')}
               />
             </label>
-            <div className="artifacts-filters" aria-label={t('artifacts.filterLabel')}>
-              {KIND_FILTERS.map((filter) => (
-                <button
-                  type="button"
-                  key={filter}
-                  className={`artifacts-filter${kindFilter === filter ? ' is-active' : ''}`}
-                  onClick={() => setKindFilter(filter)}
-                >
-                  {filter === 'all' ? t('artifacts.filterAll') : filter}
-                </button>
-              ))}
+            <div className="artifacts-index__filters" aria-label={t('artifacts.filterLabel')}>
+              <SelectFilter
+                label={t('artifacts.canvasFilter')}
+                value={canvasFilter}
+                onChange={setCanvasFilter}
+                options={[
+                  { value: 'all', label: t('artifacts.filterAll') },
+                  ...canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name || canvas.id })),
+                ]}
+              />
+              <SelectFilter
+                label={t('artifacts.reviewFilter')}
+                value={reviewFilter}
+                onChange={(value) => setReviewFilter(value as ReviewFilter)}
+                options={[
+                  { value: 'all', label: t('artifacts.filterAll') },
+                  { value: 'approved', label: 'approved' },
+                  { value: 'pending', label: 'pending' },
+                  { value: 'rejected', label: 'rejected' },
+                ]}
+              />
+              <SelectFilter
+                label={t('artifacts.statusFilter')}
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: 'all', label: t('artifacts.filterAll') },
+                  ...statusOptions.map((status) => ({ value: status, label: status })),
+                ]}
+              />
             </div>
           </div>
         </header>
@@ -274,162 +284,295 @@ export function ArtifactsView({
             <span>{t('artifacts.loading')}</span>
           </div>
         )}
-        {!loading && canvasGroups.length === 0 && (
-          <div className="artifacts-empty">
-            <Archive size={15} aria-hidden />
-            <span>{t('artifacts.empty')}</span>
-          </div>
-        )}
 
-        <div className="artifacts-groups">
-          {canvasGroups.map((group) => (
-            <section className="artifacts-group" key={group.canvas.id}>
-              <div className="artifacts-group__heading">
-                <div>
-                  <h2>{group.canvas.name}</h2>
-                  <p>{group.canvas.workspacePath}</p>
-                </div>
+        {!loading && (
+          <div className="artifacts-index__body">
+            <aside className="artifacts-index__types" aria-label={t('artifacts.typeDirectory')}>
+              <button
+                type="button"
+                className={`artifacts-type-button${activeGroup === 'all' ? ' is-active' : ''}`}
+                onClick={() => setActiveGroup('all')}
+              >
+                <span>{t('artifacts.typeAll')}</span>
+                <strong>{allItems.length}</strong>
+              </button>
+              {ARTIFACT_TYPE_GROUPS.map((group) => (
                 <button
                   type="button"
-                  className="artifacts-open-button"
-                  onClick={() => onOpenCanvas(group.canvas.id)}
-                  aria-label={t('artifacts.openCanvas', { name: group.canvas.name })}
+                  key={group.id}
+                  className={`artifacts-type-button${activeGroup === group.id ? ' is-active' : ''}`}
+                  onClick={() => setActiveGroup(group.id)}
                 >
-                  <ExternalLink size={14} aria-hidden />
-                  <span>{group.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
+                  <span>{group.label}</span>
+                  <strong>{counts[group.id]}</strong>
                 </button>
-              </div>
-              {group.error && <div className="artifacts-banner">{group.error}</div>}
-              <div className="artifacts-grid">
-                {group.slots.map((slot) => {
-                  const mode = displayModes[slot.key] ?? 'latest'
-                  const content = contentByArtifactId[slot.latest.id]
-                  const versions = versionsBySlot[slot.key]
-                  const selectedVersionId = selectedVersionBySlot[slot.key]
-                  const selectedVersion = selectedVersionId ? versionDetailById[selectedVersionId] : undefined
-                  const isExpanded = expandedSlots.has(slot.key)
-                  return (
-                    <article className="artifacts-card" key={slot.key}>
-                      <div className="artifacts-card__top">
-                        <div>
-                          <div className="artifacts-card__eyebrow">
-                            <span>{slot.latest.kind}</span>
-                            <span>{slot.latest.status}</span>
-                            {slot.latest.positionTag && slot.latest.positionTag !== 'latest' && (
-                              <span className={`artifacts-card__position artifacts-card__position--${slot.latest.positionTag}`}>
-                                {slot.latest.positionTag}
-                              </span>
-                            )}
-                          </div>
-                          <h3>{slot.latest.title}</h3>
-                          <p>{slot.latest.reference}</p>
-                        </div>
-                        <span className="artifacts-card__count">{slot.artifacts.length}</span>
-                      </div>
-                      <dl className="artifacts-meta">
-                        <div>
-                          <dt>{t('artifacts.node')}</dt>
-                          <dd>{slot.node?.title ?? slot.latest.nodeId}</dd>
-                        </div>
-                        <div>
-                          <dt>{t('artifacts.latest')}</dt>
-                          <dd>{formatDate(slot.latest.createdAt)}</dd>
-                        </div>
-                      </dl>
-                      <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
-                        <button
-                          type="button"
-                          className={mode === 'latest' ? 'is-active' : ''}
-                          onClick={() => setDisplayModes((current) => ({ ...current, [slot.key]: 'latest' }))}
-                        >
-                          <FileText size={13} aria-hidden />
-                          <span>{t('artifacts.showLatest')}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={mode === 'merged' ? 'is-active' : ''}
-                          onClick={() => {
-                            setDisplayModes((current) => ({ ...current, [slot.key]: 'merged' }))
-                            loadVersions(slot)
-                          }}
-                        >
-                          <Layers size={13} aria-hidden />
-                          <span>{t('artifacts.showMerged')}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={mode === 'compare' ? 'is-active' : ''}
-                          onClick={() => {
-                            setDisplayModes((current) => ({ ...current, [slot.key]: 'compare' }))
-                            loadVersions(slot)
-                          }}
-                        >
-                          <GitCompare size={13} aria-hidden />
-                          <span>{t('artifacts.compareVersions')}</span>
-                        </button>
-                      </div>
-                      <div className="artifacts-card__footer">
-                        <button
-                          type="button"
-                          className="artifacts-link-button"
-                          onClick={() => {
-                            toggleSlot(slot.key)
-                            loadContent(slot.latest)
-                          }}
-                        >
-                          {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
-                        </button>
-                        <button
-                          type="button"
-                          className="artifacts-link-button"
-                          onClick={() => loadVersions(slot)}
-                        >
-                          {versionsLoading.has(slot.key) ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
-                        </button>
-                      </div>
-                      {isExpanded && (
-                        <div className="artifacts-details">
-                          {contentLoading.has(slot.latest.id) ? (
-                            <div className="artifacts-preview artifacts-preview--loading">
-                              <Loader2 size={14} className="spin" aria-hidden />
-                              <span>{t('artifacts.loadingLatest')}</span>
-                            </div>
-                          ) : slot.latest.typedPayload ? (
-                            <TypedPayloadPreview payload={slot.latest.typedPayload} />
-                          ) : (
-                            <ArtifactContentPreview content={content} t={t} />
-                          )}
-                        </div>
-                      )}
-                      {versions && (
-                        <div className="artifacts-versions">
-                          <label>
-                            <span>{t('artifacts.version')}</span>
-                            <select
-                              value={selectedVersionId ?? ''}
-                              onChange={(event) => selectVersion(slot, event.target.value)}
-                            >
-                              {versions.map((version) => (
-                                <option value={version.version_id} key={version.version_id}>
-                                  {formatDate(version.created_at)} - {version.submitted_by_kind}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          {mode === 'latest' && <VersionSummary version={selectedVersion} t={t} />}
-                          {mode === 'merged' && <MergedVersionView versions={versions} />}
-                          {mode === 'compare' && <CompareVersionView versions={versions} t={t} />}
-                        </div>
-                      )}
-                    </article>
-                  )
-                })}
-              </div>
-            </section>
-          ))}
-        </div>
+              ))}
+            </aside>
+
+            <div className="artifacts-index__list" role="region" aria-label={t('artifacts.indexList')}>
+              {filteredItems.length === 0 ? (
+                <div className="artifacts-empty">
+                  <Archive size={15} aria-hidden />
+                  <span>{t('artifacts.empty')}</span>
+                </div>
+              ) : (
+                <table className="artifacts-table">
+                  <thead>
+                    <tr>
+                      <th>{t('artifacts.tableTitle')}</th>
+                      <th>{t('artifacts.tableType')}</th>
+                      <th>{t('artifacts.tableCanvas')}</th>
+                      <th>{t('artifacts.tableLatest')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.map((item) => (
+                      <tr
+                        key={item.key}
+                        className={item.key === selectedItem?.key ? 'is-selected' : ''}
+                      >
+                        <td>
+                          <button
+                            type="button"
+                            className="artifacts-row-button"
+                            onClick={() => setSelectedKey(item.key)}
+                          >
+                            <span>{item.latest.title}</span>
+                            <small>{item.node?.title ?? item.latest.nodeId}</small>
+                          </button>
+                        </td>
+                        <td>
+                          <ArtifactBadges item={item} />
+                        </td>
+                        <td>
+                          <span className="artifacts-table__canvas">{item.canvas.name || item.canvas.id}</span>
+                        </td>
+                        <td>
+                          <span className="artifacts-table__date">{formatDate(item.latest.createdAt)}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <ArtifactDetailPanel
+              item={selectedItem}
+              activeCanvasId={activeCanvasId}
+              content={selectedItem ? contentByArtifactId[selectedItem.latest.id] : undefined}
+              contentLoading={selectedItem ? contentLoading.has(selectedItem.latest.id) : false}
+              versions={selectedItem ? versionsBySlot[selectedItem.key] : undefined}
+              versionsLoading={selectedItem ? versionsLoading.has(selectedItem.key) : false}
+              selectedVersionId={selectedItem ? selectedVersionBySlot[selectedItem.key] : undefined}
+              selectedVersion={selectedItem && selectedVersionBySlot[selectedItem.key]
+                ? versionDetailById[selectedVersionBySlot[selectedItem.key]]
+                : undefined}
+              onLoadContent={(artifact) => loadContent(artifact)}
+              onLoadVersions={(item) => loadVersions(item)}
+              onSelectVersion={selectVersion}
+              onOpenCanvas={onOpenCanvas}
+              onOpenSource={openSourceArtifact}
+              t={t}
+            />
+          </div>
+        )}
       </div>
     </section>
+  )
+}
+
+function SelectFilter({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: Array<{ value: string; label: string }>
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="artifacts-select-filter">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function ArtifactBadges({ item }: { item: ArtifactIndexItem }) {
+  return (
+    <div className="artifacts-badges">
+      <span>{item.typeLabel}</span>
+      <span className={`artifacts-review-badge is-${item.reviewStatus}`}>{item.reviewStatus}</span>
+      {item.latest.positionTag && item.latest.positionTag !== 'latest' && (
+        <span className={`artifacts-card__position artifacts-card__position--${item.latest.positionTag}`}>
+          {item.latest.positionTag}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function ArtifactDetailPanel({
+  item,
+  activeCanvasId,
+  content,
+  contentLoading,
+  versions,
+  versionsLoading,
+  selectedVersionId,
+  selectedVersion,
+  onLoadContent,
+  onLoadVersions,
+  onSelectVersion,
+  onOpenCanvas,
+  onOpenSource,
+  t,
+}: {
+  item: ArtifactIndexItem | null
+  activeCanvasId: string
+  content?: PlannerArtifactContent
+  contentLoading: boolean
+  versions?: PlannerArtifactVersion[]
+  versionsLoading: boolean
+  selectedVersionId?: string
+  selectedVersion?: PlannerArtifactVersion
+  onLoadContent: (artifact: PlannerArtifact) => void
+  onLoadVersions: (item: ArtifactIndexItem) => void
+  onSelectVersion: (item: ArtifactIndexItem, versionId: string) => void
+  onOpenCanvas: (canvasId: string) => void
+  onOpenSource: (item: ArtifactIndexItem) => void
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  if (!item) {
+    return (
+      <aside className="artifacts-detail" aria-label={t('artifacts.detailPanel')}>
+        <div className="artifacts-detail__empty">
+          <Archive size={16} aria-hidden />
+          <span>{t('artifacts.empty')}</span>
+        </div>
+      </aside>
+    )
+  }
+
+  return (
+    <aside className="artifacts-detail" aria-label={t('artifacts.detailPanel')}>
+      <header className="artifacts-detail__header">
+        <div>
+          <span>{item.typeLabel}</span>
+          <h2>{item.latest.title}</h2>
+          <p>{item.latest.reference}</p>
+        </div>
+        <ArtifactBadges item={item} />
+      </header>
+
+      <dl className="artifacts-detail__meta">
+        <div>
+          <dt>{t('artifacts.tableCanvas')}</dt>
+          <dd>{item.canvas.name || item.canvas.id}</dd>
+        </div>
+        <div>
+          <dt>{t('artifacts.node')}</dt>
+          <dd>{item.node?.title ?? item.latest.nodeId}</dd>
+        </div>
+        <div>
+          <dt>{t('artifacts.latest')}</dt>
+          <dd>{formatDate(item.latest.createdAt)}</dd>
+        </div>
+        <div>
+          <dt>{t('artifacts.versionCount')}</dt>
+          <dd>{item.artifacts.length}</dd>
+        </div>
+      </dl>
+
+      <section className="artifacts-detail__section">
+        <h3>{t('artifacts.preview')}</h3>
+        {contentLoading ? (
+          <div className="artifacts-preview artifacts-preview--loading">
+            <Loader2 size={14} className="spin" aria-hidden />
+            <span>{t('artifacts.loadingLatest')}</span>
+          </div>
+        ) : item.latest.typedPayload ? (
+          <TypedPayloadPreview payload={item.latest.typedPayload} />
+        ) : (
+          <ArtifactContentPreview content={content} t={t} />
+        )}
+      </section>
+
+      <section className="artifacts-detail__section">
+        <div className="artifacts-detail__section-head">
+          <h3>{t('artifacts.versions')}</h3>
+          <button
+            type="button"
+            className="artifacts-link-button"
+            onClick={() => onLoadVersions(item)}
+          >
+            {versionsLoading ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
+          </button>
+        </div>
+        {versionsLoading && !versions ? (
+          <div className="artifacts-preview artifacts-preview--loading">
+            <Loader2 size={14} className="spin" aria-hidden />
+            <span>{t('artifacts.loadingVersions')}</span>
+          </div>
+        ) : versions && versions.length > 0 ? (
+          <div className="artifacts-versions">
+            <label>
+              <span>{t('artifacts.version')}</span>
+              <select
+                value={selectedVersionId ?? ''}
+                onChange={(event) => onSelectVersion(item, event.target.value)}
+              >
+                {versions.map((version) => (
+                  <option value={version.version_id} key={version.version_id}>
+                    {formatDate(version.created_at)} - {version.submitted_by_kind}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <VersionSummary version={selectedVersion} t={t} />
+            <CompareVersionView versions={versions} t={t} />
+          </div>
+        ) : (
+          <div className="artifacts-preview">{t('artifacts.noVersions')}</div>
+        )}
+      </section>
+
+      <footer className="artifacts-detail__actions">
+        <button
+          type="button"
+          className="artifacts-open-button"
+          onClick={() => onOpenSource(item)}
+        >
+          <ExternalLink size={14} aria-hidden />
+          <span>{t('artifacts.openInCanvas')}</span>
+        </button>
+        <button
+          type="button"
+          className="artifacts-link-button"
+          onClick={() => onOpenCanvas(item.canvas.id)}
+        >
+          <FileText size={13} aria-hidden />
+          <span>{item.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
+        </button>
+        {!item.latest.typedPayload && (
+          <button
+            type="button"
+            className="artifacts-link-button"
+            onClick={() => onLoadContent(item.latest)}
+          >
+            <GitCompare size={13} aria-hidden />
+            <span>{t('artifacts.loadContent')}</span>
+          </button>
+        )}
+      </footer>
+    </aside>
   )
 }
 
@@ -491,19 +634,6 @@ function VersionSummary({ version, t }: { version?: PlannerArtifactVersion; t: R
   )
 }
 
-function MergedVersionView({ versions }: { versions: PlannerArtifactVersion[] }) {
-  return (
-    <div className="artifacts-version-stack">
-      {versions.map((version) => (
-        <div key={version.version_id}>
-          <strong>{formatDate(version.created_at)}</strong>
-          <span>{version.payload_ref}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 function CompareVersionView({ versions, t }: { versions: PlannerArtifactVersion[]; t: ReturnType<typeof useI18n>['t'] }) {
   const [latest, previous] = versions
   if (!latest || !previous) {
@@ -520,14 +650,6 @@ function CompareVersionView({ versions, t }: { versions: PlannerArtifactVersion[
       ))}
     </div>
   )
-}
-
-function slotKey(artifact: PlannerArtifact): string {
-  return `${artifact.canvasId}:${artifact.nodeId}:${artifact.reference.trim().toLowerCase()}`
-}
-
-function sortArtifactsNewestFirst(a: PlannerArtifact, b: PlannerArtifact): number {
-  return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
 }
 
 function formatDate(value: string): string {
@@ -556,119 +678,4 @@ function stringifyPreview(value: unknown): string {
   } catch {
     return String(value)
   }
-}
-
-/**
- * UI-simplification §3.E — render the artifact according to its
- * `typedPayload.type`. Each kind gets its own strong-typed view.
- * Called from the expanded artifact card; if typedPayload is absent,
- * the caller falls back to the legacy ArtifactContentPreview.
- *
- * Same set of variants will also drive the data-node renderer on the
- * canvas (Push 5 — spawn data node).
- */
-function TypedPayloadPreview({ payload }: { payload: ArtifactPayload }) {
-  switch (payload.type) {
-    case 'prd':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--prd">
-          <div className="artifacts-typed-payload__tldr">{payload.tldr}</div>
-          <ul className="artifacts-typed-payload__sections">
-            {payload.sections.map((s) => (
-              <li key={s.heading}>
-                <strong>{s.heading}</strong>
-                <em>{s.lines} 行</em>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )
-    case 'kanban':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--kanban">
-          {payload.columns.map((col) => (
-            <div key={col.name} className="artifacts-typed-payload__kanban-col">
-              <header>
-                <span>{col.name}</span>
-                <em>{col.items.length}</em>
-              </header>
-              {col.items.slice(0, 5).map((item) => (
-                <div key={item} className="artifacts-typed-payload__kanban-item">{item}</div>
-              ))}
-              {col.items.length > 5 && (
-                <div className="artifacts-typed-payload__kanban-more">+{col.items.length - 5}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      )
-    case 'impl-pr':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--pr">
-          <div className="artifacts-typed-payload__pr-line">
-            <strong>#{payload.number}</strong>
-            <code>{payload.branch}</code>
-            <span>← {payload.baseBranch}</span>
-          </div>
-          <div className="artifacts-typed-payload__pr-stats">
-            <strong>{payload.filesChanged}</strong> files ·
-            <span className="artifacts-typed-payload__pr-add"> +{payload.insertions}</span> ·
-            <span className="artifacts-typed-payload__pr-del"> −{payload.deletions}</span>
-          </div>
-          <div className={`artifacts-typed-payload__ci is-${payload.ciStatus}`}>
-            CI {payload.ciStatus}
-          </div>
-          <div className="artifacts-typed-payload__pr-reviewers">
-            评审 · {payload.reviewers.join(', ') || '(无)'}
-          </div>
-        </div>
-      )
-    case 'check-result':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--check">
-          <div className="artifacts-typed-payload__check-pills">
-            <span className="is-pass">{payload.pass} pass</span>
-            <span className="is-fail">{payload.fail} fail</span>
-            <span className="is-skip">{payload.skip} skip</span>
-          </div>
-          {payload.failing.length > 0 && (
-            <ul className="artifacts-typed-payload__failing">
-              {payload.failing.slice(0, 5).map((f) => <li key={f}>✗ {f}</li>)}
-            </ul>
-          )}
-        </div>
-      )
-    case 'file':
-      return (
-        <dl className="artifacts-typed-payload artifacts-typed-payload--file">
-          <div><dt>filename</dt><dd>{payload.filename}</dd></div>
-          <div><dt>mime</dt><dd>{payload.mime}</dd></div>
-          <div><dt>size</dt><dd>{formatBytesPlain(payload.sizeBytes)}</dd></div>
-          {payload.lines != null && <div><dt>lines</dt><dd>{payload.lines}</dd></div>}
-        </dl>
-      )
-    case 'markdown':
-      return <pre className="artifacts-typed-payload artifacts-typed-payload--markdown">{payload.preview}</pre>
-    case 'integration':
-      return (
-        <div className="artifacts-typed-payload artifacts-typed-payload--integration">
-          <div className="artifacts-typed-payload__integration-line">
-            <strong>{payload.connector}</strong>
-            <code>{payload.externalId}</code>
-          </div>
-          {payload.externalUrl && (
-            <a href={payload.externalUrl} target="_blank" rel="noopener noreferrer">
-              {payload.externalUrl}
-            </a>
-          )}
-          {payload.summary && <div className="artifacts-typed-payload__integration-summary">{payload.summary}</div>}
-        </div>
-      )
-  }
-}
-
-function formatBytesPlain(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
