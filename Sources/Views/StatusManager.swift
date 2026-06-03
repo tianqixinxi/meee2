@@ -7,7 +7,9 @@ import Meee2CommKit
 /// 状态管理器 - 聚合所有插件的数据
 /// 作为 UI 的数据源
 public class StatusManager: ObservableObject {
-    private static let islandAttentionRefreshDebounce: DispatchQueue.SchedulerTimeType.Stride = .seconds(1)
+    /// Island attention 重算的最小间隔(throttle 窗口)。高频 hook 风暴下,
+    /// 重算被合并成「每个窗口最多一次」,避免主线程被全量 session 关联计算吃满。
+    private static let islandAttentionRecomputeInterval: DispatchQueue.SchedulerTimeType.Stride = .seconds(1)
 
     // MARK: - Published Properties
 
@@ -50,6 +52,10 @@ public class StatusManager: ObservableObject {
 
     let pluginManager: PluginManager
     private var cancellables = Set<AnyCancellable>()
+
+    /// Island attention 重算的统一去抖入口 —— 所有触发源(sessions 变更 /
+    /// SessionEventBus 事件)都 send 到这里,由 throttle 合并高频风暴。
+    private let islandRecomputeSubject = PassthroughSubject<Void, Never>()
 
     // MARK: - System Status
 
@@ -156,7 +162,23 @@ public class StatusManager: ObservableObject {
     // MARK: - Private Methods
 
     private func setupBindings() {
-        // 订阅 PluginManager.sessions
+        // Island attention 重算(currentBoardSessions → 对全量 session 做 surface→CLI
+        // 关联)是主线程上的重计算。并发会话多时,$sessions 与 SessionEventBus 会被
+        // 每个 hook 高频触发;若每个事件都即时重算,会吃满主线程(实测单核 ~93%)。
+        // 统一走一个 throttle 入口,把风暴合并成「每 islandAttentionRecomputeInterval
+        // 最多重算一次」。用 throttle(latest:) 而非 debounce —— debounce 在持续不断的
+        // 事件流下会一直推迟、整个忙碌期都不刷新;throttle 保证每个窗口至少落地一次最新态。
+        islandRecomputeSubject
+            .throttle(for: Self.islandAttentionRecomputeInterval, scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] in
+                guard let self = self else { return }
+                self.refreshIslandAttentionState()
+                self.updateSystemStatus()
+            }
+            .store(in: &cancellables)
+
+        // 订阅 PluginManager.sessions —— 只做便宜的即时更新(驱动 UI 列表/badge),
+        // 昂贵的 island 重算交给上面的 throttle 入口,不在每个 hook 上同步全量重算。
         pluginManager.$sessions
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
@@ -164,10 +186,9 @@ public class StatusManager: ObservableObject {
                 self.sessions = sessions
                     .filter(Self.isManagedIslandSession)
                     .filter { !$0.status.isHistorical || $0.urgentEvent != nil }
-                self.refreshIslandAttentionState(sessions: self.sessions)
-                self.updateSystemStatus()
                 // 通知 AppDelegate 更新状态栏图标
                 NotificationCenter.default.post(name: NSNotification.Name("SessionsDidChange"), object: nil)
+                self.islandRecomputeSubject.send()
             }
             .store(in: &cancellables)
 
@@ -183,11 +204,8 @@ public class StatusManager: ObservableObject {
 
         SessionEventBus.shared.publisher
             .filter(Self.shouldRefreshIslandAttention)
-            .debounce(for: Self.islandAttentionRefreshDebounce, scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self = self else { return }
-                self.refreshIslandAttentionState()
-                self.updateSystemStatus()
+                self?.islandRecomputeSubject.send()
             }
             .store(in: &cancellables)
     }

@@ -9,6 +9,15 @@ export interface BoardStateHook {
   error: string | null
   connected: boolean
   refresh: () => void
+  /**
+   * Fetch + commit fresh state immediately, bypassing the visibility/in-flight
+   * guards that `refresh` applies. Use when an explicit user action needs the
+   * latest server state *right now* — e.g. jumping to a session that was just
+   * dispatched, where the normal event-driven refresh may not have landed yet
+   * (or the WS dropped during the dispatch). Without this, the jump target can
+   * be absent from the session list and the workspace shows nothing.
+   */
+  forceRefresh: () => Promise<void>
 }
 
 /**
@@ -76,6 +85,27 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
     }
   }, [])
 
+  // Unguarded sibling of `refresh`: always fetches and commits. Intended for
+  // explicit navigations (open-session) where staleness shows up as an empty
+  // workspace. Concurrent with an in-flight `refresh` is fine — last write wins
+  // and `signatureFor` suppresses no-op re-renders.
+  const forceRefresh = useCallback(async () => {
+    try {
+      const s = await fetchState()
+      const sig = signatureFor(s)
+      if (sig !== lastSigRef.current) {
+        lastSigRef.current = sig
+        hasState.current = true
+        setState(s)
+      }
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
   const scheduleRefresh = useCallback(() => {
     if (document.visibilityState === 'hidden' && hasState.current) {
       pendingWhileHidden.current = true
@@ -113,7 +143,7 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
     }
   }, [onStateChangedEvent, refresh, scheduleRefresh])
 
-  return { state, loading, error, connected, refresh }
+  return { state, loading, error, connected, refresh, forceRefresh }
 }
 
 /**

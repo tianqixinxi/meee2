@@ -2534,6 +2534,57 @@
   color: var(--text-faint); font-size: 10.5px;
 }
 
+/* resize 自适应 —— 见 PlannerNodeCard 的 planner-node--fill 注释。用户把卡片拉高后
+ * (layout.height 落库),「成果」段吃掉多出来的纵向空间,而不是把内容堆在顶部、
+ * 底部留一片空白:
+ *   1) content 改 flex column,让子项之间能分配高度;
+ *   2) output-block flex-grow 填满剩余高度(多个 slot 平分);
+ *   3) 预览放开两行夹断,改成填满可用高度 + 内部滚动(配合 JS 把预览串放长到 800)。
+ * 没拉高时(auto 高度,无此 class)完全走原本紧凑的两行夹断,外观不变。 */
+.planner-node--fill .planner-node__content {
+  display: flex;
+  flex-direction: column;
+}
+.planner-node--fill .planner-node__output-block {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.planner-node--fill .planner-node__output-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.planner-node--fill .planner-node__output-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: block;
+  -webkit-line-clamp: initial;
+  overflow-y: auto;
+}
+
+/* 简略进展(最近 AI 回复)—— 卡片放大到一定程度才出现的小块,见 PlannerNodeCard
+ * 的 planner-node__live-progress。视觉做成「成果」的同款中性块 + 一个 Bot 图标标签,
+ * 让人一眼分清这是会话进展、不是产物。文本夹到 5 行(回复串本身已截到 ~160 字),
+ * 想看完整进展走「打开会话 / inspector」。 */
+.planner-node__live-progress {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 8px; padding: 6px 9px;
+  background: rgba(168, 165, 155, 0.06);
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: 5px;
+}
+.planner-node__live-progress-label {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--text-dim);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+}
+.planner-node__live-progress-text {
+  margin: 0;
+  color: var(--text-muted, var(--text-faint));
+  font-size: 11px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* PR4 — artifact 节点 version chip strip。横向小行，左边一个「版本」标签，
  *  右边 chips。最多展示 6 个版本号(v{N}, v{N-1}, ...)，超出走 +N。
  *  最新版本 chip 用 accent 边框 + 加粗，跟历史版本视觉分级，让用户一眼看到
@@ -8343,6 +8394,7 @@
 :root[data-theme="light"] .planner-node__kanban-column,
 :root[data-theme="light"] .planner-node__output-row,
 :root[data-theme="light"] .planner-node__output-block,
+:root[data-theme="light"] .planner-node__live-progress,
 :root[data-theme="light"] .planner-node__io-item,
 :root[data-theme="light"] .planner-input-card {
   background: var(--bg-paper);

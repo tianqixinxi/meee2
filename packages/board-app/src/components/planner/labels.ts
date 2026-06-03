@@ -26,21 +26,25 @@ export interface DisplayStatus {
   tone: DisplayStatusTone
 }
 
-export function deriveDisplayStatus(node: PlanningNode): DisplayStatus {
-  // 3-态会话模型(2026-06-01): 用户面只看「未启动 / 运行中 / 需要人回应」三态 + 「完成」。
-  // 「失败」已下线 —— 会话结束=回到未启动(后端 dead→pending+清绑定);唯一残留的
-  // failed 来自显式 submit blocked,本质是 agent/人「需要人回应」,统一并入该桶。
+export function deriveDisplayStatus(node: PlanningNode, boundSessionLive = false): DisplayStatus {
+  // 3-态会话模型 +「状态跟会话走」(2026-06-02): 用户面看
+  // 「未启动 / 运行中 / 需要人回应 / 在线待命 / 完成」。
+  // 「失败」已下线 —— failed 本质是 agent/人「需要人回应」,统一并入该桶。
   // 纯上游依赖未就绪的 blocked(无 runState)仍显示「卡住」(等上游),非会话态。
   const wfs = node.workflowRunState ?? null
-  // canvas 是活动账本不是 PM(见 canvas-is-ledger-not-pm): step / session 这类
-  // 「工作节点」没有「完成」态 —— 做完=会话结束=回到「未启动」,产物留在账本
-  // (卡片产物区)。只有 subCanvas / artifact / external 等非工作节点保留「完成」。
   const isWorkNode = (node.nodeKind ?? 'step') === 'step' || node.nodeKind === 'session'
   if (wfs === 'running' || wfs === 'dispatched') {
     return { label: '运行中', tone: 'running' }
   }
   if (wfs === 'awaiting-input' || wfs === 'gate-wait' || wfs === 'failed') {
     return { label: '需要人回应', tone: 'awaiting' }
+  }
+  // 状态跟会话走:只要绑定会话还活着(可打开续聊),即便 node 已落到 done / 未启动,
+  // 也显示「在线待命」—— 否则会出现「显示已结束却仍能打开活会话」的矛盾。会话结束后
+  // (boundSessionLive=false)才回落到下面的 node 终结态:工作节点 done→未启动
+  // (做完=会话结束=回未启动,产物留账本)、非工作节点 done→完成。
+  if (boundSessionLive) {
+    return { label: '在线待命', tone: 'running' }
   }
   if (!isWorkNode && (wfs === 'done' || node.status === 'done')) {
     return { label: '完成', tone: 'done' }
@@ -49,6 +53,19 @@ export function deriveDisplayStatus(node: PlanningNode): DisplayStatus {
     return { label: '卡住', tone: 'blocked' }
   }
   return { label: '未启动', tone: 'ready' }
+}
+
+// 一致性守卫(2026-06-02): node.workflowRunState 是后端清绑定的权威落点 —— 会话结束走
+// dead→pending 时会同时清掉 sessionId(见 PlannerCore.applySessionRunStateLocked)。重启/
+// 重连后 node 可能已刷新到「未启动」,而 active-run mirror(runNodeState)还滞后一帧、残留
+// 着上个会话的 running + sessionId。卡片显示态用 node(→未启动),sessionId/runStatus 却用
+// runNodeState(→残留绑定),于是「未启动 + 已绑定会话」自相矛盾,主操作还误判成「打开会话」
+// 而非「开干」(要点两次)。node 一旦回到未启动语义,就丢弃 runNodeState 的残留、以 node 为准。
+export function isSessionEnded(
+  workflowRunState: PlannerWorkflowRunState | null | undefined,
+): boolean {
+  const s = workflowRunState ?? null
+  return s === null || s === 'pending' || s === 'ready_to_start'
 }
 
 // === 运行态徽章 (§1 五种统一) ===

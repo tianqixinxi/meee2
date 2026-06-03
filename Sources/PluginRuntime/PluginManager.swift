@@ -178,7 +178,7 @@ public class PluginManager: ObservableObject {
     // MARK: - Session Management
 
     private func handleSessionsUpdated(pluginId: String, sessions: [PluginSession]) {
-        MLog("[PluginManager] handleSessionsUpdated called for \(pluginId) with \(sessions.count) sessions")
+        MDebug("[PluginManager] handleSessionsUpdated called for \(pluginId) with \(sessions.count) sessions")
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -193,7 +193,7 @@ public class PluginManager: ObservableObject {
             for session in self.sessions where session.pluginId == pluginId {
                 if let event = session.urgentEvent {
                     existingUrgentEvents[session.id] = event
-                    MLog("[PluginManager] Preserving urgentEvent for session: \(session.id)")
+                    MDebug("[PluginManager] Preserving urgentEvent for session: \(session.id)")
                 }
             }
 
@@ -210,7 +210,7 @@ public class PluginManager: ObservableObject {
                     // 恢复 urgentEvent（如果有）
                     if let existingEvent = existingUrgentEvents[session.id] {
                         updatedSession.urgentEvent = existingEvent
-                        MLog("[PluginManager] Restored urgentEvent for session: \(session.id)")
+                        MDebug("[PluginManager] Restored urgentEvent for session: \(session.id)")
                     }
                     uniqueSessions.append(updatedSession)
                 }
@@ -222,7 +222,7 @@ public class PluginManager: ObservableObject {
 
             // 标记加载完成
             self.isLoading = false
-            MLog("[PluginManager] Sessions updated, total: \(self.sessions.count), urgentEvents preserved: \(existingUrgentEvents.count)")
+            MDebug("[PluginManager] Sessions updated, total: \(self.sessions.count), urgentEvents preserved: \(existingUrgentEvents.count)")
         }
     }
 

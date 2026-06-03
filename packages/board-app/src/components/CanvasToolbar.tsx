@@ -163,6 +163,10 @@ export function CanvasToolbar({
   const [recap, setRecap] = useState<CanvasRecap | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
+  // recap 收起(默认)/ 展开二态。展开:summary + details + status-strip 全显示;
+  // 收起:只留一行 headline,连 details + status-strip 一起收,给悬浮的 session
+  // overlay 让出 canvas 空间(overlay 顶部跟随 --canvas-toolbar-bottom 自适应,见下方
+  // ResizeObserver;recap 整条 z-index 240 > overlay 70,收起的一行 headline 仍盖其上)。
   const [recapExpanded, setRecapExpanded] = useState(false)
   const [recapAgeNow, setRecapAgeNow] = useState(() => Date.now())
   const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
@@ -264,6 +268,26 @@ export function CanvasToolbar({
   useEffect(() => {
     canvasMonitorRef.current = canvasMonitor
   }, [canvasMonitor])
+
+  // 2026-06-02 · 上报 toolbar 实际底部(随 recap 折叠/展开变高)到 CSS 变量,
+  // 让悬浮的 session overlay 顶部跟随,始终落在 recap 下方、不重叠。
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return undefined
+    const update = () => {
+      const bottom = Math.round(el.getBoundingClientRect().bottom)
+      document.documentElement.style.setProperty('--canvas-toolbar-bottom', `${bottom}px`)
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    window.addEventListener('resize', update)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', update)
+      document.documentElement.style.removeProperty('--canvas-toolbar-bottom')
+    }
+  }, [])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -810,7 +834,7 @@ export function CanvasToolbar({
           </div>
         )}
       </div>
-      {!isMonitorCanvas && recap?.mode !== 'empty' && recap?.statuses && (
+      {recapExpanded && !isMonitorCanvas && recap?.mode !== 'empty' && recap?.statuses && (
         <div className="canvas-toolbar__status-strip" aria-label={t('canvas.statusOverview')}>
           {recap.statuses.map((item) => (
             <span key={item.label} className={`canvas-toolbar__status-pill is-${item.tone}`}>
