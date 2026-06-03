@@ -204,6 +204,27 @@ function isSeedAuthorableNode(node: PlanningNode): boolean {
   return true
 }
 
+// canvas-spec §7 — an OUTPUT artifact is a step/session EXECUTION PRODUCT (or a
+// canvas-runtime-derived Monitor): its payload is produced by an upstream
+// producer, not chosen/bound here. The Inspector for such a node is a
+// *visualization* surface (preview + versions + lineage), so the「数据来源」
+// picker / Attach data source must NOT appear. By contrast a seed/source
+// artifact (no upstream producer) legitimately offers「手填 vs 接外部」, and a
+// mirrored `dataSource` artifact needs its binding managed — both stay bindable.
+//
+// 判定独立于 isSeedAuthorableNode:slot/output 这个 unified 信号分不开 seed-output
+// 与 exec-output(两者都是 output 槽),真正的判别信号是「有没有上游 producer /
+// 声明了 input 槽」—— 执行产物必然有,seed/mirrored 必然没有。
+//   - canvas-runtime(Monitor 派生)           ⇒ output(不绑)
+//   - dependsOnNodeIds 非空 / schema.inputs 非空 ⇒ 执行产物(不绑)
+//   - 否则(seed / mirrored)                   ⇒ 可绑
+export function isOutputArtifactNode(node: PlanningNode): boolean {
+  if (node.artifactSource?.kind === 'canvas-runtime') return true
+  const hasUpstreamProducers = (node.dependsOnNodeIds ?? []).length > 0
+  const hasDeclaredInputs = (node.schema?.inputs ?? []).length > 0
+  return hasUpstreamProducers || hasDeclaredInputs
+}
+
 export function InspectorArtifactBody({
   node,
   canvasId,
@@ -258,6 +279,10 @@ export function InspectorArtifactBody({
   // the per-version 「编辑」 toggles: a step node with upstream inputs producing
   // an execution product → NOT authorable; its output renders read-only.
   const isSeedAuthorable = useMemo(() => isSeedAuthorableNode(node), [node])
+
+  // canvas-spec §7 — OUTPUT artifact 的 Inspector 是**可视化**面,不绑数据源。
+  // gate 下面整段「数据来源」picker / Attach data source(见 isOutputArtifactNode)。
+  const isOutputArtifact = useMemo(() => isOutputArtifactNode(node), [node])
 
   // 编辑切换(仅 markdown / prd / kanban 类型可编辑;v0.1 是占位 — 编辑器尚未上)。
   const [editMode, setEditMode] = useState(false)
@@ -497,7 +522,10 @@ export function InspectorArtifactBody({
       )}
 
       {/* 数据来源 picker — design spec ui_surface.inspector_picker.
-          chip 3-option (authored / aggregated / mirrored), auto-save. */}
+          chip 2-option (authored / mirrored), auto-save.
+          canvas-spec §7 — OUTPUT artifact 是可视化面、不绑数据源:这段只对
+          seed/源 与已镜像的 dataSource artifact 渲染(见 isOutputArtifact)。 */}
+      {!isOutputArtifact && (
       <div className="planner-node-modal__section">
         <h3>
           <Database size={13} aria-hidden /> 数据来源
@@ -599,6 +627,7 @@ export function InspectorArtifactBody({
           </div>
         )}
       </div>
+      )}
 
       {/* 产物预览 / 编辑区 — artifact 节点核心 */}
       <div className="planner-node-modal__section planner-node-modal__artifact-body">
