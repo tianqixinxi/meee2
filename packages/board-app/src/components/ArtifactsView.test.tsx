@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   getPlannerArtifactContent: vi.fn(),
   listArtifactVersions: vi.fn(),
   getArtifactVersion: vi.fn(),
+  proposePlannerGraphChange: vi.fn(),
 }))
 
 vi.mock('../api', async () => {
@@ -19,6 +20,7 @@ vi.mock('../api', async () => {
     getPlannerArtifactContent: apiMocks.getPlannerArtifactContent,
     listArtifactVersions: apiMocks.listArtifactVersions,
     getArtifactVersion: apiMocks.getArtifactVersion,
+    proposePlannerGraphChange: apiMocks.proposePlannerGraphChange,
   }
 })
 
@@ -38,6 +40,15 @@ const canvases: CanvasInfo[] = [
     kind: 'board',
     isDefault: false,
     workspacePath: '/repo/release',
+  },
+  {
+    id: 'team-canvas',
+    name: 'Team Canvas',
+    scope: 'team',
+    kind: 'board',
+    isDefault: false,
+    workspacePath: '/repo/team',
+    teamId: 'team-1',
   },
 ]
 
@@ -166,7 +177,7 @@ describe('ArtifactsView global index', () => {
             },
           }),
         ]
-        : [
+        : canvasId === 'release' ? [
           artifact({
             id: 'pr',
             canvasId,
@@ -186,22 +197,78 @@ describe('ArtifactsView global index', () => {
               reviewers: ['Kai'],
             },
           }),
+        ] : [
+          artifact({
+            id: 'team-doc',
+            canvasId,
+            kind: 'lark-doc',
+            title: 'Team Review Notes',
+            reference: 'https://example.com/team-review',
+            createdAt: '2026-06-03T08:00:00Z',
+            typedPayload: {
+              type: 'markdown',
+              preview: '# Team Review\nReady for review',
+            },
+          }),
+          artifact({
+            id: 'legacy-kanban',
+            canvasId,
+            kind: 'kanban',
+            title: 'Legacy Kanban Payload',
+            reference: 'legacy-kanban.json',
+            createdAt: '2026-06-03T07:00:00Z',
+          }),
         ],
     }))
-    apiMocks.getPlannerArtifactContent.mockResolvedValue({
-      artifactId: 'legacy',
-      type: 'text',
-      mimeType: 'text/plain',
-      content: 'legacy preview',
-    })
+    apiMocks.getPlannerArtifactContent.mockImplementation((_canvasId: string, artifactId: string) => Promise.resolve(
+      artifactId === 'legacy-kanban'
+        ? {
+          artifactId,
+          type: 'kanban',
+          mimeType: 'application/json',
+          content: JSON.stringify({
+            columns: [
+              {
+                id: 'col:todo',
+                title: '待处理',
+                cards: [
+                  { id: 'card-1', status: 'todo', title: 'Scope fallback' },
+                ],
+              },
+              {
+                id: 'col:done',
+                title: '已生成',
+                cards: [
+                  { id: 'card-2', status: 'done', title: 'Render typed preview' },
+                ],
+              },
+            ],
+            items: [],
+            version: 6,
+          }),
+        }
+        : {
+          artifactId,
+          type: 'text',
+          mimeType: 'text/plain',
+          content: 'legacy preview',
+        },
+    ))
     apiMocks.listArtifactVersions.mockResolvedValue({ versions })
     apiMocks.getArtifactVersion.mockResolvedValue(versions[0])
+    apiMocks.proposePlannerGraphChange.mockResolvedValue({
+      id: 'proposal-review',
+      canvasId: 'monitor',
+      summary: 'Approve Release PRD',
+      changes: [],
+      status: 'pending',
+    })
   })
 
   it('renders type counts and switches the index by semantic group', async () => {
     renderView()
 
-    expect(await screen.findByRole('button', { name: /Docs 1/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Docs 2/ })).toBeInTheDocument()
     expect(await screen.findByText('Internal release plan and ownership')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Implementation 1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Validation 1/ })).toBeInTheDocument()
@@ -242,11 +309,11 @@ describe('ArtifactsView global index', () => {
     }
   })
 
-  it('filters by review status and search text', async () => {
+  it('filters by unified state and search text', async () => {
     renderView()
 
     await screen.findAllByText('Release PRD')
-    fireEvent.change(screen.getByLabelText(/Review/), { target: { value: 'pending' } })
+    fireEvent.change(screen.getByLabelText(/State/), { target: { value: 'needs-review' } })
     expect(screen.getAllByText('Release PRD').length).toBeGreaterThan(0)
     expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
 
@@ -254,5 +321,81 @@ describe('ArtifactsView global index', () => {
     await waitFor(() => {
       expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
     })
+  })
+
+  it('creates a review proposal from the artifact detail actions', async () => {
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    fireEvent.click(within(detail).getByRole('button', { name: /Approve/ }))
+
+    await waitFor(() => {
+      expect(apiMocks.proposePlannerGraphChange).toHaveBeenCalledWith('monitor', expect.objectContaining({
+        summary: 'Approve Release PRD',
+        changes: [
+          expect.objectContaining({
+            kind: 'attachArtifact',
+            nodeId: 'release-node',
+            artifact: expect.objectContaining({
+              reference: 'release.md',
+              reviewStatus: 'approved',
+            }),
+          }),
+        ],
+      }))
+    })
+  })
+
+  it('filters artifacts by personal and team scope', async () => {
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Team Review Notes').length).toBeGreaterThan(0)
+      expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'personal' } })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Release PRD').length).toBeGreaterThan(0)
+      expect(screen.queryByText('Team Review Notes')).not.toBeInTheDocument()
+    })
+  })
+
+  it('opens typed artifact content in a rendered modal with support notes', async () => {
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    expect(within(modal).getByText('Internal release plan and ownership')).toBeInTheDocument()
+    expect(within(modal).getByText('Preview support')).toBeInTheDocument()
+    expect(within(modal).getByText(/prd, kanban, impl-pr/)).toBeInTheDocument()
+  })
+
+  it('renders legacy JSON payloads with semantic type as structured previews', async () => {
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+    fireEvent.click(await screen.findByRole('button', { name: /Boards 1/ }))
+
+    expect((await screen.findAllByText('Legacy Kanban Payload')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('待处理')).toBeInTheDocument()
+    expect(screen.getByText('Scope fallback')).toBeInTheDocument()
+
+    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    expect(within(modal).getByText('已生成')).toBeInTheDocument()
+    expect(within(modal).getByText('Render typed preview')).toBeInTheDocument()
+    expect(within(modal).queryByText(/"columns"/)).not.toBeInTheDocument()
   })
 })

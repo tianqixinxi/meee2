@@ -1,10 +1,11 @@
 import type {
-  ArtifactPayloadType,
   ArtifactReviewStatus,
   CanvasInfo,
+  CanvasScope,
   PlannerArtifact,
   PlanningNode,
 } from '../types'
+import { resolvedArtifactPayload } from './artifactPayload'
 
 export type ArtifactTypeGroupId =
   | 'docs'
@@ -43,16 +44,26 @@ export interface ArtifactIndexItem {
   latest: PlannerArtifact
   artifacts: PlannerArtifact[]
   reviewStatus: ArtifactReviewStatus
+  displayState: ArtifactDisplayState
   typeLabel: string
   haystack: string
 }
 
+export type ArtifactDisplayState =
+  | 'ready'
+  | 'needs-review'
+  | 'rejected'
+  | 'failed'
+  | 'stale'
+  | 'working'
+  | 'other'
+
 export interface ArtifactIndexFilters {
   query?: string
   groupId?: ArtifactTypeGroupId | 'all'
+  scope?: CanvasScope | 'all'
   canvasId?: string | 'all'
-  reviewStatus?: ArtifactReviewStatus | 'all'
-  status?: string | 'all'
+  displayState?: ArtifactDisplayState | 'all'
 }
 
 export function artifactSlotKey(artifact: PlannerArtifact): string {
@@ -60,16 +71,30 @@ export function artifactSlotKey(artifact: PlannerArtifact): string {
 }
 
 export function artifactReviewStatus(artifact: PlannerArtifact): ArtifactReviewStatus {
-  return artifact.reviewStatus ?? artifact.typedPayload?.reviewStatus ?? 'approved'
+  return artifact.reviewStatus ?? resolvedArtifactPayload(artifact)?.reviewStatus ?? 'approved'
+}
+
+export function artifactDisplayState(artifact: PlannerArtifact): ArtifactDisplayState {
+  const reviewStatus = artifactReviewStatus(artifact)
+  if (reviewStatus === 'pending') return 'needs-review'
+  if (reviewStatus === 'rejected') return 'rejected'
+  const status = artifact.status?.trim().toLowerCase() ?? ''
+  if (status === 'failed' || status === 'error') return 'failed'
+  if (status === 'stale' || status === 'superseded') return 'stale'
+  if (status === 'running' || status === 'working' || status === 'pending') return 'working'
+  if (!status || status === 'attached' || status === 'created' || status === 'updated' || status === 'done') {
+    return 'ready'
+  }
+  return 'other'
 }
 
 export function artifactTypeLabel(artifact: PlannerArtifact): string {
-  return artifact.typedPayload?.type ?? artifact.kind
+  return resolvedArtifactPayload(artifact)?.type ?? artifact.kind
 }
 
 export function classifyArtifactGroup(artifact: PlannerArtifact): ArtifactTypeGroupId {
   const kind = artifact.kind
-  const payloadType = artifact.typedPayload?.type as ArtifactPayloadType | undefined
+  const payloadType = resolvedArtifactPayload(artifact)?.type
   if (kind === 'prd' || kind === 'lark-doc' || payloadType === 'prd' || payloadType === 'markdown') {
     return 'docs'
   }
@@ -101,6 +126,7 @@ export function buildArtifactIndex(sources: CanvasArtifactsSource[]): ArtifactIn
         current.artifacts.sort(sortArtifactsNewestFirst)
         current.latest = current.artifacts[0]
         current.reviewStatus = artifactReviewStatus(current.latest)
+        current.displayState = artifactDisplayState(current.latest)
         current.groupId = classifyArtifactGroup(current.latest)
         current.typeLabel = artifactTypeLabel(current.latest)
         current.haystack = buildHaystack(current)
@@ -113,6 +139,7 @@ export function buildArtifactIndex(sources: CanvasArtifactsSource[]): ArtifactIn
           latest: artifact,
           artifacts: [artifact],
           reviewStatus: artifactReviewStatus(artifact),
+          displayState: artifactDisplayState(artifact),
           typeLabel: artifactTypeLabel(artifact),
           haystack: '',
         }
@@ -131,15 +158,9 @@ export function filterArtifactIndex(
   const query = filters.query?.trim().toLowerCase() ?? ''
   return items.filter((item) => {
     if (filters.groupId && filters.groupId !== 'all' && item.groupId !== filters.groupId) return false
+    if (filters.scope && filters.scope !== 'all' && item.canvas.scope !== filters.scope) return false
     if (filters.canvasId && filters.canvasId !== 'all' && item.canvas.id !== filters.canvasId) return false
-    if (
-      filters.reviewStatus
-      && filters.reviewStatus !== 'all'
-      && item.reviewStatus !== filters.reviewStatus
-    ) {
-      return false
-    }
-    if (filters.status && filters.status !== 'all' && item.latest.status !== filters.status) return false
+    if (filters.displayState && filters.displayState !== 'all' && item.displayState !== filters.displayState) return false
     return !query || item.haystack.includes(query)
   })
 }
@@ -165,6 +186,7 @@ function buildHaystack(item: ArtifactIndexItem): string {
     item.latest.status,
     item.latest.positionTag,
     item.reviewStatus,
+    item.displayState,
     item.typeLabel,
     item.canvas.name,
     item.canvas.id,

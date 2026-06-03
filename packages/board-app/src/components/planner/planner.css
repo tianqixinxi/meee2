@@ -3146,34 +3146,6 @@
   background: rgba(35, 35, 32, 0.88);
 }
 
-.planner-dialog-toggle {
-  position: absolute;
-  top: 50%;
-  left: var(--planner-chat-width, 420px);
-  transform: translateY(-50%);
-  z-index: 30;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid rgba(168, 165, 155, 0.2);
-  border-left: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: rgba(44, 43, 41, 0.96);
-  color: var(--text-dim);
-}
-
-.planner-dialog-toggle.is-collapsed {
-  left: 12px;
-  border-left: 1px solid rgba(168, 165, 155, 0.2);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.26);
-}
-
-.planner-dialog-toggle:hover {
-  background: rgba(50, 49, 46, 0.96);
-  color: var(--text);
-}
-
 .planner-side__resize {
   position: absolute;
   top: 0;
@@ -4878,7 +4850,7 @@
   grid-template-rows: auto auto auto minmax(0, 1fr);
   align-content: start;
   gap: 10px;
-  padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 14px) var(--monitor-page-inset) 18px;
+  padding: calc(var(--canvas-toolbar-bottom, 116px) + 16px) var(--monitor-page-inset) 18px;
 }
 
 .planner-monitor__tools {
@@ -5306,14 +5278,8 @@
     display: none;
   }
 
-  .planner-dialog-toggle {
-    left: 12px;
-    border-left: 1px solid rgba(168, 165, 155, 0.2);
-    border-radius: var(--radius-sm);
-  }
-
   .planner-monitor__body {
-    padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 14px) 12px 24px;
+    padding: calc(var(--canvas-toolbar-bottom, 116px) + 14px) 12px 24px;
   }
 
   .planner-monitor__tools {
@@ -5523,7 +5489,7 @@
 
   .planner-monitor__body {
     grid-template-rows: auto auto auto minmax(0, 1fr);
-    padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 10px) 10px 10px;
+    padding: calc(var(--canvas-toolbar-bottom, 116px) + 10px) 10px 10px;
   }
 
   .planner-monitor__sessions-button {
@@ -8272,19 +8238,10 @@
  * token, so they get explicit light overrides here.
  * ------------------------------------------------------------- */
 
-/* Side chat panel + dialog toggle handle */
+/* Side chat panel */
 :root[data-theme="light"] .planner-side {
   background: var(--panel-bg);
   border-right-color: var(--border);
-}
-:root[data-theme="light"] .planner-dialog-toggle {
-  background: var(--bg-elevated);
-  border-color: var(--border);
-  color: var(--text-dim);
-}
-:root[data-theme="light"] .planner-dialog-toggle:hover {
-  background: var(--panel-bg-hover);
-  color: var(--text);
 }
 
 /* Proposal panel / dialog containers (dark navy in base) */

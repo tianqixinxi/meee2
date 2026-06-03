@@ -88,4 +88,21 @@ describe('WorkspaceMonitor density modes', () => {
     expect(screen.getByText('Missing source links')).toBeInTheDocument()
     expect(screen.getByText('Open item')).toBeInTheDocument()
   })
+
+  it('keeps meee2 AI controls outside the monitor table toolbar', async () => {
+    render(
+      <I18nProvider>
+        <WorkspaceMonitor
+          activeCanvasId="canvas-1"
+          canvases={[canvas]}
+          refreshTick={0}
+          onOpenItem={vi.fn()}
+          onOpenAllSessions={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    await screen.findByText('Research launch sentiment')
+    expect(screen.queryByRole('button', { name: /meee2 AI/ })).not.toBeInTheDocument()
+  })
 })

@@ -16,6 +16,16 @@ const canvas: CanvasInfo = {
   workspacePath: '/repo',
 }
 
+const teamCanvas: CanvasInfo = {
+  id: 'team-monitor',
+  name: 'Team Monitor',
+  scope: 'team',
+  kind: 'board',
+  isDefault: false,
+  workspacePath: '/repo/team',
+  teamId: 'team-1',
+}
+
 const node: PlanningNode = {
   id: 'release',
   canvasId: 'monitor',
@@ -64,6 +74,11 @@ describe('artifactIndex', () => {
       kind: 'generic',
       typedPayload: { type: 'file', filename: 'report.md', mime: 'text/markdown', sizeBytes: 120 },
     }))).toBe('files-data')
+    expect(classifyArtifactGroup(artifact({
+      id: 'legacy-kanban',
+      kind: 'generic',
+      payload: { type: 'kanban', columns: [{ name: 'Todo', items: ['A'] }] },
+    }))).toBe('boards')
     expect(classifyArtifactGroup(artifact({ id: 'future', kind: 'future-kind' as PlannerArtifact['kind'] }))).toBe('other')
   })
 
@@ -90,9 +105,10 @@ describe('artifactIndex', () => {
     expect(items[0].latest.id).toBe('new')
     expect(items[0].artifacts.map((item) => item.id)).toEqual(['new', 'old'])
     expect(items[0].reviewStatus).toBe('pending')
+    expect(items[0].displayState).toBe('needs-review')
   })
 
-  it('filters by query group review and status', () => {
+  it('filters by query group and display state', () => {
     const items = buildArtifactIndex([{
       canvas,
       nodes: [node],
@@ -112,7 +128,30 @@ describe('artifactIndex', () => {
     expect(artifactGroupCounts(items).docs).toBe(1)
     expect(artifactGroupCounts(items).validation).toBe(1)
     expect(filterArtifactIndex(items, { groupId: 'validation' }).map((item) => item.latest.id)).toEqual(['check'])
-    expect(filterArtifactIndex(items, { query: 'release', reviewStatus: 'approved' }).map((item) => item.latest.id)).toEqual(['prd'])
-    expect(filterArtifactIndex(items, { status: 'needs_review' }).map((item) => item.latest.id)).toEqual(['check'])
+    expect(filterArtifactIndex(items, { query: 'release', displayState: 'ready' }).map((item) => item.latest.id)).toEqual(['prd'])
+    expect(filterArtifactIndex(items, { displayState: 'needs-review' }).map((item) => item.latest.id)).toEqual(['check'])
+  })
+
+  it('filters by personal or team canvas scope', () => {
+    const items = buildArtifactIndex([
+      {
+        canvas,
+        nodes: [node],
+        artifacts: [artifact({ id: 'personal-prd', kind: 'prd', title: 'Personal PRD' })],
+      },
+      {
+        canvas: teamCanvas,
+        nodes: [node],
+        artifacts: [artifact({
+          id: 'team-check',
+          canvasId: 'team-monitor',
+          kind: 'check-result',
+          title: 'Team Check',
+        })],
+      },
+    ])
+
+    expect(filterArtifactIndex(items, { scope: 'personal' }).map((item) => item.latest.id)).toEqual(['personal-prd'])
+    expect(filterArtifactIndex(items, { scope: 'team' }).map((item) => item.latest.id)).toEqual(['team-check'])
   })
 })
