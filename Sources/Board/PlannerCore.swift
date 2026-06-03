@@ -2554,6 +2554,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case nodeNotFound(String)
     case updateNodeNoFields(String)
     case canvasNotFound(String)
+    case plannerStateUnreadable(String)
     case runNotFound(String)
     case monitorClearNotAllowed(String)
     case permissionDenied(action: String, role: PlannerCanvasRole)
@@ -2600,6 +2601,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "updateNode change for \(id) must set title or status"
         case .canvasNotFound(let id):
             return "planning canvas not found: \(id)"
+        case .plannerStateUnreadable(let id):
+            return "planning canvas state is unreadable and will not be overwritten: \(id)"
         case .runNotFound(let id):
             return "workflow run not found: \(id)"
         case .monitorClearNotAllowed(let id):
@@ -3832,6 +3835,7 @@ final class PlannerStore {
     private let decoder = JSONDecoder()
     private let lock = NSRecursiveLock()
     private var document: StoreDocument
+    private var unreadableCanvasPathComponents: Set<String>
 
     init(fileURL: URL, fileManager: FileManager = .default) {
         self.rootURL = fileURL.pathExtension == "json"
@@ -3840,7 +3844,9 @@ final class PlannerStore {
         self.fileManager = fileManager
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        self.document = Self.loadDocument(rootURL: rootURL, fileManager: fileManager, decoder: decoder)
+        let loaded = Self.loadDocument(rootURL: rootURL, fileManager: fileManager, decoder: decoder)
+        self.document = loaded.document
+        self.unreadableCanvasPathComponents = loaded.unreadableCanvasPathComponents
     }
 
     func canvasParentRefs() -> [String: CanvasParentRef] {
@@ -3900,6 +3906,11 @@ final class PlannerStore {
                 document.canvases[canvas.id] = updated
                 try save(canvasId: canvas.id)
                 return updated
+            }
+            let pathComponent = Self.safePathComponent(canvas.id)
+            if unreadableCanvasPathComponents.contains(pathComponent) {
+                MError("[PlannerStore] refusing to overwrite unreadable planner state for \(canvas.id)")
+                throw PlannerCoreError.plannerStateUnreadable(canvas.id)
             }
 
             let record = CanvasRecord(canvas: canvas, nodes: seedNodes, proposals: [])
@@ -4587,41 +4598,45 @@ final class PlannerStore {
                 hasGate: record.nodes[stepIndex].gate != nil
             )
             let currentStepRunState = record.nodes[stepIndex].workflowRunState
-            // 3-态会话模型(2026-06-01): stepRunState == .pending 只可能来自
-            // runState(for: .dead) —— 绑定的会话结束了。把节点重置回「未启动
-            // session」(清绑定 + status .ready),而不是把死会话继续绑着标失败。
-            // 这样卡片回到可「开干」、hasActiveSession 不再把死绑定当 active 卡住
-            // 重新派发。已显式 submit(done/blocked latch)或已是 done 的节点不动;
-            // 已绑到另一个活会话的节点忽略这条过期的结束信号。
+            // stepRunState == .pending 只可能来自 runState(for: .dead) ——
+            // 绑定的会话结束了。保留 sessionId,把节点置为 awaitingInput/blocked,
+            // 让 UI 仍能打开/恢复原会话;不要把绑定擦掉后伪装成从未启动过。
+            // 已显式 submit(done/blocked latch)或已是 done 的节点不动;已绑到
+            // 另一个活会话的节点忽略这条过期的结束信号。
             if stepRunState == .pending {
                 let boundToThisSession = record.nodes[stepIndex].sessionId == sessionId
                 let alreadyTerminal = record.nodes[stepIndex].outputSubmittedAt != nil
                     || record.nodes[stepIndex].workflowRunState == .done
                 guard boundToThisSession, !alreadyTerminal else { return record }
-                record.nodes[stepIndex].sessionId = nil
-                record.nodes[stepIndex].chatThreadId = nil
-                record.nodes[stepIndex].source = .planner
-                record.nodes[stepIndex].workflowRunState = .pending
-                record.nodes[stepIndex].status = .ready
-                record.nodes[stepIndex].blockedReason = nil
+                record.nodes[stepIndex].sessionId = sessionId
+                record.nodes[stepIndex].chatThreadId = sessionId
+                record.nodes[stepIndex].source = .session
+                record.nodes[stepIndex].workflowRunState = .awaitingInput
+                record.nodes[stepIndex].status = .blocked
+                record.nodes[stepIndex].blockedReason = "Session \(String(sessionId.prefix(8))) 已结束；可打开恢复，或替换为新会话。"
                 if let legacySessionIndex {
-                    record.nodes[legacySessionIndex].sessionId = nil
-                    record.nodes[legacySessionIndex].chatThreadId = nil
-                    record.nodes[legacySessionIndex].workflowRunState = .pending
-                    record.nodes[legacySessionIndex].status = .ready
+                    record.nodes[legacySessionIndex].sessionId = sessionId
+                    record.nodes[legacySessionIndex].chatThreadId = sessionId
+                    record.nodes[legacySessionIndex].workflowRunState = .awaitingInput
+                    record.nodes[legacySessionIndex].status = .blocked
                 }
                 record.events.append(event(
                     canvasId: canvasId,
                     type: .nodeStateChanged,
                     nodeId: record.nodes[stepIndex].id,
-                    summary: "\(record.nodes[stepIndex].title) — session ended, back to not-started"
+                    summary: "\(record.nodes[stepIndex].title) — session ended, kept binding for resume"
                 ))
                 mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
-                    state.sessionId = nil
-                    state.chatThreadId = nil
-                    state.runState = .pending
+                    state.sessionId = sessionId
+                    state.chatThreadId = sessionId
+                    state.runState = .awaitingInput
                     state.finishedAt = nil
                     state.nextAction = nil
+                    Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: true)
+                    if !state.attempts.isEmpty {
+                        let last = state.attempts.count - 1
+                        state.attempts[last].runState = .awaitingInput
+                    }
                 }
                 recomputeActiveRun(&record)
                 document.canvases[canvasId] = record
@@ -7012,28 +7027,34 @@ final class PlannerStore {
         rootURL: URL,
         fileManager: FileManager,
         decoder: JSONDecoder
-    ) -> StoreDocument {
+    ) -> (document: StoreDocument, unreadableCanvasPathComponents: Set<String>) {
         let canvasesURL = rootURL.appendingPathComponent("canvases", isDirectory: true)
         guard let canvasDirectories = try? fileManager.contentsOfDirectory(
             at: canvasesURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return StoreDocument(canvases: [:])
+            return (StoreDocument(canvases: [:]), [])
         }
         var canvases: [String: CanvasRecord] = [:]
+        var unreadableCanvasPathComponents: Set<String> = []
         for directory in canvasDirectories {
             let resourceValues = try? directory.resourceValues(forKeys: [.isDirectoryKey])
             guard resourceValues?.isDirectory == true else { continue }
             let stateURL = directory.appendingPathComponent("state.json")
-            guard fileManager.fileExists(atPath: stateURL.path),
-                  let data = try? Data(contentsOf: stateURL),
-                  let record = try? decoder.decode(CanvasRecord.self, from: data) else {
+            guard fileManager.fileExists(atPath: stateURL.path) else {
                 continue
             }
-            canvases[record.canvas.id] = record
+            do {
+                let data = try Data(contentsOf: stateURL)
+                let record = try decoder.decode(CanvasRecord.self, from: data)
+                canvases[record.canvas.id] = record
+            } catch {
+                unreadableCanvasPathComponents.insert(directory.lastPathComponent)
+                MError("[PlannerStore] failed to decode \(stateURL.path): \(error)")
+            }
         }
-        return StoreDocument(canvases: canvases)
+        return (StoreDocument(canvases: canvases), unreadableCanvasPathComponents)
     }
 
     private static func safePathComponent(_ raw: String) -> String {
@@ -8668,8 +8689,8 @@ enum PlannerSessionRunStateBridge {
     ///   human's court — needs context or a decision to advance)
     /// - `permissionRequired` → `gateWait` (blocked awaiting a human)
     /// - `completed` → `done`
-    /// - `dead` → `pending` (3-态会话模型 2026-06-01: 会话结束 = 回到「未启动
-    ///   session」可重开,不再是终态「失败」。绑定清理见 applySessionRunStateLocked)
+    /// - `dead` → `pending` sentinel; applySessionRunStateLocked treats this
+    ///   as an ended bound session and keeps the session id so UI can resume.
     static func runState(for status: SessionStatus) -> PlannerWorkflowRunState {
         switch status {
         case .thinking, .tooling, .active, .compacting:

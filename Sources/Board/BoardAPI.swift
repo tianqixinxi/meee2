@@ -3278,6 +3278,8 @@ enum BoardAPI {
             return errorResponse("not_found", err.localizedDescription, status: 404)
         case .monitorSpecReplaceGuard:
             return errorResponse("monitor_spec_replace_guard", err.localizedDescription, status: 409)
+        case .plannerStateUnreadable:
+            return errorResponse("planner_state_unreadable", err.localizedDescription, status: 409)
         case .monitorClearNotAllowed:
             return errorResponse("monitor_clear_not_allowed", err.localizedDescription, status: 409)
         case .permissionDenied:
