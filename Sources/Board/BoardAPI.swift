@@ -2680,11 +2680,12 @@ enum BoardAPI {
             let state = try PlannerBoardBridge.canvasState(for: canvasId, snapshot: snapshot, actorUserId: actor)
             guard let scene = state.canvas.sceneSpec,
                   scene.kind == "poker-table",
-                  scene.orchestration?.kind == "poker-rules-v1" else {
+                  (scene.orchestration == nil || scene.orchestration?.kind == "poker-rules-v1") else {
                 return errorResponse("unsupported_scene_action", "only poker-rules-v1 scene actions are supported", status: 400)
             }
             guard let dealerNodeId = scene.orchestration?.stateNodeId
-                    ?? scene.artifactBindings.first(where: { $0.id == "game-state" })?.nodeId else {
+                    ?? scene.artifactBindings.first(where: { $0.id == "game-state" })?.nodeId
+                    ?? scene.nodeAnchors.first(where: { $0.id == "dealer" || $0.role == "dealer" })?.nodeId else {
                 return errorResponse("invalid_scene", "poker scene is missing Dealer state binding", status: 400)
             }
             switch body.actionId {

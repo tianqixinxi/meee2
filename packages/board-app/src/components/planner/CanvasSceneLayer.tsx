@@ -197,7 +197,10 @@ function PokerScene({
   const nextAction = readString(state.nextAction, nextActor || 'TBD')
   const [selectedRole, setSelectedRole] = useState<PokerUserRole>(activeRole || 'observer')
   const [selectedPlayer, setSelectedPlayer] = useState(controlledPlayerId || 'ada')
-  const startAction = actions.find((action) => action.id === 'start-game') ?? actions.find((action) => action.nodeId === gmAnchor?.nodeId)
+  const dealerAnchor = anchorsById.get('dealer')
+  const startNodeId = actions.find((action) => action.id === 'start-game')?.nodeId
+    ?? dealerAnchor?.nodeId
+    ?? actions.find((action) => action.id === 'next-street')?.nodeId
   const rolePlayerId = selectedRole === 'player' ? selectedPlayer : null
 
   return (
@@ -269,14 +272,14 @@ function PokerScene({
       <div className="canvas-scene-poker__rail">
         {!started ? (
           <PokerRoleSetup
-            actions={actions}
+            canStart={Boolean(startNodeId)}
             selectedRole={selectedRole}
             selectedPlayer={selectedPlayer}
             onRoleChange={setSelectedRole}
             onPlayerChange={setSelectedPlayer}
             onStart={() => {
-              if (!startAction) return
-              onSceneAction(startAction.nodeId, 'start-game', {
+              if (!startNodeId) return
+              onSceneAction(startNodeId, 'start-game', {
                 userRole: selectedRole,
                 controlledPlayerId: rolePlayerId,
                 autoRun: true,
@@ -312,21 +315,20 @@ function PokerScene({
 }
 
 function PokerRoleSetup({
-  actions,
+  canStart,
   selectedRole,
   selectedPlayer,
   onRoleChange,
   onPlayerChange,
   onStart,
 }: {
-  actions: CanvasSceneAction[]
+  canStart: boolean
   selectedRole: PokerUserRole
   selectedPlayer: string
   onRoleChange: (role: PokerUserRole) => void
   onPlayerChange: (playerId: string) => void
   onStart: () => void
 }) {
-  const canStart = actions.some((action) => action.id === 'start-game')
   const roles: Array<{ id: PokerUserRole; label: string; detail: string }> = [
     { id: 'observer', label: 'Observer', detail: '观察牌局，AI 玩家自动行动' },
     { id: 'gm', label: 'GM', detail: '你负责裁判审批，玩家由 AI 执行' },

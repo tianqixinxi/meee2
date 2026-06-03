@@ -185,6 +185,43 @@ describe('CanvasSceneLayer', () => {
     })
   })
 
+  it('allows legacy poker scenes to start from the dealer anchor without a start-game action', () => {
+    const sceneAction = vi.fn()
+    const sceneSpec: CanvasSceneSpec = {
+      kind: 'poker-table',
+      initialState: {
+        title: 'Legacy Poker Table',
+        communityCards: ['??', '??', '??'],
+        players: [],
+      },
+      nodeAnchors: [
+        { id: 'dealer', label: 'Dealer', nodeId: 'dealer-node', x: 50, y: 16, role: 'dealer' },
+      ],
+      actions: [
+        { id: 'next-street', label: '发下一轮牌', nodeId: 'dealer-node' },
+      ],
+    }
+
+    render(
+      <CanvasSceneLayer
+        sceneSpec={sceneSpec}
+        nodes={[node({ id: 'dealer-node', title: 'Dealer Agent' })]}
+        artifacts={[]}
+        onOpenNode={vi.fn()}
+        onSceneAction={sceneAction}
+      />,
+    )
+
+    const start = screen.getByRole('button', { name: 'Start Game' })
+    expect(start).not.toBeDisabled()
+    fireEvent.click(start)
+    expect(sceneAction).toHaveBeenCalledWith('dealer-node', 'start-game', {
+      userRole: 'observer',
+      controlledPlayerId: null,
+      autoRun: true,
+    })
+  })
+
   it('uses a single poker next-step target and keeps GM in human confirmation', () => {
     const sceneAction = vi.fn()
     const sceneSpec: CanvasSceneSpec = {

@@ -679,7 +679,6 @@ function PlannerGraphInner({
   const handleSceneAction = useCallback((nodeId: string, actionId: string, payload?: CanvasSceneActionPayload) => {
     const scene = plannerState?.canvas.sceneSpec
     if (scene?.kind === 'poker-table'
-        && scene.orchestration?.kind === 'poker-rules-v1'
         && ['start-game', 'step', 'resume-auto', 'pause-auto'].includes(actionId)) {
       setBusy(true)
       setError(null)
