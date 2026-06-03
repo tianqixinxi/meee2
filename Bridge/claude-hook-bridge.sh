@@ -158,6 +158,11 @@ ITERM_SESSION_ID_VAL="${ITERM_SESSION_ID:-}"
 # Apple Terminal：每 tab 自带 TERM_SESSION_ID。Apple Terminal 的 AppleScript
 # 模型按 tty 寻址 tab 更稳，所以这里只把 session id 作为辅助 capture。
 APPLE_TERM_SESSION_ID_VAL="${TERM_SESSION_ID:-}"
+MEEE2_ASSISTANT_SESSION_VAL="${MEEE2_ASSISTANT_SESSION:-}"
+MEEE2_ASSISTANT_SESSION_BOOL="false"
+if [ "$MEEE2_ASSISTANT_SESSION_VAL" = "1" ]; then
+    MEEE2_ASSISTANT_SESSION_BOOL="true"
+fi
 
 # 构建 JSON 数据
 if [ -z "$INPUT" ] || [ "$INPUT" = "" ]; then
@@ -175,6 +180,7 @@ if [ -z "$INPUT" ] || [ "$INPUT" = "" ]; then
   "ghosttyTerminalId": "$GHOSTTY_TERMINAL_ID_VAL",
   "iTermSessionId": "$ITERM_SESSION_ID_VAL",
   "appleTerminalSessionId": "$APPLE_TERM_SESSION_ID_VAL",
+  "meee2AssistantSession": $MEEE2_ASSISTANT_SESSION_BOOL,
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
@@ -191,6 +197,7 @@ else
             --arg ghosttyId "$GHOSTTY_TERMINAL_ID_VAL" \
             --arg iTermId "$ITERM_SESSION_ID_VAL" \
             --arg appleTermId "$APPLE_TERM_SESSION_ID_VAL" \
+            --arg assistantSession "$MEEE2_ASSISTANT_SESSION_VAL" \
             '. + {
                 tty: (if .tty then .tty else $tty end),
                 termProgram: (if .termProgram then .termProgram else $term end),
@@ -200,12 +207,13 @@ else
             }
             + (if $ghosttyId != "" then {ghosttyTerminalId: $ghosttyId} else {} end)
             + (if $iTermId != "" then {iTermSessionId: $iTermId} else {} end)
-            + (if $appleTermId != "" then {appleTerminalSessionId: $appleTermId} else {} end)')
+            + (if $appleTermId != "" then {appleTerminalSessionId: $appleTermId} else {} end)
+            + (if $assistantSession == "1" then {meee2AssistantSession: true} else {} end)')
     else
         # 无 jq 时，在 JSON 结尾添加字段
-        if [ -n "$TTY_VAL" ] || [ -n "$TERM_PROGRAM_VAL" ] || [ -n "$CMUX_SOCKET_VAL" ]; then
+        if [ -n "$TTY_VAL" ] || [ -n "$TERM_PROGRAM_VAL" ] || [ -n "$CMUX_SOCKET_VAL" ] || [ "$MEEE2_ASSISTANT_SESSION_VAL" = "1" ]; then
             # 移除最后的 }，添加新字段
-            INPUT=$(echo "$INPUT" | sed 's/}$/,"tty":"'"$TTY_VAL"'","termProgram":"'"$TERM_PROGRAM_VAL"'","termBundleId":"'"$TERM_BUNDLE_VAL"'","cmuxSocketPath":"'"$CMUX_SOCKET_VAL"'","cmuxSurfaceId":"'"$CMUX_SURFACE_VAL"'"}/')
+            INPUT=$(echo "$INPUT" | sed 's/}$/,"tty":"'"$TTY_VAL"'","termProgram":"'"$TERM_PROGRAM_VAL"'","termBundleId":"'"$TERM_BUNDLE_VAL"'","cmuxSocketPath":"'"$CMUX_SOCKET_VAL"'","cmuxSurfaceId":"'"$CMUX_SURFACE_VAL"'","meee2AssistantSession":'"$MEEE2_ASSISTANT_SESSION_BOOL"'"}/')
         fi
     fi
 fi

@@ -221,7 +221,7 @@ textarea {
 .app {
   display: grid;
   grid-template-rows: 1fr auto;
-  grid-template-columns: var(--sidebar-width, 208px) 1fr;
+  grid-template-columns: var(--sidebar-width, 176px) 1fr;
   height: 100%;
 }
 
@@ -837,13 +837,13 @@ textarea {
   grid-row: 1 / span 2;
   grid-column: 1;
   display: flex;
-  width: var(--sidebar-width, 208px);
-  min-width: var(--sidebar-width, 208px);
+  width: var(--sidebar-width, 176px);
+  min-width: var(--sidebar-width, 176px);
   height: 100%;
   flex-direction: column;
   align-items: stretch;
   gap: 14px;
-  padding: 50px 12px 12px;
+  padding: 50px 10px 12px;
   background: var(--bg-rail-gradient);
   border-right: 1px solid color-mix(in srgb, var(--border-strong) 42%, transparent);
   box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.18);
@@ -855,7 +855,7 @@ textarea {
 .workspace-rail__top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
 }
 
@@ -871,6 +871,7 @@ textarea {
   border-radius: 8px;
   background: transparent;
   color: rgba(245, 244, 239, 0.62);
+  cursor: pointer;
   font: inherit;
 }
 
@@ -881,7 +882,7 @@ textarea {
   align-self: flex-start;
   justify-content: center;
   overflow: hidden;
-  margin: 0 0 6px 8px;
+  margin: 0 0 6px 4px;
   padding: 0;
   border-radius: 999px;
   border-color: rgba(204, 120, 92, 0.18);
@@ -891,26 +892,6 @@ textarea {
   font-weight: 800;
   letter-spacing: 0;
   box-shadow: inset 0 1px 0 rgba(245, 244, 239, 0.05);
-}
-
-.workspace-rail__collapse {
-  width: 30px;
-  height: 30px;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: rgba(245, 244, 239, 0.5);
-  cursor: pointer;
-}
-
-.workspace-rail__collapse:hover,
-.workspace-rail__collapse:focus-visible {
-  background: rgba(245, 244, 239, 0.07);
-  color: var(--text);
 }
 
 .workspace-rail__avatar.has-image {
@@ -973,8 +954,8 @@ textarea {
 .workspace-rail__button {
   width: 100%;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 0 12px;
+  gap: 9px;
+  padding: 0 10px;
   color: rgba(245, 244, 239, 0.66);
   font-size: 13px;
   font-weight: 620;
@@ -1015,7 +996,7 @@ textarea {
 
 .workspace-rail__button.is-active::before {
   position: absolute;
-  left: -12px;
+  left: -10px;
   width: 3px;
   height: 22px;
   border-radius: 0 999px 999px 0;
@@ -1059,49 +1040,6 @@ textarea {
 
 .workspace-rail__spacer {
   flex: 1 1 auto;
-}
-
-.workspace-rail.is-collapsed {
-  width: 52px;
-  min-width: 52px;
-  gap: 8px;
-  padding: 42px 6px 10px;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__top {
-  justify-content: center;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__avatar,
-.workspace-rail.is-collapsed .workspace-rail__button {
-  width: 38px;
-  height: 38px;
-  flex-basis: 38px;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__avatar {
-  margin: 0;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__collapse {
-  position: absolute;
-  top: 10px;
-  right: 7px;
-  width: 26px;
-  height: 26px;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__button {
-  justify-content: center;
-  padding: 0;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__label {
-  display: none;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__button.is-active::before {
-  left: -7px;
 }
 
 .board-area {
@@ -5374,6 +5312,10 @@ textarea {
     padding: 42px 6px 10px;
   }
 
+  .workspace-rail__top {
+    justify-content: center;
+  }
+
   .sessions-workspace__inner {
     width: 100%;
     padding: 14px 12px 16px;
@@ -5477,6 +5419,10 @@ textarea {
     width: 38px;
     height: 38px;
     flex-basis: 38px;
+  }
+
+  .workspace-rail__avatar {
+    margin: 0;
   }
 
   .workspace-rail__button {
@@ -5689,10 +5635,6 @@ textarea {
   font-size: 12px;
 }
 
-html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
-  width: min(420px, calc(100% - var(--planner-chat-width, 0px) - 32px));
-}
-
 html.board-planner-chat-collapsed .canvas-toolbar {
   left: 16px;
   width: min(420px, calc(100% - 32px));
@@ -5869,7 +5811,7 @@ html.board-empty-omni .canvas-toolbar__panel {
 .canvas-toolbar__recap {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 28px;
-  align-items: center;
+  align-items: start;
   gap: 8px;
 }
 
@@ -5881,11 +5823,19 @@ html.board-empty-omni .canvas-toolbar__panel {
 .canvas-toolbar__recap-copy {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 5px;
 }
 
-.canvas-toolbar__recap-copy strong,
-.canvas-toolbar__recap-copy small {
+.canvas-toolbar__recap-headline-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.canvas-toolbar__recap-copy strong {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5898,10 +5848,40 @@ html.board-empty-omni .canvas-toolbar__panel {
   line-height: 1.25;
 }
 
+.canvas-toolbar__recap-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.canvas-toolbar__recap-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-weight: 560;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.canvas-toolbar__recap-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+}
+
 .canvas-toolbar__recap-copy small {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-dim);
   font-size: 12px;
   font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .canvas-toolbar__recap-age {
@@ -5913,7 +5893,7 @@ html.board-empty-omni .canvas-toolbar__panel {
 .canvas-toolbar__monitor-badge {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 118px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6014,18 +5994,18 @@ html.board-empty-omni .canvas-toolbar__panel {
 
 .canvas-toolbar__recap-details {
   display: grid;
-  gap: 4px;
-  padding-top: 7px;
+  gap: 6px;
+  padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .canvas-toolbar__recap-details p {
   position: relative;
   margin: 0;
-  padding-left: 10px;
+  padding-left: 11px;
   color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.38;
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .canvas-toolbar__recap-details p::before {
@@ -12881,17 +12861,14 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   color: var(--text-dim);
 }
 
-:root[data-theme="light"] .workspace-rail__button,
-:root[data-theme="light"] .workspace-rail__collapse {
+:root[data-theme="light"] .workspace-rail__button {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
   color: var(--text-dim);
 }
 
-:root[data-theme="light"] .workspace-rail__button:hover,
-:root[data-theme="light"] .workspace-rail__collapse:hover,
-:root[data-theme="light"] .workspace-rail__collapse:focus-visible {
+:root[data-theme="light"] .workspace-rail__button:hover {
   background: rgba(185, 95, 67, 0.08);
   border-color: transparent;
   color: var(--text);

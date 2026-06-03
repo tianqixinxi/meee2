@@ -129,12 +129,80 @@ describe('CanvasToolbar template save flow', () => {
     )
 
     const recap = document.querySelector('.canvas-toolbar__recap-trigger')
-    expect(recap).toBeInstanceOf(HTMLDivElement)
+    expect(recap).toBeInstanceOf(HTMLButtonElement)
     expect(recap).toHaveTextContent(/AI recap|Reading canvas state/i)
     expect(screen.queryByRole('button', { name: 'Open AI recap' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Refresh canvas recap' })).toBeInTheDocument()
     fireEvent.click(recap as HTMLElement)
     expect(screen.queryByRole('dialog', { name: /AI recap/i })).not.toBeInTheDocument()
+  })
+
+  it('collapses AI recap details behind the toolbar summary', async () => {
+    apiMocks.streamAssistantChat.mockImplementation(async function* () {
+      yield {
+        type: 'delta',
+        text: JSON.stringify({
+          headline: '发布风险集中在评审',
+          summary: '摘要只保留当前最重要的判断，默认不展开细节。',
+          details: [
+            '详细说明一：两个节点仍在等待人工确认。',
+            '详细说明二：最新 artifact 已产出但还没有被验收。',
+          ],
+        }),
+      }
+    })
+
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'board-canvas',
+            name: 'Launch Plan',
+            scope: 'personal',
+            kind: 'board',
+            isDefault: false,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="board-canvas"
+          plannerState={{
+            canvas: { id: 'board-canvas', title: 'Launch Plan', plannerContext: '' },
+            nodes: [{
+              id: 'node-1',
+              canvasId: 'board-canvas',
+              title: 'Review launch notes',
+              status: 'ready',
+              workflowRunState: 'running',
+              blockedReason: null,
+              nextAction: 'Confirm evidence',
+              schema: { inputs: [], outputs: [] },
+              dependsOnNodeIds: [],
+              sessionId: 'session-1',
+              schedule: null,
+            }],
+            artifacts: [],
+            proposals: [],
+            events: [],
+          } as any}
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByText('发布风险集中在评审')).toBeInTheDocument()
+    expect(screen.getByText('摘要只保留当前最重要的判断，默认不展开细节。')).toBeInTheDocument()
+    expect(screen.queryByText('详细说明一：两个节点仍在等待人工确认。')).not.toBeInTheDocument()
+
+    const recap = document.querySelector('.canvas-toolbar__recap-trigger')
+    expect(recap).toBeInstanceOf(HTMLButtonElement)
+    fireEvent.click(recap as HTMLElement)
+
+    expect(await screen.findByText('详细说明一：两个节点仍在等待人工确认。')).toBeInTheDocument()
+    expect(screen.getByText('详细说明二：最新 artifact 已产出但还没有被验收。')).toBeInTheDocument()
   })
 
   it('switches between My and Team canvas tabs in the canvas menu', async () => {

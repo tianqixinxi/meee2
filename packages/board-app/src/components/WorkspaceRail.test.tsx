@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { WorkspaceRail } from './WorkspaceRail'
@@ -22,8 +22,6 @@ describe('WorkspaceRail', () => {
           activeCanvasId="monitor"
           mode="planner"
           userProfile={null}
-          collapsed={false}
-          onCollapsedChange={vi.fn()}
           onModeChange={vi.fn()}
         />
       </I18nProvider>,
@@ -31,5 +29,27 @@ describe('WorkspaceRail', () => {
 
     expect(screen.getByRole('button', { name: 'Canvas' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
+  })
+
+  it('uses the avatar as a settings shortcut and removes the collapse control', () => {
+    const onModeChange = vi.fn()
+    render(
+      <I18nProvider>
+        <WorkspaceRail
+          canvases={canvases}
+          activeCanvasId="monitor"
+          mode="planner"
+          userProfile={null}
+          onModeChange={onModeChange}
+        />
+      </I18nProvider>,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'User' }))
+
+    expect(onModeChange).toHaveBeenCalledWith('settings')
   })
 })

@@ -630,7 +630,9 @@ struct LocalClaudeProvider: AssistantProvider {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["claude"] + args
         }
-        process.environment = ProcessInfo.processInfo.environment
+        var environment = ProcessInfo.processInfo.environment
+        environment["MEEE2_ASSISTANT_SESSION"] = "1"
+        process.environment = environment
         let workspacePath = (rawWorkspacePath as NSString).standardizingPath
         if !workspacePath.isEmpty {
             try FileManager.default.createDirectory(

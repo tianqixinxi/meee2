@@ -170,6 +170,9 @@ export function NodeInspectorModal({
   const permissionTooltip = canAssignOwner ? undefined : '只有画板负责人可以指派这个节点。'
   const scheduleEnabled = node.schedule?.enabled === true
   const scheduleNextRun = formatScheduleDate(node.schedule?.nextRunAt)
+  const runtimeSurfaceId = boundSession?.surfaceId?.trim() ?? ''
+  const runtimeProviderId = boundSession?.providerResumeSessionId?.trim() ?? ''
+  const hasRuntimeDebugIds = runtimeSurfaceId.length > 0 || runtimeProviderId.length > 0
 
   // UI-simplification §2.6 — 进展 段次级动作。
   // Re-run / mark-down 从节点卡片 footer 搬过来,不再跟 primary action 抢注意力。
@@ -351,7 +354,6 @@ export function NodeInspectorModal({
               // 不显示过期的 currentTask/currentTool),不再驱动「完成」标签或绿色样式。
               const isDone = wfs === 'done'
               const showLiveDetails = isRunning || isAwaiting || isDone
-              const hasRuntimeDebugIds = Boolean(boundSession?.surfaceId || boundSession?.providerResumeSessionId)
               // step / session 工作节点没有「完成」态(canvas 是账本不是 PM):
               // done = 会话结束 = 回到「未启动」,产物留在账本。本块仅渲染 step/session。
               const wfsLabel =
@@ -385,7 +387,7 @@ export function NodeInspectorModal({
                    *    · running / awaiting:在干什么 / 工具(实时)+ 最近消息 + 最后活动
                    *    · done:不显示 currentTask/currentTool(对完成节点是过期的),
                    *      只留最近消息 + 完成/最后活动时间,外加下方的「打开会话」导航。 */}
-                  {hasSession && boundSession && (showLiveDetails || hasRuntimeDebugIds) && (
+                  {hasSession && boundSession && showLiveDetails && (
                     <div className="planner-node-modal__progress-runtime-live">
                       {showLiveDetails && !isDone && boundSession.currentTask && (
                         <span className="planner-node-modal__progress-runtime-live-row">
@@ -396,28 +398,6 @@ export function NodeInspectorModal({
                         <span className="planner-node-modal__progress-runtime-live-row">
                           <Settings2 size={11} aria-hidden /> {boundSession.currentTool}
                         </span>
-                      )}
-                      {(boundSession.surfaceId || boundSession.providerResumeSessionId) && (
-                        <div className="planner-node-modal__progress-runtime-debug">
-                          {boundSession.surfaceId && (
-                            <span
-                              className="planner-node-modal__progress-runtime-debug-row"
-                              title={boundSession.surfaceId}
-                            >
-                              <span>Surface</span>
-                              <code>{compactRuntimeId(boundSession.surfaceId)}</code>
-                            </span>
-                          )}
-                          {boundSession.providerResumeSessionId && (
-                            <span
-                              className="planner-node-modal__progress-runtime-debug-row"
-                              title={boundSession.providerResumeSessionId}
-                            >
-                              <span>Provider</span>
-                              <code>{compactRuntimeId(boundSession.providerResumeSessionId)}</code>
-                            </span>
-                          )}
-                        </div>
                       )}
                       {showLiveDetails && (boundSession.recentMessages ?? [])
                         .slice(-2)
@@ -726,6 +706,29 @@ export function NodeInspectorModal({
                 )}
                 {actionError && <p className="planner-node-actions__error">{actionError}</p>}
               </>
+            )}
+          </div>
+        )}
+
+        {hasRuntimeDebugIds && (
+          <div className="planner-node-modal__runtime-debug-footer" aria-label="运行时标识">
+            {runtimeSurfaceId && (
+              <span
+                className="planner-node-modal__runtime-debug-row"
+                title={runtimeSurfaceId}
+              >
+                <span>Surface</span>
+                <code>{runtimeSurfaceId}</code>
+              </span>
+            )}
+            {runtimeProviderId && (
+              <span
+                className="planner-node-modal__runtime-debug-row"
+                title={runtimeProviderId}
+              >
+                <span>Provider</span>
+                <code>{runtimeProviderId}</code>
+              </span>
             )}
           </div>
         )}

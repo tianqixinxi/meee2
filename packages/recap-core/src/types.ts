@@ -223,6 +223,7 @@ export interface RecapInput {
 export interface CanvasStatusRecap {
   description: string
   headline: string
+  summary?: string
   statuses: RecapStatusCount[]
   details: string[]
   /** Surfaced 「等谁/等什么」items, parallel to CanvasRecap.awaitingItems. */
@@ -240,6 +241,7 @@ export interface RecapGenerationInput {
 
 export interface RecapGenerationResult {
   headline: string
+  summary?: string
   details: string[]
   model?: string
   raw?: string

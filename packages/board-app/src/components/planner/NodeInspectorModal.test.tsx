@@ -107,7 +107,7 @@ describe('NodeInspectorModal 进展 live-block gating', () => {
     expect(screen.getByRole('button', { name: /打开会话查看进展/ })).toBeInTheDocument()
   })
 
-  it('shows low-contrast terminal ids for a bound session', () => {
+  it('puts terminal ids at the drawer bottom even without live details', () => {
     const surfaceId = 'ghostty-surface-node-abcdef1234567890'
     const providerResumeSessionId = '8db44e39-685d-47ab-bd0e-5e97386ded80'
     const { container } = renderModal({
@@ -122,11 +122,45 @@ describe('NodeInspectorModal 进展 live-block gating', () => {
       }),
     })
 
+    expect(screen.getByLabelText('运行时标识')).toBeInTheDocument()
     expect(screen.getByText('Surface')).toBeInTheDocument()
     expect(screen.getByText('Provider')).toBeInTheDocument()
+    expect(screen.getByText(surfaceId)).toBeInTheDocument()
+    expect(screen.getByText(providerResumeSessionId)).toBeInTheDocument()
     expect(container.querySelector(`[title="${surfaceId}"]`)).not.toBeNull()
     expect(container.querySelector(`[title="${providerResumeSessionId}"]`)).not.toBeNull()
     expect(screen.queryByText('runtime task hidden outside live states')).not.toBeInTheDocument()
+    const modalChildren = Array.from(container.querySelector('.planner-node-modal')?.children ?? [])
+    const moreIndex = modalChildren.findIndex((child) => child.classList.contains('planner-node-modal__more'))
+    const debugIndex = modalChildren.findIndex((child) => child.classList.contains('planner-node-modal__runtime-debug-footer'))
+    expect(debugIndex).toBeGreaterThan(moreIndex)
+  })
+
+  it('keeps terminal ids outside the progress block when live details are shown', () => {
+    const surfaceId = 'ghostty-surface-node-abcdef1234567890'
+    const providerResumeSessionId = '8db44e39-685d-47ab-bd0e-5e97386ded80'
+    const { container } = renderModal({
+      node: node({
+        sessionId: 'sess-abcdef1234',
+        workflowRunState: 'running' as PlannerWorkflowRunState,
+      }),
+      boundSession: session({
+        currentTask: 'Working on the node',
+        lastActivity: new Date(NOW - 60_000).toISOString(),
+        surfaceId,
+        providerResumeSessionId,
+      }),
+    })
+
+    expect(screen.getByText('Working on the node')).toBeInTheDocument()
+    expect(screen.getByLabelText('运行时标识')).toBeInTheDocument()
+    expect(screen.getByText('Surface')).toBeInTheDocument()
+    expect(screen.getByText('Provider')).toBeInTheDocument()
+    expect(screen.getByText(surfaceId)).toBeInTheDocument()
+    expect(screen.getByText(providerResumeSessionId)).toBeInTheDocument()
+    expect(container.querySelector(`[title="${surfaceId}"]`)).not.toBeNull()
+    expect(container.querySelector(`[title="${providerResumeSessionId}"]`)).not.toBeNull()
+    expect(container.querySelector('.planner-node-modal__progress-runtime-live .planner-node-modal__runtime-debug-footer')).toBeNull()
   })
 
   it('(b) done node with a bound session shows recent message + 最后活动 but NOT currentTask/currentTool', () => {

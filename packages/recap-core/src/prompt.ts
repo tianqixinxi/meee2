@@ -110,8 +110,9 @@ export function buildAIRecapPrompt(input: AIRecapPromptState | AIRecapPromptInpu
     '不要复述状态计数，不要写 ready/running/done/artifacts 的数字串；那些会由 UI 单独显示。',
     'monitor 字段是确定性事实来源；不得创造新的待回复项、blocker 或 evidence，只能改写表达。',
     'headline 必须是最重要的业务判断、风险、瓶颈或下一步，不是状态标题。',
+    'summary 是默认折叠时给用户看的 1-2 句摘要；details 是展开后承载的更完整信息。',
     '用中文。返回严格 JSON，不要 markdown，不要代码块。',
-    '格式: {"headline":"不超过32个中文字符","details":["2-4条，每条不超过48个中文字符"]}',
+    '格式: {"headline":"不超过32个中文字符","summary":"1-2句，不超过80个中文字符","details":["3-6条，每条不超过72个中文字符"]}',
     '',
     JSON.stringify(payload),
   ].join('\n')

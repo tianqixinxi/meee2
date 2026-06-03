@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  ChevronUp,
   Eraser,
   Info,
   Layers,
@@ -73,6 +74,7 @@ interface Props {
 
 type CanvasRecap = CoreCanvasStatusRecap & {
   mode: 'ai' | 'empty'
+  summary?: string
 }
 
 type OwnerIdentity = {
@@ -161,6 +163,7 @@ export function CanvasToolbar({
   const [recap, setRecap] = useState<CanvasRecap | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
+  const [recapExpanded, setRecapExpanded] = useState(false)
   const [recapAgeNow, setRecapAgeNow] = useState(() => Date.now())
   const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
   const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
@@ -345,6 +348,7 @@ export function CanvasToolbar({
     if (!activeCanvas) return
     setRecapError(null)
     setRecapLoading(false)
+    setRecapExpanded(false)
     const cached = recapCacheRef.current[activeCanvas.id]
     if (cached) {
       setRecap(cached)
@@ -543,6 +547,10 @@ export function CanvasToolbar({
   if (!activeCanvas) return null
   const isMonitorCanvas = activeCanvas.kind === 'monitor'
   const monitorBadge = monitorBadgeFor(canvasMonitor, t)
+  const recapHeadline = recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))
+  const recapSummary = recap?.summary?.trim() || ''
+  const recapDetails = recap?.details ?? []
+  const canExpandRecap = recapSummary.length > 0 || recapDetails.length > 0
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
   const canSaveActiveCanvasAsTemplate = Boolean(
     onSaveCanvasAsTemplate && activeCanvas.kind !== 'template' && activeCanvas.kind !== 'monitor',
@@ -747,23 +755,42 @@ export function CanvasToolbar({
       </div>
       <div className="canvas-toolbar__context" aria-live="polite">
         <div className="canvas-toolbar__recap">
-          <div
+          <button
+            type="button"
             className="canvas-toolbar__recap-trigger"
-            title={recap?.headline ?? t('canvas.readingState')}
+            title={recapHeadline}
+            aria-expanded={canExpandRecap ? recapExpanded : undefined}
+            onClick={() => {
+              if (!canExpandRecap) return
+              setRecapExpanded((expanded) => !expanded)
+            }}
+            disabled={!canExpandRecap}
           >
             <Sparkles size={13} aria-hidden />
             <span className="canvas-toolbar__recap-copy">
-              <strong>{recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))}</strong>
-              {recapError ? (
-                <small>{recapError}</small>
-              ) : recap?.updatedAt ? (
-                <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
+              <span className="canvas-toolbar__recap-headline-row">
+                <strong>{recapHeadline}</strong>
+                {canExpandRecap ? (
+                  <span className="canvas-toolbar__recap-chevron" aria-hidden>
+                    {recapExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </span>
+                ) : null}
+              </span>
+              {recapSummary ? (
+                <span className="canvas-toolbar__recap-summary">{recapSummary}</span>
               ) : null}
+              <span className="canvas-toolbar__recap-meta">
+                <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
+                  {monitorBadge.label}
+                </span>
+                {recapError ? (
+                  <small>{recapError}</small>
+                ) : recap?.updatedAt ? (
+                  <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
+                ) : null}
+              </span>
             </span>
-            <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
-              {monitorBadge.label}
-            </span>
-          </div>
+          </button>
           <button
             type="button"
             className="canvas-toolbar__recap-refresh"
@@ -775,9 +802,9 @@ export function CanvasToolbar({
             <RefreshCw size={13} aria-hidden />
           </button>
         </div>
-        {recap?.details && recap.details.length > 0 && (
+        {recapExpanded && recapDetails.length > 0 && (
           <div className="canvas-toolbar__recap-details">
-            {recap.details.map((line) => (
+            {recapDetails.map((line) => (
               <p key={line}>{line}</p>
             ))}
           </div>
@@ -1705,7 +1732,7 @@ async function generateAIRecap(
   state: PlannerGraphState,
   canvas: CanvasInfo,
   monitor: CanvasMonitor | null,
-): Promise<Pick<CanvasRecap, 'headline' | 'details'>> {
+): Promise<Pick<CanvasRecap, 'headline' | 'summary' | 'details'>> {
   // Chunk E (Privacy UI): when the user has flipped off "allow cloud / model
   // calls", short-circuit before any LLM fetch. The caller already computed a
   // local `baseRecap` (from `buildCanvasStatusRecap`), so returning an empty
@@ -1713,6 +1740,7 @@ async function generateAIRecap(
   if (!loadAllowCloud()) {
     return {
       headline: '',
+      summary: '',
       details: [],
     }
   }

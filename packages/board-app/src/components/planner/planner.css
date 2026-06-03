@@ -1427,30 +1427,31 @@
   font-size: 11px;
   color: var(--text-faint);
 }
-.planner-node-modal__progress-runtime-debug {
+.planner-node-modal__runtime-debug-footer {
   display: grid;
   gap: 2px;
-  margin-top: 1px;
-  color: color-mix(in srgb, var(--text-faint) 62%, transparent);
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  color: color-mix(in srgb, var(--text-faint) 52%, transparent);
   font-size: 10.5px;
 }
-.planner-node-modal__progress-runtime-debug-row {
+.planner-node-modal__runtime-debug-row {
   display: flex;
   align-items: baseline;
   gap: 6px;
   min-width: 0;
   line-height: 1.35;
 }
-.planner-node-modal__progress-runtime-debug-row > span {
+.planner-node-modal__runtime-debug-row > span {
   flex: none;
   color: color-mix(in srgb, var(--text-faint) 48%, transparent);
   font-weight: 600;
 }
-.planner-node-modal__progress-runtime-debug-row code {
+.planner-node-modal__runtime-debug-row code {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   color: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 10.5px;
@@ -4938,6 +4939,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   display: grid;
+  align-items: start;
   grid-template-columns: repeat(5, minmax(190px, 1fr));
   gap: 8px;
   padding-bottom: 6px;
@@ -4951,6 +4953,7 @@
 .planner-monitor-lane {
   min-width: 190px;
   min-height: 0;
+  max-height: 100%;
   overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -8046,7 +8049,7 @@
 /* Static recap summary; refresh is the explicit action. */
 .canvas-toolbar__recap-trigger {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   width: 100%;
   min-width: 0;
@@ -8056,8 +8059,12 @@
   padding: 0;
   margin: 0;
   color: inherit;
-  cursor: default;
+  cursor: pointer;
   text-align: left;
+}
+
+.canvas-toolbar__recap-trigger:disabled {
+  cursor: default;
 }
 
 /* UI-5.3 — canvas-switch loading skeleton.
