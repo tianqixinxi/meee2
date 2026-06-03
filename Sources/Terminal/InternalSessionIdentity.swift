@@ -18,16 +18,41 @@ public enum InternalSessionIdentity {
         return internalManagedWorkspaceCwds.contains(normalized)
     }
 
+    /// 进程生命周期内 `~/.meee2/workspaces` 的规范化路径不变 —— 提成常量,
+    /// 避免在 surface→CLI 关联热路径(每次重算对 surface × 全量 session 调用)
+    /// 里反复 `NSHomeDirectory()` + 路径规范化。
+    private static let managedWorkspacesRoot: String = normalizedPath(
+        (NSHomeDirectory() as NSString).appendingPathComponent(".meee2/workspaces")
+    )
+
     public static func isMeee2ManagedWorkspace(_ path: String) -> Bool {
         let normalized = normalizedPath(path)
-        let workspacesRoot = normalizedPath(
-            (NSHomeDirectory() as NSString).appendingPathComponent(".meee2/workspaces")
-        )
-        return normalized == workspacesRoot || normalized.hasPrefix(workspacesRoot + "/")
+        return normalized == managedWorkspacesRoot || normalized.hasPrefix(managedWorkspacesRoot + "/")
     }
 
+    private static let pathCacheLock = NSLock()
+    private static var pathCache: [String: String] = [:]
+
+    /// `expandingTildeInPath` + `standardizingPath` 是 NSString 路径规范化,在
+    /// `correlatedCliSession` 的 O(surface × 全量 session) 过滤热路径上被反复
+    /// 调用,且输入 cwd 高度重复(同一 canvas 的 workspace 被多个节点共享)。
+    /// 做进程级 memoization:同一输入只规范化一次,后续 O(1) 命中。结果是纯
+    /// 路径函数(进程内 `NSHomeDirectory()` 不变),缓存安全;设上限防无界增长。
     private static func normalizedPath(_ path: String) -> String {
-        ((path as NSString).expandingTildeInPath as NSString).standardizingPath
+        pathCacheLock.lock()
+        if let cached = pathCache[path] {
+            pathCacheLock.unlock()
+            return cached
+        }
+        pathCacheLock.unlock()
+
+        let normalized = ((path as NSString).expandingTildeInPath as NSString).standardizingPath
+
+        pathCacheLock.lock()
+        if pathCache.count >= 4096 { pathCache.removeAll(keepingCapacity: true) }
+        pathCache[path] = normalized
+        pathCacheLock.unlock()
+        return normalized
     }
 
     // MARK: - Surface → CLI correlation

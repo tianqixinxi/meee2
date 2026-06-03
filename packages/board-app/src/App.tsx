@@ -621,7 +621,12 @@ export default function App() {
     }
     setWorkspaceMode('planner')
     setSessionTerminalTarget({ ...target, canvasId: targetCanvasId })
-    boardState.refresh()
+    // forceRefresh (not refresh): a just-dispatched / just-opened session may not
+    // be in the cached session list yet — or the WS dropped during dispatch and the
+    // event-driven refresh is suppressed. A guard-bypassing fetch guarantees the
+    // overlay's target session is present instead of falling back to the
+    // 「terminal unavailable」 placeholder.
+    void boardState.forceRefresh()
   }, [
     activeCanvasId,
     activeWorkspaceCanvasId,
@@ -657,6 +662,15 @@ export default function App() {
     }
     return () => window.removeEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
   }, [openSessionTerminalOverlay])
+
+  // 2026-06-02 · session overlay 与 inspector 绑定:inspector 关闭时一并关掉 overlay
+  // (仅 UI 关闭,不杀会话进程 —— overlay 卸载只发 phase:'hide',native terminal runtime
+  // 仍持有进程)。
+  useEffect(() => {
+    const closeOverlay = () => setSessionTerminalTarget(null)
+    window.addEventListener('meee2:node-inspector-closed', closeOverlay)
+    return () => window.removeEventListener('meee2:node-inspector-closed', closeOverlay)
+  }, [])
 
   const completeFirstRunOnboarding = useCallback(() => {
     if (readinessReport?.ready !== true) return

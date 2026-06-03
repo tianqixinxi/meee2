@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { visibleOutputReferences } from './plannerGraphAdapter'
+import { boundSessionIsLive, visibleOutputReferences } from './plannerGraphAdapter'
 import type { PlannerArtifact, PlanningNode } from '../../types'
 
 function node(overrides: Partial<PlanningNode> = {}): PlanningNode {
@@ -87,5 +87,26 @@ describe('visibleOutputReferences', () => {
     expect(refs).toContain('repo://misc/notes.md')
     // The unfilled templated slot is still pending and surfaced too.
     expect(refs).toContain('repo://docs/prd/<slug>.md')
+  })
+})
+
+describe('boundSessionIsLive (canonical alias matching)', () => {
+  it('matches an exact live session id', () => {
+    expect(boundSessionIsLive(new Set(['abc']), 'abc')).toBe(true)
+  })
+  it('matches when the live id is a prefixed alias of the bound id', () => {
+    // backend monitor / plugin prefixes the canonical id: live "…-abc" ↔ bound "abc"
+    expect(boundSessionIsLive(new Set(['claude-internal-abc']), 'abc')).toBe(true)
+  })
+  it('matches when the bound id is a prefixed alias of the live id', () => {
+    // node bound to a provider/resume id that suffixes the canonical live id
+    expect(boundSessionIsLive(new Set(['abc']), 'provider-abc')).toBe(true)
+  })
+  it('does not mark an unrelated id live (no false positive)', () => {
+    expect(boundSessionIsLive(new Set(['xyz']), 'abc')).toBe(false)
+  })
+  it('is false for a null bound id or an absent live set', () => {
+    expect(boundSessionIsLive(new Set(['abc']), null)).toBe(false)
+    expect(boundSessionIsLive(undefined, 'abc')).toBe(false)
   })
 })

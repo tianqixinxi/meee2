@@ -47,6 +47,7 @@ import {
   CARD_TOOLTIPS,
   deriveDisplayStatus,
   FOOTER_LABELS,
+  isSessionEnded,
   modeBadgeLabel,
   modeBadgeTooltip,
   UPSTREAM_STALE_LABEL,
@@ -68,6 +69,10 @@ type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 
 // `ready` is now the initial state. Legacy `draft` data is mapped to `ready`
 // at render time below.
 const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['ready', 'blocked', 'done']
+
+// 简略进展露出的高度门槛 —— 卡片 minHeight 是 140。用户把卡片「放大到一定程度」
+// (≥ 这个值)才在 成果 下面追加「最近一条 AI 回复」,小卡保持紧凑、不喧宾夺主。
+const LIVE_PROGRESS_MIN_HEIGHT = 260
 
 // UI-1 · "auto / gate / human" mode badge — derived from execution mode +
 // gate approver count. `human` wins when the node is an explicit human step;
@@ -186,7 +191,12 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   // belt-and-braces step for any in-memory state that hasn't been re-saved.
   const rawDesignStatus = data.state?.runState ?? node.status
   const designStatus: PlanningNodeStatus = (rawDesignStatus === 'draft' ? 'ready' : rawDesignStatus) as PlanningNodeStatus
-  const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
+  // 一致性守卫:node.workflowRunState 回到「未启动」时,active-run mirror(runNodeState)
+  // 可能滞后一帧、残留旧会话态 —— 以 node 为准丢弃残留,否则「未启动 + 已绑定会话」自相矛盾。
+  const sessionEnded = isSessionEnded(node.workflowRunState)
+  const runStatus: PlannerWorkflowRunState = sessionEnded
+    ? (node.workflowRunState ?? 'pending')
+    : (runNodeState?.runState ?? 'pending')
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
   // UI-simplification — artifact node 默认收起,仅显示 title + kind + 展开按钮。
   // 强制展开条件:1) 有 subCanvasId(有下钻子画板)2) 用户点了展开按钮。
@@ -351,7 +361,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   // 让运行态(running / awaiting / failed) 在 design 和 run mode 下都可见。
   // 其他 nodeKind(artifact / subCanvas / external)保留旧逻辑。
   const displayStatus = (nodeKind === 'step' || nodeKind === 'session')
-    ? deriveDisplayStatus(node)
+    ? deriveDisplayStatus(node, data.boundSessionLive)
     : null
   const statusLabel = displayStatus
     ? displayStatus.label
@@ -386,9 +396,11 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     : node.status === 'blocked' && node.blockedReason?.trim()
       ? [node.blockedReason.trim()]
       : []
-  const sessionId = isRunMode
-    ? (runNodeState?.sessionId ?? node.sessionId ?? null)
-    : node.sessionId?.trim() || null
+  const sessionId = sessionEnded
+    ? null
+    : isRunMode
+      ? (runNodeState?.sessionId ?? node.sessionId ?? null)
+      : node.sessionId?.trim() || null
   const nextAction = isRunMode
     ? nextWorkActionCN(data.hasSelectedDelivery, runNodeState?.nextAction)
     : nextPlanActionCN(Boolean(data.responsibleLabel), Boolean(node.subCanvasId), node.nextAction)
@@ -429,6 +441,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   // competes for attention with secondary inspector actions.
   const nodeMode = resolveNodeMode(node)
   const latestArtifactForVersionSlot = pickLatestArtifactForVersions(data.artifacts)
+  // resize 自适应 — 只有用户手动调过高度(layout.height 落库)才给外框确定高度,
+  // 卡片随之被拉高、内容上方堆完后底部留白。这个 flag 切到 CSS 的 --fill 分支:
+  // content 变 flex column、「成果」段 flex-grow 吃掉多出来的纵向空间、预览从两行
+  // 夹断放开成「填满 + 内部滚动」。未调整高度(auto 高度)时不加 class,保持紧凑。
+  const hasExplicitHeight = typeof node.layout?.height === 'number' && node.layout.height > 0
+  // 放大到一定程度才露「简略进展」(最近 AI 回复)。门槛见 LIVE_PROGRESS_MIN_HEIGHT。
+  const isExpandedEnough = (node.layout?.height ?? 0) >= LIVE_PROGRESS_MIN_HEIGHT
+  const liveReply = data.liveProgress?.lastReply ?? null
 
   return (
     <div
@@ -439,6 +459,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         `planner-node--kind-${nodeKind}`,
         `planner-node--mode-${data.mode}`,
         `planner-node--perception-${data.perception}`,
+        hasExplicitHeight ? 'planner-node--fill' : '',
         selected ? 'is-selected' : '',
         data.guided ? 'is-guided' : '',
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
@@ -737,7 +758,9 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               )}
             </div>
             {visible.map((artifact) => {
-              const preview = compactArtifactPreview(artifact)
+              // resize 自适应 — 卡片被拉高(--fill)时给更长的预览串,配合 CSS 放开
+              // 两行夹断 + 内部滚动,多出来的高度才真的露出更多成果内容而非留白。
+              const preview = compactArtifactPreview(artifact, hasExplicitHeight ? 800 : 90)
               return (
                 <div key={artifact.id} className="planner-node__output-slot">
                   <div className="planner-node__output-slot-head">
@@ -771,7 +794,21 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         )
       })()}
 
-      {(primaryAction || (!data.virtual && data.onDeleteNode)) && (
+      {/* 简略进展 —— 卡片放大到一定程度(isExpandedEnough)后,在「成果」下面追加
+       *  一条「最近 AI 回复」。数据和 inspector「进展」段同源(boardState.sessions,
+       *  见 PlannerGraph 的 nodeProgressByNodeId 注入),这里只是它的简略版:不展示
+       *  currentTask/currentTool/调试 id/按钮,只给最近一条 assistant 回复的文本。
+       *  想看完整进展仍走「打开会话 / inspector」。 */}
+      {(nodeKind === 'step' || nodeKind === 'session') && !data.virtual && isExpandedEnough && liveReply && (
+        <div className="planner-node__live-progress">
+          <span className="planner-node__live-progress-label">
+            <Bot size={11} aria-hidden /> 最近回复
+          </span>
+          <p className="planner-node__live-progress-text">{liveReply.text}</p>
+        </div>
+      )}
+
+      {(primaryAction !== 'none' || (!data.virtual && data.onDeleteNode && nodeKind !== 'step')) && (
         <div className="planner-node__footer">
           {/* UI-simplification §2.6 — Re-run / Mark down 已下沉到 inspector「进展」段,
               卡片 footer 只保留 primary action + delete confirm,避免 4 个同权重
@@ -818,7 +855,9 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               {FOOTER_LABELS.cancel}
             </button>
           )}
-          {!data.virtual && data.onDeleteNode && (
+          {/* step 节点不在卡片上直接删除 —— 结构性增删走治理/提案路径,卡片只保留
+              其它 kind(session / external / subCanvas)的就地删除。 */}
+          {!data.virtual && data.onDeleteNode && nodeKind !== 'step' && (
             <button
               type="button"
               className={`planner-node__delete planner-node__delete--footer nodrag nopan${deleteArmed ? ' is-confirming' : ''}`}

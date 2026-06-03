@@ -3061,6 +3061,12 @@ export function connectEvents(
       // 'reconnected'，说明是断线触发的初始 fetch 撞上了 server 半态。
       // console.log('[StateTrace][board-ws] reconnected')
       onStatus(true)
+      // 断线期间 server 端的状态变更（如 planner 新派发出来的会话）不会有
+      // 历史 'state.changed' 补发；若不在 (re)connect 时强制重新拉一次，长期开着
+      // 的面板会卡在断线前的旧快照——表现为「点节点的『打开会话查看进展』跳不过去，
+      // 因为要选的会话根本不在列表里」。可见性挂起 + signature diff 已经兜住了
+      // 无谓重渲，这里安全地补一次同步。
+      onChange()
     }
     ws.onmessage = (e) => {
       try {

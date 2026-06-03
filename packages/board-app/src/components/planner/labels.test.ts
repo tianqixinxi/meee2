@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveDisplayStatus } from './labels'
+import { deriveDisplayStatus, isSessionEnded } from './labels'
 import type { PlannerWorkflowRunState, PlanningNode, PlanningNodeStatus } from '../../types'
 
 function node(
@@ -42,8 +42,9 @@ describe('deriveDisplayStatus', () => {
     }
   })
 
-  // canvas-is-ledger-not-pm: step / session 工作节点没有「完成」态 → 回到「未启动」。
-  it('maps a done step/session work node to 未启动 (no 完成 state)', () => {
+  // 状态跟会话走(2026-06-02): 工作节点 done 且无活会话 → 回到「未启动」
+  // (做完=会话结束=回未启动,产物留账本)。
+  it('maps a done step/session work node with no live session to 未启动', () => {
     expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'step' }))).toEqual({
       label: '未启动',
       tone: 'ready',
@@ -51,6 +52,32 @@ describe('deriveDisplayStatus', () => {
     expect(deriveDisplayStatus(node({ workflowRunState: null, status: 'done', nodeKind: 'session' }))).toEqual({
       label: '未启动',
       tone: 'ready',
+    })
+  })
+
+  // 状态跟会话走: 只要绑定会话还活着,done / 未启动 的节点都显示「在线待命」
+  // —— 消除"显示已结束却能打开活会话"的矛盾。
+  it('maps a node with a live bound session to 在线待命', () => {
+    expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'step' }), true)).toEqual({
+      label: '在线待命',
+      tone: 'running',
+    })
+    expect(deriveDisplayStatus(node({ workflowRunState: 'pending', nodeKind: 'step' }), true)).toEqual({
+      label: '在线待命',
+      tone: 'running',
+    })
+  })
+
+  // 优先级: 活跃 node 态(running / awaiting)仍优先于「在线待命」—— 会话活且节点
+  // 在跑 / 待回复时显示其真实态,不被在线待命盖掉。
+  it('keeps running / awaiting over 在线待命 even with a live session', () => {
+    expect(deriveDisplayStatus(node({ workflowRunState: 'running', nodeKind: 'step' }), true)).toEqual({
+      label: '运行中',
+      tone: 'running',
+    })
+    expect(deriveDisplayStatus(node({ workflowRunState: 'awaiting-input', nodeKind: 'step' }), true)).toEqual({
+      label: '需要人回应',
+      tone: 'awaiting',
     })
   })
 
@@ -85,5 +112,29 @@ describe('deriveDisplayStatus', () => {
     expect(
       deriveDisplayStatus(node({ workflowRunState: null, status: 'draft' as PlanningNodeStatus })),
     ).toEqual({ label: '未启动', tone: 'ready' })
+  })
+})
+
+// 一致性守卫回归:node 回到「未启动」(pending/ready_to_start/null)时,卡片应丢弃
+// active-run mirror 滞后残留的 sessionId/runState —— isSessionEnded 是这条守卫的判定。
+describe('isSessionEnded — 未启动语义(丢弃 runNodeState 滞后残留)', () => {
+  it('returns true for not-started states (pending / ready_to_start / null / undefined)', () => {
+    expect(isSessionEnded('pending')).toBe(true)
+    expect(isSessionEnded('ready_to_start')).toBe(true)
+    expect(isSessionEnded(null)).toBe(true)
+    expect(isSessionEnded(undefined)).toBe(true)
+  })
+
+  it('returns false for live / terminal states (must keep their bound session)', () => {
+    for (const wfs of [
+      'dispatched',
+      'running',
+      'awaiting-input',
+      'gate-wait',
+      'failed',
+      'done',
+    ] as PlannerWorkflowRunState[]) {
+      expect(isSessionEnded(wfs)).toBe(false)
+    }
   })
 })

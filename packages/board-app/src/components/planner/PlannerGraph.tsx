@@ -52,6 +52,7 @@ import type {
   Meee2MCPStatus,
   PlanningNode,
   PlanningNodeStatus,
+  Session,
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { CanvasTemplate, TeamMember, UserProfile } from '../../api'
@@ -88,7 +89,7 @@ import {
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { DataSourceRail } from './DataSourceRail'
-import { NodeInspectorModal } from './NodeInspectorModal'
+import { NodeInspectorModal, truncateMessageText } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { MonitorGrid } from './monitor/MonitorGrid'
 import { MonitorHtmlFrame } from './monitor/MonitorHtmlFrame'
@@ -96,7 +97,7 @@ import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { TransformInsertEdge } from './TransformInsertEdge'
-import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
+import { buildPlannerGraph, sessionMatchesBoundId, type IOArtifactDirection, type IOArtifactVisibility, type NodeLiveProgress, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
 import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
 
@@ -180,6 +181,15 @@ function PlannerGraphInner({
   const guidedNodeTimerRef = useRef<number | null>(null)
   const guideDispatchTimerRef = useRef<number | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
+  // 2026-06-02 · session overlay 与 inspector 绑定:inspector 关闭(true→false)时广播
+  // 事件,App 据此一并关掉 session terminal overlay(仅 UI 关闭,不杀会话进程)。
+  const prevNodeModalOpenRef = useRef(nodeModalOpen)
+  useEffect(() => {
+    if (prevNodeModalOpenRef.current && !nodeModalOpen) {
+      window.dispatchEvent(new CustomEvent('meee2:node-inspector-closed'))
+    }
+    prevNodeModalOpenRef.current = nodeModalOpen
+  }, [nodeModalOpen])
   /**
    * 2026-05-29 (PR #91 codex P2 fix): when a non-latest artifact chip on the
    * card is clicked, we want the inspector to open with that artifact
@@ -984,6 +994,41 @@ function PlannerGraphInner({
     console.info('[UI-4] configure dialogue retention (popover handled in-card)', { canvasId, nodeId })
   }, [canvasId])
 
+  // 2026-06-02 状态跟会话走:从实时 boardState 收集仍存活(可打开)的会话 id/surfaceId。
+  // surfaceStatus running/starting = 进程还在、终端可 attach。喂给 buildPlannerGraph 派生
+  // 每个节点的 boundSessionLive,让 done/未启动 但会话还活的节点显示「在线待命」。
+  const liveSessionIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const session of boardState?.sessions ?? []) {
+      const surface = (session.surfaceStatus ?? '').toLowerCase()
+      if (surface === 'running' || surface === 'starting') {
+        if (session.id) ids.add(session.id)
+        if (session.surfaceId) ids.add(session.surfaceId)
+      }
+    }
+    return ids
+  }, [boardState?.sessions])
+
+  // 简略进展 — 和 inspector「进展」段共享同一个数据源:实时 boardState.sessions,
+  // 按 node.sessionId 用 sessionMatchesBoundId 匹配。这里只蒸馏出卡片放大后要露出
+  // 的极少信息(目前=最近一条 AI 回复),按 nodeId 建表。刻意不喂进 buildPlannerGraph
+  // 的结构 memo(那条路径只吃稳定的 liveSessionIds Set),否则每次会话轮询都会重建
+  // 整张图(连边一起)。注入走下面的 effect,只动到内容变了的那几张卡。
+  const nodeProgressByNodeId = useMemo(() => {
+    const map = new Map<string, NodeLiveProgress>()
+    const sessions = boardState?.sessions ?? []
+    if (sessions.length === 0) return map
+    for (const node of plannerState?.nodes ?? []) {
+      const sid = node.sessionId?.trim()
+      if (!sid) continue
+      const session = sessions.find((s) => sessionMatchesBoundId(s.id, sid))
+      if (!session) continue
+      const summary = summarizeSessionProgress(session)
+      if (summary.lastReply) map.set(node.id, summary)
+    }
+    return map
+  }, [boardState?.sessions, plannerState?.nodes])
+
   const graph = useMemo(() => {
     const built = buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
@@ -997,6 +1042,7 @@ function PlannerGraphInner({
       mode: 'design',
       canvasId,
       runNodeStates: undefined,
+      liveSessionIds,
       ioArtifactVisibility,
       displayNameByUserId: teamDirectory.displayNameByUserId,
       avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
@@ -1044,6 +1090,7 @@ function PlannerGraphInner({
     plannerState?.canvas.ownerId,
     plannerState?.canvas.visibility,
     canvasId,
+    liveSessionIds,
     ioArtifactVisibility,
     teamDirectory,
     handleOpenNodeDetails,
@@ -1142,6 +1189,25 @@ function PlannerGraphInner({
   useEffect(() => {
     setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
   }, [graph.nodes])
+
+  // 简略进展注入 —— 把 nodeProgressByNodeId 合进 flowNodes 的 data.liveProgress。
+  // 单独一个 effect、deps 只有 nodeProgressByNodeId(每次会话轮询变一次):用
+  // liveProgressEqual 做浅比较,只给内容真的变了的节点换新对象,其余保持引用不变,
+  // 这样 react-flow 只重渲染那几张卡,而不是每次轮询全图重渲染。结构重建(上面的
+  // merge effect)会从 current 带过 liveProgress,避免 plannerState 变更时闪掉。
+  useEffect(() => {
+    setFlowNodes((current) => {
+      let changed = false
+      const next = current.map((node) => {
+        if (node.data.virtual) return node
+        const progress = nodeProgressByNodeId.get(node.id) ?? null
+        if (liveProgressEqual(node.data.liveProgress ?? null, progress)) return node
+        changed = true
+        return { ...node, data: { ...node.data, liveProgress: progress } }
+      })
+      return changed ? next : current
+    })
+  }, [nodeProgressByNodeId])
 
   // 位置 / 宽高统一通过这里落库:乐观更新 plannerState.layout,再 PATCH 后端。
   // 拖动结束(handleNodeDragStop)和 NodeResizer 调整结束都复用它。
@@ -2425,11 +2491,8 @@ function plannerNodeDoesNotNeedLiveSession(node: PlanningNode): boolean {
   return node.status === 'done' || node.workflowRunState === 'done'
 }
 
-function sessionMatchesBoundId(liveId: string, boundId: string): boolean {
-  return liveId === boundId
-    || liveId.endsWith(`-${boundId}`)
-    || boundId.endsWith(`-${liveId}`)
-}
+// sessionMatchesBoundId 下沉到 plannerGraphAdapter(与 boundSessionLive 共用同一
+// 别名匹配规则),改从那里 import — 见文件顶部 import。
 
 function dispatchRunnerForExecutor(executorType: PlanningNode['executorType']): PlannerDispatchRunner {
   if (executorType === 'codex') return 'codex'
@@ -2467,8 +2530,40 @@ function mergeGraphNodesPreservingPositions(
       // 的 ResizeObserver 重新量,避免内容变化后高度记成旧值。
       width: current.width ?? nextNode.width,
       height: current.height ?? nextNode.height,
+      // 简略进展 — liveProgress 由 nodeProgressByNodeId 注入到 flowNodes(见上面的
+      // 注入 effect),buildPlannerGraph 不产出它。结构重建时从 current 带过来,
+      // 否则 plannerState 一变就把卡片上的「最近 AI 回复」清掉、要等下一次轮询才回填。
+      data: current.data.liveProgress != null
+        ? { ...nextNode.data, liveProgress: current.data.liveProgress }
+        : nextNode.data,
     }
   })
+}
+
+// 简略进展蒸馏 —— 从实时会话 DTO 里挑出卡片放大后要露的最少信息。和 inspector
+// 「进展」段同源(boardState.sessions),但 inspector 显示 currentTask/currentTool/
+// 最近两条消息/调试 id/一堆按钮,卡片只要「最近一条 AI 回复」。倒序找第一条有文本
+// 的 assistant 条目,文本按卡片宽度截断(服务端已 ~200 字,这里再压到 ~160)。
+function summarizeSessionProgress(session: Session): NodeLiveProgress {
+  const messages = session.recentMessages ?? []
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i]
+    if (m.role === 'assistant' && m.text?.trim()) {
+      return { lastReply: { role: m.role, text: truncateMessageText(m.text, 160) } }
+    }
+  }
+  return { lastReply: null }
+}
+
+// 浅比较两份简略进展,决定注入 effect 要不要给该节点换新 data 对象(换了才重渲染)。
+function liveProgressEqual(a: NodeLiveProgress | null, b: NodeLiveProgress | null): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  const ra = a.lastReply
+  const rb = b.lastReply
+  if (ra === rb) return true
+  if (!ra || !rb) return false
+  return ra.role === rb.role && ra.text === rb.text
 }
 
 async function pollForBoundNodeSession(

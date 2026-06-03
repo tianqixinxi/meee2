@@ -1560,41 +1560,42 @@ textarea {
 .session-terminal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9500;
-  display: grid;
-  place-items: center;
-  min-width: 0;
-  min-height: 0;
-  padding: clamp(18px, 3vw, 42px);
-  pointer-events: auto;
+  /* 2026-06-02:不再 z-index 9500 盖住所有图层。降到 inspector 抽屉
+     (.planner-node-modal-backdrop = z-index 70)同层 —— overlay 作为 inspector
+     左边的并排抽屉。容器 pointer-events:none 让点击穿透回 canvas,只 panel 接收。 */
+  z-index: 70;
+  /* 不再 flex 铺满 —— panel 用绝对定位悬浮在 canvas 内容区,
+     避开左侧栏 / 顶部 toolbar+recap / 右侧 inspector,四周留白。 */
+  display: block;
+  pointer-events: none;
 }
 
 .session-terminal-overlay__scrim {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.06), transparent 38%),
-    rgba(0, 0, 0, 0.66);
-  backdrop-filter: blur(10px) saturate(0.86);
+  /* 不再全屏遮罩盖 canvas —— overlay 现在并排在 inspector 左边,不是居中 modal。 */
+  display: none;
 }
 
 .session-terminal-overlay__panel {
-  position: relative;
+  position: absolute;
   z-index: 1;
-  width: min(1240px, calc(100vw - clamp(36px, 6vw, 84px)));
-  height: min(820px, calc(100vh - clamp(36px, 6vw, 84px)));
-  max-height: 86vh;
+  pointer-events: auto;
+  /* 悬浮卡片:避开左侧栏(--sidebar-width 随折叠/展开自适应)、顶部 toolbar+recap、
+     右侧 inspector(min(540px,…) 抽屉),四周留 20px 白边,像浮在 canvas 上。 */
+  left: calc(var(--sidebar-width, 208px) + 20px);
+  /* 顶部跟随 toolbar 实际底部(CanvasToolbar 用 ResizeObserver 上报,随 recap
+     折叠/展开自适应),始终落在 recap 下方 20px,不重叠。 */
+  top: calc(var(--canvas-toolbar-bottom, 116px) + 20px);
+  right: calc(min(540px, calc(100vw - 60px)) + 20px);
+  bottom: 20px;
   display: grid;
   grid-template-rows: 42px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   border: 1px solid rgba(168, 165, 155, 0.22);
-  border-radius: 10px;
+  border-radius: 14px;
   background: #050505;
-  box-shadow:
-    0 34px 100px rgba(0, 0, 0, 0.58),
-    0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.55);
   color: var(--text);
 }
 
@@ -6200,12 +6201,34 @@ html.board-empty-omni .canvas-toolbar__panel {
   gap: 8px;
 }
 
+.canvas-toolbar__recap-trigger {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.canvas-toolbar__recap-chevron {
+  flex: 0 0 13px;
+  margin-left: 2px;
+  color: var(--text-faint);
+  transition: transform 140ms ease;
+}
+
+/* 折叠态:chevron 转成指向右,提示「点开展开」。 */
+.canvas-toolbar__recap-chevron[data-collapsed] {
+  transform: rotate(-90deg);
+}
+
 .canvas-toolbar__recap-trigger > svg {
   flex: 0 0 13px;
   color: color-mix(in srgb, var(--accent-hover) 82%, var(--text));
 }
 
 .canvas-toolbar__recap-copy {
+  flex: 1 1 auto;
   min-width: 0;
   display: grid;
   gap: 5px;

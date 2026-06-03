@@ -53,8 +53,42 @@ function widgetDefaultSize(kind: string | undefined | null): { width: number; he
   }
 }
 
+// 会话 id 别名匹配 — board DTO 暴露的 canonical/internal id 与节点绑定的
+// provider/resume/de-prefixed id 之间,planner 各处(open-session 匹配、backend
+// monitor)都按「相等 或 互为 `-` 前后缀」来认。集中在此,PlannerGraph 与本
+// adapter 共用,避免某处退化成字节级精确匹配、让别名绑定的节点状态错乱。
+export function sessionMatchesBoundId(liveId: string, boundId: string): boolean {
+  return liveId === boundId
+    || liveId.endsWith(`-${boundId}`)
+    || boundId.endsWith(`-${liveId}`)
+}
+
+// 节点当前绑定的会话是否仍存活、可打开。liveSessionIds 是「精确」id 集合,但绑定
+// id 可能是别名(见 sessionMatchesBoundId),精确命中之外再按别名规则兜一遍,否则
+// 别名绑定的节点会从「在线待命」错误回退成「未启动/完成」。
+export function boundSessionIsLive(liveSessionIds: Set<string> | undefined, boundId: string | null): boolean {
+  if (!liveSessionIds || !boundId) return false
+  if (liveSessionIds.has(boundId)) return true
+  for (const liveId of liveSessionIds) {
+    if (sessionMatchesBoundId(liveId, boundId)) return true
+  }
+  return false
+}
+
+/** 卡片用的「简略进展」—— 和 inspector「进展」段订阅同一个数据源(实时
+ *  boardState.sessions,按 node.sessionId 匹配),但只取卡片放大后要露出的极少
+ *  信息。目前就一条:最近一条 AI(assistant)回复(文本已截断)。注入逻辑见
+ *  PlannerGraph 的 nodeProgressByNodeId memo + 注入 effect,不进 buildPlannerGraph
+ *  的结构 memo(否则每次会话轮询都重建整张图)。 */
+export interface NodeLiveProgress {
+  lastReply: { role: string; text: string } | null
+}
+
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
+  /** 简略进展(最近 AI 回复等),由实时会话派生、注入到 flowNodes;结构 memo
+   *  不产出它。卡片放大到一定程度才渲染。见 NodeLiveProgress。 */
+  liveProgress?: NodeLiveProgress | null
   /** P2 fix · 完整 graph 节点列表,供 widget resolver 解析 upstream /
    *  subcanvas-aggregate widgets。card 把它原样传给 resolveWidgetData,
    *  让 source.inputKind === 'upstream' 或 'subcanvas-aggregate' 的 widget
@@ -71,6 +105,10 @@ export interface PlannerNodeData extends Record<string, unknown> {
   mode: PlannerGraphMode
   /** This node's state in the selected run, when one is being viewed. */
   runNodeState: RunNodeState | null
+  /** 2026-06-02 · 绑定会话是否仍存活(surfaceStatus running/starting)。让卡片
+   *  「状态跟会话走」: node 即便落到 done/未启动,只要会话还能打开续聊,就显示
+   *  「在线待命」而非「完成/未启动」,避免"已结束却能打开活会话"的矛盾。 */
+  boundSessionLive?: boolean
   hasSelectedDelivery: boolean
   responsibleLabel?: string
   responsibleAvatarUrl?: string
@@ -182,6 +220,9 @@ interface PlannerGraphInput {
   canvasId?: string
   /** nodeId → run state, from the run being viewed (Run mode only). */
   runNodeStates?: Record<string, RunNodeState>
+  /** 2026-06-02 · 仍存活(可打开)的会话 id/surfaceId 集合,来自实时 boardState。
+   *  用于派生每个节点的 boundSessionLive(状态跟会话走)。 */
+  liveSessionIds?: Set<string>
   ioArtifactVisibility?: Record<string, IOArtifactVisibility>
   displayNameByUserId?: Record<string, string>
   avatarUrlByUserId?: Record<string, string>
@@ -263,6 +304,11 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       y: Math.floor(index / 3) * 190,
     }
     const widgetSize = widgetDefaultSize(node.widget?.kind)
+    // 2026-06-02 状态跟会话走:节点当前绑定的 sessionId(run mirror 优先)是否仍是
+    // 一个存活、可打开的会话。喂给 deriveDisplayStatus,让 done/未启动 但会话还在的
+    // 节点显示「在线待命」而非自相矛盾的「完成/未启动」。
+    const boundSessionId = (input.runNodeStates?.[node.id]?.sessionId ?? node.sessionId) ?? null
+    const boundSessionLive = boundSessionIsLive(input.liveSessionIds, boundSessionId)
     return {
       id: node.id,
       type: 'plannerNode' as const,
@@ -290,6 +336,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         ),
         mode: input.mode,
         runNodeState: input.runNodeStates?.[node.id] ?? null,
+        boundSessionLive,
         hasSelectedDelivery: Boolean(input.runNodeStates),
         responsibleLabel: resolveUserLabel(
           input.mode === 'run'
