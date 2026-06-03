@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { CanvasToolbar } from './CanvasToolbar'
@@ -23,6 +23,8 @@ vi.mock('../api', async () => {
 
 describe('CanvasToolbar template save flow', () => {
   beforeEach(() => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
     apiMocks.fetchTemplateCatalog.mockResolvedValue({
       templates: [],
       tags: ['monitor', 'ops'],
@@ -137,6 +139,141 @@ describe('CanvasToolbar template save flow', () => {
     expect(screen.queryByRole('dialog', { name: /AI recap/i })).not.toBeInTheDocument()
   })
 
+  it('places the meee2 AI collapse control before canvas navigation', () => {
+    const onTogglePlannerDialog = vi.fn()
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'board-canvas',
+            name: 'Launch Plan',
+            scope: 'personal',
+            kind: 'board',
+            isDefault: false,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="board-canvas"
+          plannerDialogCollapsed={false}
+          onTogglePlannerDialog={onTogglePlannerDialog}
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse meee2 AI dialog' }))
+
+    expect(onTogglePlannerDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('generates an AI recap once for canvases without cached recap', async () => {
+    apiMocks.streamAssistantChat.mockImplementation(async function* () {
+      yield {
+        type: 'delta',
+        text: JSON.stringify({
+          headline: 'AI summary ready',
+          summary: 'Generated once for this canvas.',
+          details: ['No repeated generation when switching back.'],
+        }),
+      }
+    })
+    const canvases = [
+      {
+        id: 'canvas-a',
+        name: 'Canvas A',
+        scope: 'personal' as const,
+        kind: 'board' as const,
+        isDefault: false,
+        workspacePath: '',
+        ownerUserId: 'local-user',
+        teamId: null,
+      },
+      {
+        id: 'canvas-b',
+        name: 'Canvas B',
+        scope: 'personal' as const,
+        kind: 'board' as const,
+        isDefault: false,
+        workspacePath: '',
+        ownerUserId: 'local-user',
+        teamId: null,
+      },
+    ]
+    const stateFor = (id: string, title: string) => ({
+      canvas: { id, title, plannerContext: '' },
+      nodes: [{
+        id: `${id}-node`,
+        canvasId: id,
+        title: 'Prepare brief',
+        status: 'ready',
+        workflowRunState: 'idle',
+        blockedReason: null,
+        nextAction: 'Start work',
+        schema: { inputs: [], outputs: [] },
+        dependsOnNodeIds: [],
+        sessionId: null,
+        schedule: null,
+      }],
+      artifacts: [],
+      proposals: [],
+      events: [],
+    })
+    const { rerender } = render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={canvases}
+          activeCanvasId="canvas-a"
+          plannerState={stateFor('canvas-a', 'Canvas A') as any}
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(apiMocks.streamAssistantChat).toHaveBeenCalledTimes(1)
+    })
+    rerender(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={canvases}
+          activeCanvasId="canvas-b"
+          plannerState={stateFor('canvas-b', 'Canvas B') as any}
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(apiMocks.streamAssistantChat).toHaveBeenCalledTimes(2)
+    })
+    rerender(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={canvases}
+          activeCanvasId="canvas-a"
+          plannerState={stateFor('canvas-a', 'Canvas A') as any}
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    await act(async () => {})
+    expect(apiMocks.streamAssistantChat).toHaveBeenCalledTimes(2)
+  })
+
   it('collapses AI recap details behind the toolbar summary', async () => {
     apiMocks.streamAssistantChat.mockImplementation(async function* () {
       yield {
@@ -193,16 +330,24 @@ describe('CanvasToolbar template save flow', () => {
       </I18nProvider>,
     )
 
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh canvas recap' }))
     expect(await screen.findByText('发布风险集中在评审')).toBeInTheDocument()
     expect(screen.getByText('摘要只保留当前最重要的判断，默认不展开细节。')).toBeInTheDocument()
     expect(screen.queryByText('详细说明一：两个节点仍在等待人工确认。')).not.toBeInTheDocument()
 
+    vi.useFakeTimers()
     const recap = document.querySelector('.canvas-toolbar__recap-trigger')
     expect(recap).toBeInstanceOf(HTMLButtonElement)
     fireEvent.click(recap as HTMLElement)
 
-    expect(await screen.findByText('详细说明一：两个节点仍在等待人工确认。')).toBeInTheDocument()
+    expect(screen.getByText('详细说明一：两个节点仍在等待人工确认。')).toBeInTheDocument()
     expect(screen.getByText('详细说明二：最新 artifact 已产出但还没有被验收。')).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    expect(screen.queryByText('详细说明一：两个节点仍在等待人工确认。')).not.toBeInTheDocument()
+    vi.useRealTimers()
   })
 
   it('switches between My and Team canvas tabs in the canvas menu', async () => {
@@ -390,5 +535,51 @@ describe('CanvasToolbar template save flow', () => {
     await waitFor(() => {
       expect(onResolveCanvasConflict).toHaveBeenCalledWith('conflict-canvas', 'current')
     })
+  })
+
+  it('shows the canvas hover card for regular canvas rows', () => {
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'hover-canvas',
+            name: 'Hover Canvas',
+            scope: 'personal',
+            kind: 'board',
+            isDefault: false,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="hover-canvas"
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+          userProfile={{
+            connected: false,
+            userId: 'local-user',
+            userEmail: 'local@example.com',
+            userName: 'Local User',
+            displayName: 'Local User',
+            userAvatarUrl: '',
+            initials: 'LU',
+            dashboardUrl: '',
+            connectUrl: '',
+            teams: [],
+          }}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(screen.getByText('Hover Canvas'))
+    const list = document.querySelector('.canvas-toolbar__list')
+    expect(list).toBeInstanceOf(HTMLElement)
+    const item = within(list as HTMLElement).getByRole('button', { name: /Hover Canvas/ })
+
+    fireEvent.mouseEnter(item)
+
+    expect(screen.getByText('Access')).toBeInTheDocument()
+    expect(document.querySelector('.canvas-toolbar__hover-recap')).toBeInstanceOf(HTMLElement)
   })
 })

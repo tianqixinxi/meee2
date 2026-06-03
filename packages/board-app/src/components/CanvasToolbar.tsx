@@ -10,6 +10,8 @@ import {
   Info,
   Layers,
   LockKeyhole,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Search,
@@ -70,6 +72,8 @@ interface Props {
   boardState?: BoardState | null
   plannerState?: PlannerGraphState | null
   canvasMonitor?: CanvasMonitor | null
+  plannerDialogCollapsed?: boolean
+  onTogglePlannerDialog?: () => void
 }
 
 type CanvasRecap = CoreCanvasStatusRecap & {
@@ -86,12 +90,7 @@ type CanvasListTab = 'my' | 'team'
 
 const DEFAULT_TEMPLATE_TAGS = ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo']
 
-// Minimum gap between AUTO recap attempts for the same canvas. The auto-trigger
-// fires off `plannerState` changes (which churn every few seconds); without a
-// cooldown a failing recap re-spawns a `claude -p` run on every churn and
-// starves the app. Manual refresh (the ↻ button) bypasses this. 30s is well
-// below the minutes-scale recap interval, so legitimate recaps are unaffected.
-const RECAP_AUTO_COOLDOWN_MS = 30_000
+const RECAP_AUTO_COLLAPSE_MS = 3_000
 
 // 用户只能创建 board canvas。
 //  - monitor 是系统预置的默认首页(isDefault + 唯一),不暴露给用户创建,否则会
@@ -119,19 +118,20 @@ export function CanvasToolbar({
   boardState = null,
   plannerState = null,
   canvasMonitor = null,
+  plannerDialogCollapsed = false,
+  onTogglePlannerDialog,
 }: Props) {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const recapContextRef = useRef<HTMLDivElement | null>(null)
   const recapRequestRef = useRef(0)
   const recapCacheRef = useRef<Record<string, CanvasRecap>>({})
-  // Recap-respawn guard: a failing recap used to re-trigger on every
-  // `plannerState` change (which churns every few seconds), spawning a fresh
-  // `claude -p` recap each time → hook storm → app freeze. These two refs make
-  // the auto-trigger idempotent: never run two recaps for a canvas at once
-  // (`recapInFlightRef`), and never auto-retry a canvas more than once per
-  // cooldown window even when generation keeps failing (`recapLastAttemptRef`).
+  const recapAutoAttemptedRef = useRef<Set<string>>(new Set())
+  // Manual/interval recap requests can outlive state churn. Keep one AI recap
+  // per canvas in flight so a slow local assistant cannot stack duplicate runs.
   const recapInFlightRef = useRef<Set<string>>(new Set())
-  const recapLastAttemptRef = useRef<Record<string, number>>({})
+  const recapCollapseTimerRef = useRef<number | null>(null)
+  const recapHoveringRef = useRef(false)
   const plannerStateRef = useRef<PlannerGraphState | null>(plannerState)
   const canvasMonitorRef = useRef<CanvasMonitor | null>(canvasMonitor)
   const hoverHideTimerRef = useRef<number | null>(null)
@@ -253,17 +253,64 @@ export function CanvasToolbar({
     setHoverAnchor({ top: rect.top, right: rect.right })
   }
 
+  const cancelRecapAutoCollapse = () => {
+    if (recapCollapseTimerRef.current !== null) {
+      window.clearTimeout(recapCollapseTimerRef.current)
+      recapCollapseTimerRef.current = null
+    }
+  }
+
+  const scheduleRecapAutoCollapse = (expanded = recapExpanded) => {
+    cancelRecapAutoCollapse()
+    if (!expanded) return
+    recapCollapseTimerRef.current = window.setTimeout(() => {
+      setRecapExpanded(false)
+      recapCollapseTimerRef.current = null
+    }, RECAP_AUTO_COLLAPSE_MS)
+  }
+
+  const handleRecapMouseEnter = () => {
+    recapHoveringRef.current = true
+    cancelRecapAutoCollapse()
+  }
+
+  const handleRecapMouseLeave = () => {
+    recapHoveringRef.current = false
+    scheduleRecapAutoCollapse()
+  }
+
   useEffect(() => {
     return () => {
-      if (hoverHideTimerRef.current !== null) {
-        window.clearTimeout(hoverHideTimerRef.current)
-      }
+      cancelRecapAutoCollapse()
+      cancelHoverHide()
     }
   }, [])
 
   useEffect(() => {
     plannerStateRef.current = plannerState
   }, [plannerState])
+
+  useEffect(() => {
+    if (!recapExpanded) return undefined
+    const onPointerDown = (event: PointerEvent) => {
+      const node = recapContextRef.current
+      if (node && event.target instanceof Node && node.contains(event.target)) return
+      setRecapExpanded(false)
+      cancelRecapAutoCollapse()
+    }
+    const onFocusIn = (event: FocusEvent) => {
+      const node = recapContextRef.current
+      if (node && event.target instanceof Node && node.contains(event.target)) return
+      setRecapExpanded(false)
+      cancelRecapAutoCollapse()
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('focusin', onFocusIn, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('focusin', onFocusIn, true)
+    }
+  }, [recapExpanded])
 
   useEffect(() => {
     canvasMonitorRef.current = canvasMonitor
@@ -304,12 +351,9 @@ export function CanvasToolbar({
   const refreshRecap = useCallback(async () => {
     if (!activeCanvas) return
     const canvasId = activeCanvas.id
-    // Hard guard: never run two recaps for the same canvas concurrently. A
-    // generation can outlive several state churns; without this the auto-trigger
-    // (or a stuck request) could stack up `claude -p` spawns and freeze the app.
+    // Hard guard: never run two recaps for the same canvas concurrently.
     if (recapInFlightRef.current.has(canvasId)) return
     recapInFlightRef.current.add(canvasId)
-    recapLastAttemptRef.current[canvasId] = Date.now()
     const requestId = recapRequestRef.current + 1
     recapRequestRef.current = requestId
     setRecapLoading(true)
@@ -325,6 +369,7 @@ export function CanvasToolbar({
       setRecap(baseRecap)
       if (isBlankPlannerCanvas(state)) {
         const nextRecap = buildBlankCanvasRecap(state, t)
+        recapAutoAttemptedRef.current.add(activeCanvas.id)
         recapCacheRef.current[activeCanvas.id] = nextRecap
         setRecap(nextRecap)
         return
@@ -333,6 +378,7 @@ export function CanvasToolbar({
       // overlay entirely and persist the local-only baseRecap.
       if (!loadAllowCloud()) {
         const nextRecap = { ...baseRecap, updatedAt: new Date().toISOString() }
+        recapAutoAttemptedRef.current.add(activeCanvas.id)
         recapCacheRef.current[activeCanvas.id] = nextRecap
         setRecap(nextRecap)
         return
@@ -340,6 +386,7 @@ export function CanvasToolbar({
       const aiRecap = await generateAIRecap(state, activeCanvas, canvasMonitorRef.current)
       if (recapRequestRef.current !== requestId) return
       const nextRecap = { ...baseRecap, ...aiRecap, updatedAt: new Date().toISOString() }
+      recapAutoAttemptedRef.current.add(activeCanvas.id)
       recapCacheRef.current[activeCanvas.id] = nextRecap
       setRecap(nextRecap)
     } catch (err) {
@@ -383,17 +430,21 @@ export function CanvasToolbar({
 
   useEffect(() => {
     if (!activeCanvas) return
-    if (recapCacheRef.current[activeCanvas.id]) return
     if (plannerState?.canvas.id !== activeCanvas.id) return
-    // Recap-respawn guard: this effect re-runs on every `plannerState` change
-    // (every few seconds). On the failure path the cache is never populated, so
-    // without these gates it would re-spawn a recap each churn → app freeze.
-    // Skip if one is already in flight, or if we attempted within the cooldown.
-    if (recapInFlightRef.current.has(activeCanvas.id)) return
-    const lastAttempt = recapLastAttemptRef.current[activeCanvas.id]
-    if (lastAttempt && Date.now() - lastAttempt < RECAP_AUTO_COOLDOWN_MS) return
+    if (recapCacheRef.current[activeCanvas.id]) return
+    const localRecap = isBlankPlannerCanvas(plannerState)
+      ? buildBlankCanvasRecap(plannerState, t)
+      : buildLocalCanvasStatusRecap(plannerState, t)
+    setRecap(localRecap)
+    if (isBlankPlannerCanvas(plannerState)) {
+      recapAutoAttemptedRef.current.add(activeCanvas.id)
+      recapCacheRef.current[activeCanvas.id] = localRecap
+      return
+    }
+    if (recapAutoAttemptedRef.current.has(activeCanvas.id)) return
+    recapAutoAttemptedRef.current.add(activeCanvas.id)
     void refreshRecap()
-  }, [activeCanvas?.id, plannerState?.canvas.id, refreshRecap])
+  }, [activeCanvas?.id, plannerState, refreshRecap, t])
 
   useEffect(() => {
     if (!userProfile?.connected) {
@@ -532,24 +583,6 @@ export function CanvasToolbar({
       })
   }
 
-  const submitReplaceTemplate = () => {
-    if (!activeCanvas?.draftOfTemplateId || !onReplaceTemplate) return
-    setReplaceTemplateSaving(true)
-    setReplaceTemplateError(null)
-    Promise.resolve(onReplaceTemplate(activeCanvas.draftOfTemplateId, activeCanvas.id, {
-      name: activeCanvas.name.replace(/\s+draft$/i, ''),
-      defaultCanvasKind: activeCanvas.kind === 'monitor' ? 'monitor' : 'board',
-    }))
-      .then(() => {
-        setReplaceTemplateSaving(false)
-        setReplaceTemplateConfirming(false)
-      })
-      .catch((err) => {
-        setReplaceTemplateSaving(false)
-        setReplaceTemplateError((err as Error).message || 'Failed to replace template')
-      })
-  }
-
   const resolveConflict = (canvas: CanvasInfo, choice: 'current' | 'remote') => {
     if (!onResolveCanvasConflict || resolvingConflictCanvasId) return
     setResolvingConflictCanvasId(canvas.id)
@@ -565,6 +598,24 @@ export function CanvasToolbar({
       })
       .finally(() => {
         setResolvingConflictCanvasId(null)
+      })
+  }
+
+  const submitReplaceTemplate = () => {
+    if (!activeCanvas?.draftOfTemplateId || !onReplaceTemplate) return
+    setReplaceTemplateSaving(true)
+    setReplaceTemplateError(null)
+    Promise.resolve(onReplaceTemplate(activeCanvas.draftOfTemplateId, activeCanvas.id, {
+      name: activeCanvas.name.replace(/\s+draft$/i, ''),
+      defaultCanvasKind: activeCanvas.kind === 'monitor' ? 'monitor' : 'board',
+    }))
+      .then(() => {
+        setReplaceTemplateSaving(false)
+        setReplaceTemplateConfirming(false)
+      })
+      .catch((err) => {
+        setReplaceTemplateSaving(false)
+        setReplaceTemplateError((err as Error).message || 'Failed to replace template')
       })
   }
 
@@ -602,6 +653,17 @@ export function CanvasToolbar({
         </div>
       )}
       <div className="canvas-toolbar__switcher">
+        {onTogglePlannerDialog && (
+          <button
+            type="button"
+            className="canvas-toolbar__nav canvas-toolbar__ai-panel-toggle"
+            aria-label={plannerDialogCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
+            title={plannerDialogCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
+            onClick={onTogglePlannerDialog}
+          >
+            {plannerDialogCollapsed ? <PanelLeftOpen size={14} aria-hidden /> : <PanelLeftClose size={14} aria-hidden />}
+          </button>
+        )}
         <button
           type="button"
           className="canvas-toolbar__nav"
@@ -686,7 +748,9 @@ export function CanvasToolbar({
                     role="tab"
                     className={canvasListTab === group.id ? 'is-active' : ''}
                     aria-selected={canvasListTab === group.id}
-                    onClick={() => setCanvasListTab(group.id)}
+                    onClick={() => {
+                      setCanvasListTab(group.id)
+                    }}
                   >
                     <span>{group.id === 'my' ? 'My' : 'Team'}</span>
                     <small>{group.entries.length}</small>
@@ -777,7 +841,13 @@ export function CanvasToolbar({
           </div>
         )}
       </div>
-      <div className="canvas-toolbar__context" aria-live="polite">
+      <div
+        className="canvas-toolbar__context"
+        ref={recapContextRef}
+        aria-live="polite"
+        onMouseEnter={handleRecapMouseEnter}
+        onMouseLeave={handleRecapMouseLeave}
+      >
         <div className="canvas-toolbar__recap">
           <button
             type="button"
@@ -786,7 +856,13 @@ export function CanvasToolbar({
             aria-expanded={canExpandRecap ? recapExpanded : undefined}
             onClick={() => {
               if (!canExpandRecap) return
-              setRecapExpanded((expanded) => !expanded)
+              const nextExpanded = !recapExpanded
+              setRecapExpanded(nextExpanded)
+              if (nextExpanded && !recapHoveringRef.current) {
+                scheduleRecapAutoCollapse(true)
+              } else if (!nextExpanded) {
+                cancelRecapAutoCollapse()
+              }
             }}
             disabled={!canExpandRecap}
           >
@@ -794,11 +870,6 @@ export function CanvasToolbar({
             <span className="canvas-toolbar__recap-copy">
               <span className="canvas-toolbar__recap-headline-row">
                 <strong>{recapHeadline}</strong>
-                {canExpandRecap ? (
-                  <span className="canvas-toolbar__recap-chevron" aria-hidden>
-                    {recapExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  </span>
-                ) : null}
               </span>
               {recapSummary ? (
                 <span className="canvas-toolbar__recap-summary">{recapSummary}</span>
@@ -814,6 +885,11 @@ export function CanvasToolbar({
                 ) : null}
               </span>
             </span>
+            {canExpandRecap ? (
+              <span className="canvas-toolbar__recap-chevron" aria-hidden>
+                {recapExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              </span>
+            ) : null}
           </button>
           <button
             type="button"
@@ -1679,6 +1755,13 @@ function buildCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof u
     mode: 'ai',
     headline: t('canvas.generatingRecap'),
     statuses: localizeStatusLabels(recap.statuses, t),
+  }
+}
+
+function buildLocalCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {
+  return {
+    ...buildCanvasStatusRecap(state, t),
+    headline: t('canvas.statusOverview'),
   }
 }
 

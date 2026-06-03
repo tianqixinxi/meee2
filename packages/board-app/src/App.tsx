@@ -87,6 +87,13 @@ import {
   type TemplateMetadataInput,
 } from './api'
 
+const PLANNER_PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
+
+function readStoredPlannerPanelCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(PLANNER_PANEL_COLLAPSED_KEY) === '1'
+}
+
 declare global {
   interface Window {
     __meee2PendingSessionTerminalOverlay?: SessionOpenTarget | null
@@ -433,6 +440,7 @@ export default function App() {
   const prevStatusRef = useRef<Record<string, string>>({})
   const [toasts, setToasts] = useState<Toast[]>([])
   const [plannerClearRevision, setPlannerClearRevision] = useState(0)
+  const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(readStoredPlannerPanelCollapsed)
 
   // 检测 status 转换，同步红点：
   //   工作态 → 休息态 = "Claude 刚回复完"       → 标未读
@@ -515,6 +523,10 @@ export default function App() {
   }, [])
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
+
+  useEffect(() => {
+    window.localStorage.setItem(PLANNER_PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
+  }, [plannerPanelCollapsed])
 
   const refreshAgentRuntimeStatus = useCallback((showModal: boolean) => {
     fetchMeee2AgentRuntimeStatus()
@@ -1246,12 +1258,29 @@ export default function App() {
           )}
           {workspaceMode === 'planner' ? (
             activeWorkspaceCanvasKind === 'monitor' ? (
-              <WorkspaceMonitor
-                activeCanvasId={activeWorkspaceCanvasId}
-                canvases={workspaceCanvases}
+              <PlannerGraph
+                canvasId={activeWorkspaceCanvasId}
+                canvasName={activeWorkspaceCanvas?.name ?? 'Monitor'}
+                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+                userProfile={userProfile}
+                boardState={boardState.state}
+                clearRevision={plannerClearRevision}
                 refreshTick={activeCanvasRefreshTick}
-                onOpenItem={handleOpenMonitorItem}
-                onOpenAllSessions={openQuickSessionSearch}
+                onPlannerStateChange={setActivePlannerState}
+                onOpenSubCanvas={handleSetActiveCanvas}
+                onNotify={pushToast}
+                canvasMonitor={activeCanvasMonitor}
+                dialogCollapsed={plannerPanelCollapsed}
+                onDialogCollapsedChange={setPlannerPanelCollapsed}
+                flowContent={(
+                  <WorkspaceMonitor
+                    activeCanvasId={activeWorkspaceCanvasId}
+                    canvases={workspaceCanvases}
+                    refreshTick={activeCanvasRefreshTick}
+                    onOpenItem={handleOpenMonitorItem}
+                    onOpenAllSessions={openQuickSessionSearch}
+                  />
+                )}
               />
             ) : (
               <PlannerGraph
@@ -1266,6 +1295,8 @@ export default function App() {
                 onOpenSubCanvas={handleSetActiveCanvas}
                 onNotify={pushToast}
                 canvasMonitor={activeCanvasMonitor}
+                dialogCollapsed={plannerPanelCollapsed}
+                onDialogCollapsedChange={setPlannerPanelCollapsed}
               />
             )
           ) : workspaceMode === 'templates' ? (
@@ -1343,6 +1374,8 @@ export default function App() {
               boardState={boardState.state}
               plannerState={currentPlannerState}
               canvasMonitor={activeCanvasMonitor}
+              plannerDialogCollapsed={plannerPanelCollapsed}
+              onTogglePlannerDialog={() => setPlannerPanelCollapsed((value) => !value)}
             />
           )}
           {sessionTerminalTarget && (() => {

@@ -7,9 +7,9 @@ import {
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, PlayCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import {
   applyPlannerProposal,
   approvePlannerProposal,
@@ -120,6 +120,10 @@ interface Props {
   onNotify?: (kind: 'success' | 'error', text: string) => void
   onPlannerStateChange?: (state: PlannerGraphState | null) => void
   canvasMonitor?: CanvasMonitor | null
+  flowContent?: ReactNode
+  forceDialogOpenTick?: number
+  dialogCollapsed?: boolean
+  onDialogCollapsedChange?: (collapsed: boolean) => void
 }
 
 const nodeTypes = {
@@ -158,6 +162,10 @@ function PlannerGraphInner({
   onNotify,
   onPlannerStateChange,
   canvasMonitor = null,
+  flowContent = null,
+  forceDialogOpenTick = 0,
+  dialogCollapsed,
+  onDialogCollapsedChange,
 }: Props) {
   const { t } = useI18n()
   const reactFlow = useReactFlow()
@@ -197,7 +205,16 @@ function PlannerGraphInner({
    * and is read by InspectorArtifactBody as its initial selectedArtifactId.
    */
   const [initialInspectorArtifactId, setInitialInspectorArtifactId] = useState<string | null>(null)
-  const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(() => readStoredPanelCollapsed())
+  const [internalPlannerPanelCollapsed, setInternalPlannerPanelCollapsed] = useState(() => readStoredPanelCollapsed())
+  const plannerPanelCollapsed = dialogCollapsed ?? internalPlannerPanelCollapsed
+  const setPlannerPanelCollapsed = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(plannerPanelCollapsed) : next
+    if (onDialogCollapsedChange) {
+      onDialogCollapsedChange(resolved)
+    } else {
+      setInternalPlannerPanelCollapsed(resolved)
+    }
+  }, [onDialogCollapsedChange, plannerPanelCollapsed])
   const [plannerPanelWidth, setPlannerPanelWidth] = useState(() => readStoredPanelWidth())
   const [ioArtifactVisibility, setIOArtifactVisibility] = useState<Record<string, IOArtifactVisibility>>(
     () => readStoredIOArtifactVisibility(canvasId),
@@ -1303,8 +1320,14 @@ function PlannerGraphInner({
   }, [persistNodeLayout])
 
   useEffect(() => {
-    window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
-  }, [plannerPanelCollapsed])
+    if (dialogCollapsed === undefined) {
+      window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
+    }
+  }, [dialogCollapsed, plannerPanelCollapsed])
+
+  useEffect(() => {
+    if (forceDialogOpenTick > 0) setPlannerPanelCollapsed(false)
+  }, [forceDialogOpenTick])
 
   useEffect(() => {
     document.documentElement.style.setProperty('--planner-chat-width', plannerPanelCollapsed ? '0px' : `${plannerPanelWidth}px`)
@@ -1891,14 +1914,6 @@ function PlannerGraphInner({
           className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}
           style={plannerMainStyle}
         >
-        <button
-          type="button"
-          className={`planner-dialog-toggle${plannerPanelCollapsed ? ' is-collapsed' : ''}`}
-          onClick={() => setPlannerPanelCollapsed((value) => !value)}
-          aria-label={plannerPanelCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
-        >
-          {plannerPanelCollapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
-        </button>
         {!plannerPanelCollapsed && (
           <div className="planner-side" data-guide-target="planner-proposal">
             <button
@@ -1949,6 +1964,10 @@ function PlannerGraphInner({
           </div>
         )}
         <div className="planner-flow" data-guide-target="planner-flow">
+          {flowContent ? (
+            flowContent
+          ) : (
+            <>
           {/* Canvas runtime Atom 4 — owner-curated monitor grid. Self-gates on
               the canvas.monitor.v2 flag and renders nothing when the canvas has
               no monitorSpec, so legacy canvases are visually unchanged. */}
@@ -2104,6 +2123,8 @@ function PlannerGraphInner({
             </ReactFlow>
           ) : (
             <PlannerCanvasSkeleton canvasName={canvasName} />
+          )}
+            </>
           )}
         </div>
         </div>
