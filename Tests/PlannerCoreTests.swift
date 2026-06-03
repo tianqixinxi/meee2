@@ -2309,6 +2309,33 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(state.nodes.isEmpty)
     }
 
+    func testPlannerStoreDoesNotOverwriteUnreadableExistingState() throws {
+        let rootURL = plannerStoreURL.deletingPathExtension()
+        let stateURL = rootURL
+            .appendingPathComponent("canvases", isDirectory: true)
+            .appendingPathComponent("canvas-a", isDirectory: true)
+            .appendingPathComponent("state.json", isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let original = #"{"canvas":{"id":"canvas-a"},"nodes":[{"workflowRunState":"not-a-state"}]}"#
+        try original.write(to: stateURL, atomically: true, encoding: .utf8)
+
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let store = PlannerStore(fileURL: plannerStoreURL)
+
+        XCTAssertThrowsError(try store.record(for: canvas, seedNodes: [])) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .plannerStateUnreadable("canvas-a"))
+        }
+        XCTAssertEqual(try String(contentsOf: stateURL), original)
+    }
+
     func testPlannerStoreSerializesConcurrentRecordCleanup() throws {
         let canvas = PlanningCanvas(
             id: "canvas-a",
@@ -3779,10 +3806,10 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNil(node.blockedReason)
     }
 
-    // 3-态会话模型(2026-06-01): 会话结束(.dead → runState .pending)时,没有显式
-    // submit 的节点应回到「未启动 session」—— 清掉死会话绑定、status .ready、
-    // 无 blockedReason、不再终态「失败」。这样卡片回到可「开干」且能干净重新派发。
-    func testSessionEndResetsNodeToNotStarted() throws {
+    // 会话结束(.dead → runState .pending)时,没有显式 submit 的节点不应清掉
+    // sessionId。保留绑定才能让抽屉打开/恢复原会话,而不是伪装成「未启动」
+    // 要用户重新起会话。
+    func testSessionEndKeepsBindingAndPromptsResume() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let stepId = "canvas-a-node-1"
@@ -3807,10 +3834,11 @@ final class PlannerCoreTests: XCTestCase {
 
         let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
         let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
-        XCTAssertNil(node.sessionId, "dead session binding must be cleared (未启动 session)")
-        XCTAssertEqual(node.workflowRunState, .pending)
-        XCTAssertEqual(node.status, .ready)
-        XCTAssertNil(node.blockedReason, "session end is not a failure — no blocked reason")
+        XCTAssertEqual(node.sessionId, "claude-dead", "ended session binding should be kept for open/resume")
+        XCTAssertEqual(node.chatThreadId, "claude-dead")
+        XCTAssertEqual(node.workflowRunState, .awaitingInput)
+        XCTAssertEqual(node.status, .blocked)
+        XCTAssertEqual(node.blockedReason, "Session claude-d 已结束；可打开恢复，或替换为新会话。")
     }
 
     /// Regression: when an agent calls `submit_node_output` with status=blocked,
