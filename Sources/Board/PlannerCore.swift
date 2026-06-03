@@ -10,6 +10,118 @@ enum PlannerCanvasVisibility: String, Codable, Equatable {
     case `private`
 }
 
+struct CanvasSceneArtifactBinding: Codable, Equatable {
+    var id: String
+    var nodeId: String
+    var reference: String
+    var mode: String
+
+    init(id: String, nodeId: String, reference: String, mode: String = "merge") {
+        self.id = id
+        self.nodeId = nodeId
+        self.reference = reference
+        self.mode = mode
+    }
+}
+
+struct CanvasSceneNodeAnchor: Codable, Equatable {
+    var id: String
+    var label: String
+    var nodeId: String
+    var x: Double
+    var y: Double
+    var role: String?
+
+    init(id: String, label: String, nodeId: String, x: Double, y: Double, role: String? = nil) {
+        self.id = id
+        self.label = label
+        self.nodeId = nodeId
+        self.x = x
+        self.y = y
+        self.role = role
+    }
+}
+
+struct CanvasSceneAction: Codable, Equatable {
+    var id: String
+    var label: String
+    var nodeId: String
+    var prompt: String?
+
+    init(id: String, label: String, nodeId: String, prompt: String? = nil) {
+        self.id = id
+        self.label = label
+        self.nodeId = nodeId
+        self.prompt = prompt
+    }
+}
+
+struct CanvasSceneOrchestration: Codable, Equatable {
+    var kind: String
+    var stateNodeId: String?
+    var stateReference: String?
+    var logReference: String?
+
+    init(
+        kind: String,
+        stateNodeId: String? = nil,
+        stateReference: String? = nil,
+        logReference: String? = nil
+    ) {
+        self.kind = kind
+        self.stateNodeId = stateNodeId
+        self.stateReference = stateReference
+        self.logReference = logReference
+    }
+}
+
+/// Canvas-level presentation layer for scene templates such as travel maps or
+/// poker tables. The scene is not a node and does not own execution state:
+/// initial state comes from the template, runtime state comes from node
+/// artifacts, and actions route back to existing node/session flows.
+struct CanvasSceneSpec: Codable, Equatable {
+    var kind: String
+    var assets: [String: BoardJSONValue]
+    var initialState: BoardJSONValue?
+    var artifactBindings: [CanvasSceneArtifactBinding]
+    var nodeAnchors: [CanvasSceneNodeAnchor]
+    var actions: [CanvasSceneAction]
+    var orchestration: CanvasSceneOrchestration?
+
+    init(
+        kind: String,
+        assets: [String: BoardJSONValue] = [:],
+        initialState: BoardJSONValue? = nil,
+        artifactBindings: [CanvasSceneArtifactBinding] = [],
+        nodeAnchors: [CanvasSceneNodeAnchor] = [],
+        actions: [CanvasSceneAction] = [],
+        orchestration: CanvasSceneOrchestration? = nil
+    ) {
+        self.kind = kind
+        self.assets = assets
+        self.initialState = initialState
+        self.artifactBindings = artifactBindings
+        self.nodeAnchors = nodeAnchors
+        self.actions = actions
+        self.orchestration = orchestration
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, assets, initialState, artifactBindings, nodeAnchors, actions, orchestration
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        assets = try c.decodeIfPresent([String: BoardJSONValue].self, forKey: .assets) ?? [:]
+        initialState = try c.decodeIfPresent(BoardJSONValue.self, forKey: .initialState)
+        artifactBindings = try c.decodeIfPresent([CanvasSceneArtifactBinding].self, forKey: .artifactBindings) ?? []
+        nodeAnchors = try c.decodeIfPresent([CanvasSceneNodeAnchor].self, forKey: .nodeAnchors) ?? []
+        actions = try c.decodeIfPresent([CanvasSceneAction].self, forKey: .actions) ?? []
+        orchestration = try c.decodeIfPresent(CanvasSceneOrchestration.self, forKey: .orchestration)
+    }
+}
+
 struct PlanningCanvas: Codable, Equatable {
     var id: String
     var ownerId: String
@@ -41,12 +153,15 @@ struct PlanningCanvas: Codable, Equatable {
     var edges: [Edge]
     /// Atom 4 — owner-facing monitor card grid. `nil` when unset.
     var monitorSpec: MonitorSpec?
+    /// Canvas-level scene presentation. `nil` for ordinary workflow/monitor
+    /// canvases. Optional so legacy records decode unchanged.
+    var sceneSpec: CanvasSceneSpec?
 
     enum CodingKeys: String, CodingKey {
         case id, ownerId, title, plannerContext, visibility
         case parentCanvasId, parentNodeId, frozenIOContract
         // 5-atom collections — absent on legacy canvases.
-        case dataSources, edges, monitorSpec
+        case dataSources, edges, monitorSpec, sceneSpec
     }
 
     init(
@@ -60,7 +175,8 @@ struct PlanningCanvas: Codable, Equatable {
         frozenIOContract: NodeContractV2? = nil,
         dataSources: [DataSourceRecord] = [],
         edges: [Edge] = [],
-        monitorSpec: MonitorSpec? = nil
+        monitorSpec: MonitorSpec? = nil,
+        sceneSpec: CanvasSceneSpec? = nil
     ) {
         self.id = id
         self.ownerId = ownerId
@@ -73,6 +189,7 @@ struct PlanningCanvas: Codable, Equatable {
         self.dataSources = dataSources
         self.edges = edges
         self.monitorSpec = monitorSpec
+        self.sceneSpec = sceneSpec
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +206,7 @@ struct PlanningCanvas: Codable, Equatable {
         dataSources = try c.decodeIfPresent([DataSourceRecord].self, forKey: .dataSources) ?? []
         edges = try c.decodeIfPresent([Edge].self, forKey: .edges) ?? []
         monitorSpec = try c.decodeIfPresent(MonitorSpec.self, forKey: .monitorSpec)
+        sceneSpec = try c.decodeIfPresent(CanvasSceneSpec.self, forKey: .sceneSpec)
     }
 }
 
@@ -3898,6 +4016,7 @@ final class PlannerStore {
                 incoming.dataSources = existing.canvas.dataSources
                 incoming.edges = existing.canvas.edges
                 incoming.monitorSpec = existing.canvas.monitorSpec
+                incoming.sceneSpec = incoming.sceneSpec ?? existing.canvas.sceneSpec
                 if existing.canvas == incoming {
                     return existing
                 }
@@ -4027,6 +4146,12 @@ final class PlannerStore {
         }
     }
 
+    func reusableSceneSpec(canvasId: String) -> CanvasSceneSpec? {
+        withLock {
+            (try? requireRecord(canvasId: canvasId).canvas.sceneSpec)
+        }
+    }
+
     private func sanitizedReusableRecord(
         from source: CanvasRecord,
         targetCanvas: PlanningCanvas
@@ -4048,6 +4173,7 @@ final class PlannerStore {
             monitorSpec.canvasId = targetCanvasId
             canvas.monitorSpec = monitorSpec
         }
+        canvas.sceneSpec = source.canvas.sceneSpec
 
         let nodes = source.nodes.map { node -> PlanningNode in
             var next = node
@@ -5796,7 +5922,9 @@ final class PlannerStore {
     func submitNodeOutput(
         canvasId: String,
         nodeId: String,
-        output: PlannerNodeOutput
+        output: PlannerNodeOutput,
+        submittedByKind: PlannerArtifactVersionSubmitterKind = .agent,
+        submittedBy: String? = nil
     ) throws -> (
         record: CanvasRecord,
         routes: [PlannerOutputRoute],
@@ -5944,8 +6072,8 @@ final class PlannerStore {
                     inputSnapshot: inputSnapshot,
                     displayStrategy: .latest,
                     forceNewVersion: output.forceNewVersion,
-                    submittedBy: nil,
-                    submittedByKind: .agent,
+                    submittedBy: submittedBy,
+                    submittedByKind: submittedByKind,
                     metadata: .object([
                         "title": .string(artifact.title),
                         "kind": .string(item.kind.rawValue),
@@ -7828,7 +7956,9 @@ enum PlannerBoardBridge {
         output: PlannerNodeOutput,
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
-        actorUserId: String? = nil
+        actorUserId: String? = nil,
+        submittedByKind: PlannerArtifactVersionSubmitterKind = .agent,
+        submittedBy: String? = nil
     ) throws -> PlannerNodeOutputResult {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
@@ -7850,7 +7980,13 @@ enum PlannerBoardBridge {
             next.payload = payload
             return next
         }
-        let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: normalizedOutput)
+        let submitted = try store.submitNodeOutput(
+            canvasId: canvasId,
+            nodeId: nodeId,
+            output: normalizedOutput,
+            submittedByKind: submittedByKind,
+            submittedBy: submittedBy
+        )
         // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
         // bridge layer so the engine path stays pure (BoardAPI is the place
         // that actually spawns terminals — see `recordPlannerDispatchIntent`

@@ -6048,6 +6048,7 @@ textarea {
     top: calc(54vh + 12px);
     left: 12px;
     width: calc(100% - 24px);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   html.board-planner-chat-collapsed .canvas-toolbar {
@@ -6186,19 +6187,27 @@ textarea {
   top: 16px;
   left: calc(var(--planner-chat-width, 0px) + 16px);
   z-index: 320;
-  width: min(500px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+  width: min(940px, calc(100% - var(--planner-chat-width, 0px) - 32px));
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(320px, 500px) minmax(320px, 420px);
+  align-items: start;
   gap: 8px;
   pointer-events: none;
   color: var(--text);
 }
 
 .canvas-toolbar--monitor {
-  width: min(500px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+  width: min(940px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+}
+
+.canvas-toolbar--scene {
+  width: min(840px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+  grid-template-columns: minmax(300px, 420px) minmax(300px, 380px);
 }
 
 .canvas-toolbar__draft-banner {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6235,12 +6244,17 @@ textarea {
 
 html.board-planner-chat-collapsed .canvas-toolbar {
   left: 16px;
-  width: min(500px, calc(100% - 32px));
+  width: min(940px, calc(100% - 32px));
+}
+
+html.board-planner-chat-collapsed .canvas-toolbar--scene {
+  width: min(840px, calc(100% - 32px));
 }
 
 html.board-empty-omni .canvas-toolbar {
   left: 16px;
   width: min(380px, calc(100% - 32px));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 html.board-empty-omni .canvas-toolbar__context {
@@ -6402,9 +6416,9 @@ html.board-empty-omni .canvas-toolbar__panel {
   position: relative;
   pointer-events: auto;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   overflow: visible;
-  padding: 10px;
+  padding: 6px 7px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.28));
@@ -6412,26 +6426,103 @@ html.board-empty-omni .canvas-toolbar__panel {
   backdrop-filter: blur(14px);
 }
 
+.canvas-toolbar__context.is-positioned {
+  width: min(420px, calc(100vw - 24px));
+}
+
+.canvas-toolbar--scene .canvas-toolbar__context {
+  max-width: 380px;
+  padding: 6px 7px;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__recap {
+  grid-template-columns: 8px minmax(0, 1fr) 26px;
+  align-items: center;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__recap-trigger {
+  align-items: center;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__recap-copy {
+  gap: 3px;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__recap-copy strong {
+  font-size: 12.5px;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__recap-summary {
+  display: none;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__recap-meta {
+  gap: 5px;
+}
+
+.canvas-toolbar--scene .canvas-toolbar__monitor-badge {
+  max-width: 120px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+}
+
 .canvas-toolbar__recap {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px;
-  align-items: start;
-  gap: 8px;
+  grid-template-columns: 8px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 7px;
+}
+
+.canvas-toolbar__recap-drag {
+  width: 8px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas-toolbar__recap-drag::before {
+  content: '';
+  width: 2px;
+  height: 26px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-faint) 58%, transparent);
+}
+
+.canvas-toolbar__recap-drag:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.canvas-toolbar__recap-drag:hover::before {
+  background: color-mix(in srgb, var(--accent-hover) 72%, var(--text-faint));
+}
+
+.canvas-toolbar__recap-drag:active {
+  cursor: grabbing;
 }
 
 .canvas-toolbar__recap-trigger {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 0;
   min-width: 0;
   cursor: pointer;
   text-align: left;
 }
 
 .canvas-toolbar__recap-chevron {
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
   color: var(--text-faint);
   transition: transform 140ms ease;
 }
@@ -6441,16 +6532,11 @@ html.board-empty-omni .canvas-toolbar__panel {
   transform: rotate(-90deg);
 }
 
-.canvas-toolbar__recap-trigger > svg {
-  flex: 0 0 13px;
-  color: color-mix(in srgb, var(--accent-hover) 82%, var(--text));
-}
-
 .canvas-toolbar__recap-copy {
   flex: 1 1 auto;
   min-width: 0;
   display: grid;
-  gap: 5px;
+  gap: 2px;
 }
 
 .canvas-toolbar__recap-headline-row {
@@ -6468,8 +6554,8 @@ html.board-empty-omni .canvas-toolbar__panel {
 
 .canvas-toolbar__recap-copy strong {
   color: var(--text);
-  font-size: 15px;
-  font-weight: 820;
+  font-size: 12.5px;
+  font-weight: 760;
   line-height: 1.25;
 }
 
@@ -6492,11 +6578,11 @@ html.board-empty-omni .canvas-toolbar__panel {
   display: -webkit-box;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 12.5px;
-  font-weight: 560;
-  line-height: 1.4;
+  font-size: 11px;
+  font-weight: 540;
+  line-height: 1.25;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .canvas-toolbar__recap-meta {
@@ -6504,14 +6590,14 @@ html.board-empty-omni .canvas-toolbar__panel {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 5px 7px;
+  gap: 4px 6px;
 }
 
 .canvas-toolbar__recap-copy small {
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6519,21 +6605,21 @@ html.board-empty-omni .canvas-toolbar__panel {
 
 .canvas-toolbar__recap-age {
   color: var(--text-faint) !important;
-  font-size: 11px !important;
+  font-size: 10px !important;
   font-weight: 520 !important;
 }
 
 .canvas-toolbar__monitor-badge {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 160px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 3px 7px;
+  padding: 2px 6px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 760;
   line-height: 1.15;
 }
@@ -7086,6 +7172,7 @@ html.board-empty-omni .canvas-toolbar__panel {
     top: 332px;
     left: 12px;
     width: calc(100% - 24px);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   html.board-planner-chat-collapsed .canvas-toolbar,
@@ -7105,6 +7192,7 @@ html.board-empty-omni .canvas-toolbar__panel {
     top: calc(max(300px, 42vh) + 12px);
     left: 12px;
     width: calc(100% - 24px);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   html.board-planner-chat-collapsed .canvas-toolbar,

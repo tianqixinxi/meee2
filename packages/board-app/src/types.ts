@@ -392,6 +392,48 @@ export interface CanvasList {
 /** Who can see a planning canvas. Mirrors Swift `PlannerCanvasVisibility`. */
 export type PlannerCanvasVisibility = 'public' | 'private'
 
+export type CanvasSceneKind = 'travel-squad' | 'poker-table' | string
+
+export interface CanvasSceneArtifactBinding {
+  id: string
+  nodeId: string
+  reference: string
+  mode?: 'merge' | 'replace' | string
+}
+
+export interface CanvasSceneNodeAnchor {
+  id: string
+  label: string
+  nodeId: string
+  x: number
+  y: number
+  role?: string | null
+}
+
+export interface CanvasSceneAction {
+  id: string
+  label: string
+  nodeId: string
+  prompt?: string | null
+}
+
+export interface CanvasSceneOrchestration {
+  kind: 'poker-rules-v1' | string
+  stateNodeId?: string | null
+  stateReference?: string | null
+  logReference?: string | null
+}
+
+export interface CanvasSceneSpec {
+  kind: CanvasSceneKind
+  assets?: Record<string, unknown>
+  initialState?: unknown
+  artifactBindings?: CanvasSceneArtifactBinding[]
+  nodeAnchors?: CanvasSceneNodeAnchor[]
+  actions?: CanvasSceneAction[]
+  orchestration?: CanvasSceneOrchestration | null
+}
+
 export interface PlanningCanvas {
   id: string
   ownerId: string
@@ -418,6 +460,12 @@ export interface PlanningCanvas {
    * Twin of Zod contract/datasource.ts `DataSource` (only the fields we render
    * are mirrored). */
   dataSources?: DataSourceRecord[]
+  /**
+   * Canvas-level presentation layer for scene templates. It is not a node
+   * widget: scene state starts from the template and is advanced by artifacts
+   * produced by executable nodes.
+   */
+  sceneSpec?: CanvasSceneSpec | null
   /**
    * Atom 2 — first-class consumption edges. AUTHORITATIVE: includes both real
    * mode edges (queue-claim / document-snapshot) AND synthetic

@@ -10,11 +10,13 @@ export type PlannerTelemetryEvent =
   | 'planner.answer_only'
   | 'planner.user_revert_within_30s'
   | 'planner.promote_into_session_prompt'
+  | 'planner.scene_template_applied'
 
 export interface PlannerTelemetryPayload {
   canvasId?: string
   nodeId?: string
   sessionId?: string
+  templateId?: string
   intent?: 'answer' | 'edit' | 'inspect' | 'promote'
   reason?: string
   message?: string

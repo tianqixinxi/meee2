@@ -92,6 +92,30 @@ _Avoid_: Sessions page, terminal workspace, session list modal
 A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and Artifacts. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
 _Avoid_: Graph editor as the product, separate monitor workspace
 
+**Canvas Scene**:
+A canvas-level presentation surface for spatial or simulated experiences such as a travel map or poker table. A Canvas Scene is not a node, because it does not own work; it presents Scene State and routes user intent to executable nodes.
+_Avoid_: Scene Host Node, game page, map node
+
+**Template Asset**:
+A reusable presentation resource that comes with a Canvas Workspace template and may be overridden by the canvas. Template Assets are not Artifacts because they are not evidence produced by work.
+_Avoid_: seed artifact, evidence asset
+
+**Scene State**:
+The structured state rendered by a Canvas Scene. Initial Scene State may come from a template, while running Scene State is advanced by Artifacts produced by nodes.
+_Avoid_: canvas artifact, hidden bootstrap output
+
+**Rules Orchestrator**:
+A deterministic canvas-runtime controller for simulated Canvas Scenes. A Rules Orchestrator decides what may happen next and which role may act, but it is not a node, not an AI session, and not a scene character such as Dealer or GM.
+_Avoid_: GM as orchestrator, Dealer as orchestrator, hidden orchestration node
+
+**Role Slice**:
+The subset of Scene State visible to a specific human or AI role. A Role Slice lets a player session see its own private inputs while hiding other roles' private information.
+_Avoid_: full scene state as player context, hidden information leak
+
+**Player Action Artifact**:
+A node-produced Artifact that records one player role's proposed action for the current scene turn. A Player Action Artifact is not the authoritative Scene State; the Rules Orchestrator must validate and apply it before Scene State advances.
+_Avoid_: player-owned game state, direct scene mutation
+
 **Monitor Canvas**:
 The default Canvas Workspace that aggregates active live sessions, subcanvases, blocked work, approvals, recap, and Artifacts into a top-level operating view.
 _Avoid_: Separate Monitor product, history dashboard
@@ -197,3 +221,15 @@ Domain expert: "Not always. Aggregated Node State must explain which Artifact or
 Developer: "Should Artifacts be their own workspace for managing generated material?"
 
 Domain expert: "No. Artifacts are traceable work proof attached to Canvas Workspaces or nodes. The Artifacts rail entry is a global index for finding them, while editing and workflow decisions stay in Canvas."
+
+Developer: "Should a poker table or travel map be represented as one giant node?"
+
+Domain expert: "No. That is a Canvas Scene: the table or map presents Scene State at the canvas level. Only the Dealer, player agents, route planner, hotel agent, or human approvals become nodes because they own executable work."
+
+Developer: "If the poker felt or travel background ships with a template, is that an Artifact?"
+
+Domain expert: "No. It is a Template Asset. Artifacts are proof produced by nodes; Template Assets are reusable presentation resources."
+
+Developer: "Is the GM node the thing that controls a poker game?"
+
+Domain expert: "No. The GM is a human responsibility node for rulings and approvals. The Rules Orchestrator is the deterministic runtime controller, and player agents only submit Player Action Artifacts."

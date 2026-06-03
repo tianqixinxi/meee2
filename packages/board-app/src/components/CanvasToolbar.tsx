@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -31,7 +32,9 @@ import {
   ALLOW_CLOUD_PREFERENCES_CHANGED,
   CANVAS_RECAP_PREFERENCES_CHANGED,
   loadAllowCloud,
+  loadCanvasRecapPosition,
   loadCanvasRecapIntervalMinutes,
+  saveCanvasRecapPosition,
 } from '../preferences'
 import { readLlmSettings } from '../lib/llmSettings'
 import { useI18n } from '../lib/i18n'
@@ -86,6 +89,16 @@ type OwnerIdentity = {
   avatarUrl: string | null
 }
 
+type RecapDragState = {
+  pointerId: number
+  startClientX: number
+  startClientY: number
+  originX: number
+  originY: number
+  width: number
+  height: number
+}
+
 type CanvasListTab = 'my' | 'team'
 
 const DEFAULT_TEMPLATE_TAGS = ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo']
@@ -132,6 +145,7 @@ export function CanvasToolbar({
   const recapInFlightRef = useRef<Set<string>>(new Set())
   const recapCollapseTimerRef = useRef<number | null>(null)
   const recapHoveringRef = useRef(false)
+  const recapDragRef = useRef<RecapDragState | null>(null)
   const plannerStateRef = useRef<PlannerGraphState | null>(plannerState)
   const canvasMonitorRef = useRef<CanvasMonitor | null>(canvasMonitor)
   const hoverHideTimerRef = useRef<number | null>(null)
@@ -163,6 +177,7 @@ export function CanvasToolbar({
   const [recap, setRecap] = useState<CanvasRecap | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
+  const [recapPosition, setRecapPosition] = useState<{ x: number; y: number } | null>(null)
   // recap 收起(默认)/ 展开二态。展开:summary + details + status-strip 全显示;
   // 收起:只留一行 headline,连 details + status-strip 一起收,给悬浮的 session
   // overlay 让出 canvas 空间(overlay 顶部跟随 --canvas-toolbar-bottom 自适应,见下方
@@ -224,6 +239,10 @@ export function CanvasToolbar({
     if (activeGroup) setCanvasListTab(activeGroup.id)
   }, [activeCanvasId, canvasEntryGroups, menuOpen])
 
+  useEffect(() => {
+    setRecapPosition(activeCanvas ? loadCanvasRecapPosition(activeCanvas.id) : null)
+  }, [activeCanvas?.id])
+
   const closePanels = () => {
     setCreating(false)
     setClearConfirming(false)
@@ -279,12 +298,84 @@ export function CanvasToolbar({
     scheduleRecapAutoCollapse()
   }
 
+  const handleRecapDragPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!activeCanvas) return
+    const node = recapContextRef.current
+    if (!node) return
+    const rect = node.getBoundingClientRect()
+    const origin = clampRecapPosition(
+      recapPosition?.x ?? rect.left,
+      recapPosition?.y ?? rect.top,
+      rect.width,
+      rect.height,
+    )
+    event.preventDefault()
+    event.stopPropagation()
+    cancelRecapAutoCollapse()
+    setRecapPosition(origin)
+    recapDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      originX: origin.x,
+      originY: origin.y,
+      width: rect.width,
+      height: rect.height,
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  const handleRecapDragPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = recapDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    const next = clampRecapPosition(
+      drag.originX + event.clientX - drag.startClientX,
+      drag.originY + event.clientY - drag.startClientY,
+      drag.width,
+      drag.height,
+    )
+    setRecapPosition(next)
+  }
+
+  const finishRecapDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = recapDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const next = clampRecapPosition(
+      drag.originX + event.clientX - drag.startClientX,
+      drag.originY + event.clientY - drag.startClientY,
+      drag.width,
+      drag.height,
+    )
+    recapDragRef.current = null
+    setRecapPosition(next)
+    if (activeCanvas) saveCanvasRecapPosition(activeCanvas.id, next)
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+  }
+
   useEffect(() => {
     return () => {
       cancelRecapAutoCollapse()
       cancelHoverHide()
     }
   }, [])
+
+  useEffect(() => {
+    if (!activeCanvas || !recapPosition) return undefined
+    const onResize = () => {
+      const node = recapContextRef.current
+      if (!node) return
+      const rect = node.getBoundingClientRect()
+      const next = clampRecapPosition(recapPosition.x, recapPosition.y, rect.width, rect.height)
+      if (next.x === recapPosition.x && next.y === recapPosition.y) return
+      setRecapPosition(next)
+      saveCanvasRecapPosition(activeCanvas.id, next)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [activeCanvas, recapPosition])
 
   useEffect(() => {
     plannerStateRef.current = plannerState
@@ -626,13 +717,24 @@ export function CanvasToolbar({
   const recapSummary = recap?.summary?.trim() || ''
   const recapDetails = recap?.details ?? []
   const canExpandRecap = recapSummary.length > 0 || recapDetails.length > 0
+  const isSceneCanvas = Boolean(plannerState?.canvas.id === activeCanvas.id && plannerState.canvas.sceneSpec)
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
   const canSaveActiveCanvasAsTemplate = Boolean(
     onSaveCanvasAsTemplate && activeCanvas.kind !== 'template' && activeCanvas.kind !== 'monitor',
   )
+  const recapContextStyle: CSSProperties | undefined = recapPosition
+    ? { position: 'fixed', left: recapPosition.x, top: recapPosition.y }
+    : undefined
 
   return (
-    <div className={`canvas-toolbar${isMonitorCanvas ? ' canvas-toolbar--monitor' : ''}`} ref={rootRef}>
+    <div
+      className={[
+        'canvas-toolbar',
+        isMonitorCanvas ? 'canvas-toolbar--monitor' : '',
+        isSceneCanvas ? 'canvas-toolbar--scene' : '',
+      ].filter(Boolean).join(' ')}
+      ref={rootRef}
+    >
       {activeCanvas.draftOfTemplateId && (
         <div className="canvas-toolbar__draft-banner">
           <span>
@@ -842,13 +944,24 @@ export function CanvasToolbar({
         )}
       </div>
       <div
-        className="canvas-toolbar__context"
+        className={`canvas-toolbar__context${recapPosition ? ' is-positioned' : ''}`}
         ref={recapContextRef}
+        style={recapContextStyle}
         aria-live="polite"
         onMouseEnter={handleRecapMouseEnter}
         onMouseLeave={handleRecapMouseLeave}
       >
         <div className="canvas-toolbar__recap">
+          <button
+            type="button"
+            className="canvas-toolbar__recap-drag"
+            aria-label="Move AI recap"
+            title="Move AI recap"
+            onPointerDown={handleRecapDragPointerDown}
+            onPointerMove={handleRecapDragPointerMove}
+            onPointerUp={finishRecapDrag}
+            onPointerCancel={finishRecapDrag}
+          />
           <button
             type="button"
             className="canvas-toolbar__recap-trigger"
@@ -866,7 +979,6 @@ export function CanvasToolbar({
             }}
             disabled={!canExpandRecap}
           >
-            <Sparkles size={13} aria-hidden />
             <span className="canvas-toolbar__recap-copy">
               <span className="canvas-toolbar__recap-headline-row">
                 <strong>{recapHeadline}</strong>
@@ -1695,6 +1807,20 @@ function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
 
 function templateKindForCanvas(canvas: CanvasInfo): TemplateMetadataInput['defaultCanvasKind'] {
   return canvas.kind === 'monitor' ? 'monitor' : 'board'
+}
+
+function clampRecapPosition(x: number, y: number, width: number, height: number): { x: number; y: number } {
+  const margin = 12
+  const safeX = Number.isFinite(x) ? x : margin
+  const safeY = Number.isFinite(y) ? y : margin
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 240
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : 64
+  const maxX = Math.max(margin, window.innerWidth - Math.max(safeWidth, 240) - margin)
+  const maxY = Math.max(margin, window.innerHeight - Math.max(safeHeight, 64) - margin)
+  return {
+    x: Math.round(Math.min(Math.max(safeX, margin), maxX)),
+    y: Math.round(Math.min(Math.max(safeY, margin), maxY)),
+  }
 }
 
 function buildCanvasListEntries(

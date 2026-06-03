@@ -492,6 +492,7 @@ struct CanvasTemplateDTO: Encodable {
     let defaultNodesCount: Int
     let updatedAt: Date?
     let defaultNodes: [CanvasTemplateNodeSpecDTO]
+    let sceneSpec: CanvasSceneSpec?
 }
 
 struct CanvasTemplatesEnvelope: Encodable {

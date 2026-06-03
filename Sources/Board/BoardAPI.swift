@@ -1859,6 +1859,7 @@ enum BoardAPI {
         struct DispatchRequest: Decodable {
             let runner: PlannerDispatchRunner?
             let cwd: String?
+            let initialPrompt: String?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -1880,6 +1881,7 @@ enum BoardAPI {
                 canvasId: canvasId,
                 node: result.dispatchedNode,
                 cwdOverride: body?.cwd,
+                initialPromptOverride: body?.initialPrompt,
                 includeInitialPromptInIntent: false
             )
             if let spawnRequest {
@@ -2658,6 +2660,224 @@ enum BoardAPI {
         }
     }
 
+    static func runCanvasSceneAction(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        struct Body: Decodable {
+            var actionId: String
+            var userRole: String?
+            var controlledPlayerId: String?
+            var autoRun: Bool?
+        }
+        guard let body = try? JSONDecoder().decode(Body.self, from: Data(req.body)),
+              !body.actionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"actionId\":\"...\"}", status: 400)
+        }
+        do {
+            let actor = PlannerPermission.currentActorId()
+            let snapshot = BoardLayoutStore.shared.snapshot()
+            let state = try PlannerBoardBridge.canvasState(for: canvasId, snapshot: snapshot, actorUserId: actor)
+            guard let scene = state.canvas.sceneSpec,
+                  scene.kind == "poker-table",
+                  scene.orchestration?.kind == "poker-rules-v1" else {
+                return errorResponse("unsupported_scene_action", "only poker-rules-v1 scene actions are supported", status: 400)
+            }
+            guard let dealerNodeId = scene.orchestration?.stateNodeId
+                    ?? scene.artifactBindings.first(where: { $0.id == "game-state" })?.nodeId else {
+                return errorResponse("invalid_scene", "poker scene is missing Dealer state binding", status: 400)
+            }
+            switch body.actionId {
+            case "start-game":
+                try configurePokerRoleNodes(
+                    canvasId: canvasId,
+                    scene: scene,
+                    userRole: body.userRole ?? "observer",
+                    controlledPlayerId: body.controlledPlayerId
+                )
+                let role = normalizedPokerUserRole(body.userRole)
+                let controlled = normalizedPokerPlayerId(body.controlledPlayerId)
+                let autoRun = body.autoRun ?? true
+                let gameState = pokerInitialGameState(userRole: role, controlledPlayerId: controlled, autoRun: autoRun)
+                let actionLog: BoardJSONValue = .object([
+                    "actionLog": .array([
+                        .string("Rules Orchestrator 初始化牌局"),
+                        .string("Blind posted: 50 / 100"),
+                        .string("下一行动: Ada")
+                    ])
+                ])
+                var result = try submitPokerSystemState(
+                    canvasId: canvasId,
+                    dealerNodeId: dealerNodeId,
+                    summary: "Rules Orchestrator started Poker Table",
+                    gameState: gameState,
+                    actionLog: actionLog,
+                    actorUserId: actor
+                )
+                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+                BoardServer.shared.broadcastStateChanged()
+                return jsonResponse(result, status: 201, reason: "Created")
+            case "pause-auto", "resume-auto", "step":
+                let autoRun = body.actionId == "resume-auto"
+                let status: String
+                switch body.actionId {
+                case "pause-auto": status = "paused"
+                case "resume-auto": status = "auto-running"
+                default: status = "stepped"
+                }
+                let patch: BoardJSONValue = .object([
+                    "setup": .object(["autoRun": .bool(autoRun)]),
+                    "orchestrationStatus": .string(status),
+                    "actionLog": .array([
+                        .string("Rules Orchestrator \(status)"),
+                        .string("下一步由当前行动者节点产出 Player Action Artifact")
+                    ])
+                ])
+                var result = try submitPokerSystemState(
+                    canvasId: canvasId,
+                    dealerNodeId: dealerNodeId,
+                    summary: "Rules Orchestrator \(status)",
+                    gameState: patch,
+                    actionLog: .object(["actionLog": patch.objectValue?["actionLog"] ?? .array([])]),
+                    actorUserId: actor
+                )
+                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+                BoardServer.shared.broadcastStateChanged()
+                return jsonResponse(result, status: 201, reason: "Created")
+            default:
+                return errorResponse("unsupported_scene_action", "unsupported poker scene action '\(body.actionId)'", status: 400)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func configurePokerRoleNodes(
+        canvasId: String,
+        scene: CanvasSceneSpec,
+        userRole: String,
+        controlledPlayerId: String?
+    ) throws {
+        let role = normalizedPokerUserRole(userRole)
+        let controlled = normalizedPokerPlayerId(controlledPlayerId)
+        let playerAnchors = scene.nodeAnchors.filter { $0.role == "player" }
+        for anchor in playerAnchors {
+            let shouldBeHuman = role == "player" && normalizedPokerPlayerId(anchor.id) == controlled
+            _ = try PlannerBoardBridge.store.updateNodeGate(
+                canvasId: canvasId,
+                nodeId: anchor.nodeId,
+                executionMode: shouldBeHuman ? .human : .auto
+            )
+        }
+        if let dealer = scene.nodeAnchors.first(where: { $0.role == "dealer" }) {
+            _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: canvasId, nodeId: dealer.nodeId, executionMode: .auto)
+        }
+        if let gm = scene.nodeAnchors.first(where: { $0.id == "gm" || $0.role == "approval" }) {
+            _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: canvasId, nodeId: gm.nodeId, executionMode: .human)
+        }
+    }
+
+    private static func submitPokerSystemState(
+        canvasId: String,
+        dealerNodeId: String,
+        summary: String,
+        gameState: BoardJSONValue,
+        actionLog: BoardJSONValue,
+        actorUserId: String?
+    ) throws -> PlannerNodeOutputResult {
+        let output = PlannerNodeOutput(
+            nodeId: dealerNodeId,
+            status: .done,
+            message: PlannerNodeOutputMessage(summary: summary, routeTo: []),
+            artifacts: [
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "game-state.json",
+                    reference: "game-state.json",
+                    payload: sceneJSONPayload(gameState),
+                    routeTo: []
+                ),
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "action-log.json",
+                    reference: "action-log.json",
+                    payload: sceneJSONPayload(actionLog),
+                    routeTo: []
+                )
+            ],
+            next: .complete,
+            forceNewVersion: true
+        )
+        return try PlannerBoardBridge.submitNodeOutput(
+            nodeId: dealerNodeId,
+            output: output,
+            for: canvasId,
+            snapshot: BoardLayoutStore.shared.snapshot(),
+            actorUserId: actorUserId,
+            submittedByKind: .system,
+            submittedBy: "Rules Orchestrator"
+        )
+    }
+
+    private static func sceneJSONPayload(_ sceneState: BoardJSONValue) -> BoardJSONValue {
+        .object([
+            "type": .string("json"),
+            "sceneState": sceneState
+        ])
+    }
+
+    private static func normalizedPokerUserRole(_ raw: String?) -> String {
+        let value = (raw ?? "observer").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch value {
+        case "gm", "player", "all-ai", "observer":
+            return value
+        default:
+            return "observer"
+        }
+    }
+
+    private static func normalizedPokerPlayerId(_ raw: String?) -> String? {
+        let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["ada", "bruno", "mina"].contains(value) ? value : nil
+    }
+
+    private static func pokerInitialGameState(
+        userRole: String,
+        controlledPlayerId: String?,
+        autoRun: Bool
+    ) -> BoardJSONValue {
+        .object([
+            "setup": .object([
+                "started": .bool(true),
+                "userRole": .string(userRole),
+                "controlledPlayerId": controlledPlayerId.map(BoardJSONValue.string) ?? .null,
+                "autoRun": .bool(autoRun)
+            ]),
+            "phase": .string("Pre-flop"),
+            "pot": .number(150),
+            "nextActor": .string("ada"),
+            "nextAction": .string("Ada"),
+            "communityCards": .array([.string("??"), .string("??"), .string("??"), .string("??"), .string("??")]),
+            "legalActions": .array([.string("fold"), .string("call"), .string("raise")]),
+            "handStatus": .string("in-progress"),
+            "orchestrationStatus": .string(autoRun ? "auto-running" : "paused"),
+            "players": .array([
+                .object(["id": .string("dealer"), "name": .string("Dealer"), "stack": .number(0), "status": .string("active"), "seat": .string("top"), "holeCards": .array([])]),
+                .object(["id": .string("ada"), "name": .string("Ada"), "style": .string("紧凶型"), "stack": .number(950), "status": .string("to-act"), "seat": .string("left"), "holeCards": .array([.string("As"), .string("Ks")])]),
+                .object(["id": .string("bruno"), "name": .string("Bruno"), "style": .string("诈唬型"), "stack": .number(870), "status": .string("waiting"), "seat": .string("right"), "holeCards": .array([.string("Qh"), .string("Js")])]),
+                .object(["id": .string("mina"), "name": .string("Mina"), "style": .string("保守观察"), "stack": .number(1020), "status": .string("waiting"), "seat": .string("bottom"), "holeCards": .array([.string("9c"), .string("9d")])])
+            ]),
+            "actionLog": .array([
+                .string("Rules Orchestrator 初始化牌局"),
+                .string("Blind posted: 50 / 100"),
+                .string("下一行动: Ada")
+            ]),
+            "rulesMode": .string("phase/order/card-uniqueness assisted; no side-pot engine")
+        ])
+    }
+
     static func getPlannerArtifactContent(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let artifactId = req.params[":artifactId"], !artifactId.isEmpty else {
@@ -3333,6 +3553,7 @@ enum BoardAPI {
         canvasId: String,
         node: PlanningNode,
         cwdOverride: String?,
+        initialPromptOverride: String? = nil,
         includeInitialPromptInIntent: Bool = true
     ) throws -> PlannerDispatchSpawnRequest? {
         guard node.workflowRunState == .dispatched else { return nil }
@@ -3353,7 +3574,11 @@ enum BoardAPI {
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
         // `PlannerSessionRunStateBridge` can resolve step → session.
         let purpose = "planner:\(node.id)"
-        let initialPrompt = plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
+        let basePrompt = plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
+        let scenePrompt = initialPromptOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialPrompt = scenePrompt?.isEmpty == false
+            ? "\(basePrompt)\n\nScene action:\n\(scenePrompt!)"
+            : basePrompt
         try BoardLayoutStore.shared.recordSpawnIntent(
             canvasId: canvasId,
             cwd: cwd,
@@ -5517,7 +5742,7 @@ enum BoardAPI {
         }
         let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
         guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board, monitor, template, kanban, inbox, or matrix", status: 400)
+            return errorResponse("bad_request", "kind must be board, monitor, or template", status: 400)
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
@@ -5619,7 +5844,7 @@ enum BoardAPI {
 
     static let canvasTemplateTags = [
         "engineering", "code-review", "release", "monitor", "workflow",
-        "recap", "research", "design", "ops", "demo"
+        "recap", "research", "design", "ops", "demo", "scene", "travel", "game"
     ]
 
     /// GET /api/templates — returns the unified template catalog:
@@ -5660,7 +5885,8 @@ enum BoardAPI {
             canReplace: false,
             defaultNodesCount: template.defaultNodes.count,
             updatedAt: nil,
-            defaultNodes: template.defaultNodes.map(templateNodeDTO(_:))
+            defaultNodes: template.defaultNodes.map(templateNodeDTO(_:)),
+            sceneSpec: template.sceneSpec
         )
     }
 
@@ -5699,7 +5925,8 @@ enum BoardAPI {
             canReplace: canEdit,
             defaultNodesCount: count,
             updatedAt: metadata.updatedAt,
-            defaultNodes: []
+            defaultNodes: [],
+            sceneSpec: PlannerBoardBridge.store.reusableSceneSpec(canvasId: canvas.id)
         )
     }
 
@@ -5731,6 +5958,10 @@ enum BoardAPI {
             tags.formUnion(["engineering", "workflow"])
         case "npc-canvas":
             tags.formUnion(["demo", "design"])
+        case "travel-squad":
+            tags.formUnion(["demo", "travel", "scene"])
+        case "poker-table":
+            tags.formUnion(["demo", "game", "scene"])
         default:
             tags.insert("workflow")
         }
@@ -5832,6 +6063,7 @@ enum BoardAPI {
     private struct TemplateApplyRequest: Decodable {
         let name: String?
         let scope: String?
+        let adaptationPrompt: String?
     }
 
     private struct TemplateReplaceRequest: Decodable {
@@ -5863,16 +6095,28 @@ enum BoardAPI {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
 
+        let adaptationPrompt = body.adaptationPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let template = CanvasTemplateRegistry.get(templateId) {
-            return applyOfficialCanvasTemplate(template, name: name, scope: scope)
+            return applyOfficialCanvasTemplate(
+                template,
+                name: name,
+                scope: scope,
+                adaptationPrompt: adaptationPrompt?.isEmpty == false ? adaptationPrompt : nil
+            )
         }
-        return applyCustomCanvasTemplate(templateId, name: name, scope: scope)
+        return applyCustomCanvasTemplate(
+            templateId,
+            name: name,
+            scope: scope,
+            adaptationPrompt: adaptationPrompt?.isEmpty == false ? adaptationPrompt : nil
+        )
     }
 
     private static func applyOfficialCanvasTemplate(
         _ template: CanvasTemplate,
         name: String,
-        scope: BoardLayoutStore.CanvasScope
+        scope: BoardLayoutStore.CanvasScope,
+        adaptationPrompt: String?
     ) -> HttpResponse {
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(
@@ -5889,7 +6133,11 @@ enum BoardAPI {
                 id: boardCanvas.id,
                 ownerId: ownerId,
                 title: boardCanvas.name,
-                plannerContext: "template:\(template.id)"
+                plannerContext: templatePlannerContext(template.id, adaptationPrompt: adaptationPrompt),
+                sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(
+                    template: template,
+                    canvasId: canvasId
+                )
             )
             let seedNodes = CanvasTemplateRegistry.materializeNodes(
                 template: template,
@@ -5907,7 +6155,8 @@ enum BoardAPI {
     private static func applyCustomCanvasTemplate(
         _ templateId: String,
         name: String,
-        scope: BoardLayoutStore.CanvasScope
+        scope: BoardLayoutStore.CanvasScope,
+        adaptationPrompt: String?
     ) -> HttpResponse {
         let actor = BoardLayoutStore.shared.currentActorContext()
         guard let templateCanvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
@@ -5930,13 +6179,24 @@ enum BoardAPI {
                 from: templateId,
                 to: planningCanvas(
                     for: boardCanvas,
-                    context: "template:\(templateId):version:\(metadata.version)"
+                    context: templatePlannerContext(
+                        "\(templateId):version:\(metadata.version)",
+                        adaptationPrompt: adaptationPrompt
+                    )
                 )
             )
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
         }
+    }
+
+    private static func templatePlannerContext(_ templateRef: String, adaptationPrompt: String?) -> String {
+        guard let prompt = adaptationPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return "template:\(templateRef)"
+        }
+        return "template:\(templateRef)\nadaptation:\(prompt)"
     }
 
     static func createTemplateFromCanvas(_ req: HttpRequest) -> HttpResponse {

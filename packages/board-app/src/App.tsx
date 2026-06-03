@@ -1045,8 +1045,8 @@ export default function App() {
 
   // Chunk F: spawn a canvas from a builtin gallery template, then jump to it.
   const handleApplyTemplate = useCallback(
-    (templateId: string, name: string, scope: CanvasScope) => {
-      return applyCanvasTemplate(templateId, { name, scope }).then((list) => {
+    (templateId: string, name: string, scope: CanvasScope, adaptationPrompt?: string) => {
+      return applyCanvasTemplate(templateId, { name, scope, adaptationPrompt }).then((list) => {
         applyCanvasList(list)
         setWorkspaceMode('planner')
         handleSetActiveCanvas(list.activeCanvasId)
@@ -1269,6 +1269,7 @@ export default function App() {
                 onPlannerStateChange={setActivePlannerState}
                 onOpenSubCanvas={handleSetActiveCanvas}
                 onNotify={pushToast}
+                onApplyTemplate={handleApplyTemplate}
                 canvasMonitor={activeCanvasMonitor}
                 dialogCollapsed={plannerPanelCollapsed}
                 onDialogCollapsedChange={setPlannerPanelCollapsed}
@@ -1294,6 +1295,7 @@ export default function App() {
                 onPlannerStateChange={setActivePlannerState}
                 onOpenSubCanvas={handleSetActiveCanvas}
                 onNotify={pushToast}
+                onApplyTemplate={handleApplyTemplate}
                 canvasMonitor={activeCanvasMonitor}
                 dialogCollapsed={plannerPanelCollapsed}
                 onDialogCollapsedChange={setPlannerPanelCollapsed}

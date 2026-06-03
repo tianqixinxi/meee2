@@ -35,6 +35,7 @@ import {
   rejectPlannerProposal,
   rerunPlannerNode,
   resumeClosedPlannerSessions,
+  runCanvasSceneAction,
   sendPlannerActivity,
   updatePlannerNodeGate,
   updatePlannerNodeLayout,
@@ -53,6 +54,9 @@ import type {
   PlanningNode,
   PlanningNodeStatus,
   Session,
+  CanvasScope,
+  CanvasSceneAction,
+  CanvasSceneSpec,
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { CanvasTemplate, TeamMember, UserProfile } from '../../api'
@@ -72,6 +76,7 @@ import {
 import { classifyPlannerIntent } from '../../lib/plannerIntent'
 import {
   buildConfirmedPlanGraphChanges,
+  isScenePlanDraft,
   parseConfirmedPlanDraft,
 } from '../../lib/plannerPlanDraft'
 import {
@@ -91,6 +96,7 @@ import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { DataSourceRail } from './DataSourceRail'
 import { NodeInspectorModal, truncateMessageText } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
+import { CanvasSceneLayer, resolveCanvasSceneState, type CanvasSceneActionPayload } from './CanvasSceneLayer'
 import { MonitorGrid } from './monitor/MonitorGrid'
 import { MonitorHtmlFrame } from './monitor/MonitorHtmlFrame'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
@@ -118,6 +124,7 @@ interface Props {
   refreshTick?: number
   onOpenSubCanvas?: (canvasId: string) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
+  onApplyTemplate?: (templateId: string, name: string, scope: CanvasScope, adaptationPrompt?: string) => Promise<string>
   onPlannerStateChange?: (state: PlannerGraphState | null) => void
   canvasMonitor?: CanvasMonitor | null
   flowContent?: ReactNode
@@ -160,6 +167,7 @@ function PlannerGraphInner({
   refreshTick = 0,
   onOpenSubCanvas,
   onNotify,
+  onApplyTemplate,
   onPlannerStateChange,
   canvasMonitor = null,
   flowContent = null,
@@ -630,7 +638,7 @@ function PlannerGraphInner({
       })
   }, [canvasId, handleGraphStateChanged, notifyError, onNotify, workspacePath])
 
-  const handleCreateNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
+  const handleCreateNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner, initialPrompt?: string) => {
     const cwd = workspacePath.trim()
     if (!cwd) {
       notifyError('Current canvas workspace is not ready yet.')
@@ -643,7 +651,7 @@ function PlannerGraphInner({
       .catch(() => null)
       .then((beforeState) => {
         const existingSessionIds = new Set((beforeState?.sessions ?? []).map((session) => session.id))
-        return dispatchPlannerNodeSession(canvasId, nodeId, runner, cwd)
+        return dispatchPlannerNodeSession(canvasId, nodeId, runner, cwd, initialPrompt)
           .then((state) => {
             handleGraphStateChanged(state)
             setCreatingSessionNodeIds((current) => new Set(current).add(nodeId))
@@ -667,6 +675,39 @@ function PlannerGraphInner({
       .catch((err) => notifyError((err as Error).message || 'Failed to create node session'))
       .finally(() => setBusy(false))
   }, [canvasId, handleGraphStateChanged, notifyError, openInternalSessionForNode, warnMCPWritebackIfNeeded, workspacePath])
+
+  const handleSceneAction = useCallback((nodeId: string, actionId: string, payload?: CanvasSceneActionPayload) => {
+    const scene = plannerState?.canvas.sceneSpec
+    if (scene?.kind === 'poker-table'
+        && scene.orchestration?.kind === 'poker-rules-v1'
+        && ['start-game', 'step', 'resume-auto', 'pause-auto'].includes(actionId)) {
+      setBusy(true)
+      setError(null)
+      runCanvasSceneAction(canvasId, { actionId, ...payload })
+        .then((result) => {
+          handleGraphStateChanged(result.graph)
+          if (actionId !== 'pause-auto') {
+            dispatchNextPokerAutoNode(result.graph, handleCreateNodeSession)
+          }
+        })
+        .catch((err) => notifyError((err as Error).message || 'Failed to run scene action'))
+        .finally(() => setBusy(false))
+      return
+    }
+    const node = plannerState?.nodes.find((item) => item.id === nodeId)
+    if (!node) {
+      notifyError('Scene action target node is missing.')
+      return
+    }
+    const action = scene?.actions?.find((item) => item.id === actionId)
+    const pokerPrompt = scene?.kind === 'poker-table' && action
+      ? buildPokerSceneActionPrompt(scene, plannerState?.artifacts ?? [], action, node)
+      : ''
+    const initialPrompt = pokerPrompt
+      || action?.prompt?.trim()
+      || (action ? `${action.label} (${action.id})` : `Run scene action ${actionId}`)
+    handleCreateNodeSession(nodeId, dispatchRunnerForExecutor(node.executorType), initialPrompt)
+  }, [canvasId, handleCreateNodeSession, handleGraphStateChanged, notifyError, plannerState?.artifacts, plannerState?.canvas.sceneSpec, plannerState?.nodes])
 
   const handleReplaceNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
     const cwd = workspacePath.trim()
@@ -1628,6 +1669,32 @@ function PlannerGraphInner({
     const trimmed = message.trim()
     const confirmedPlan = parseConfirmedPlanDraft(trimmed)
     if (confirmedPlan) {
+      if (isScenePlanDraft(confirmedPlan)) {
+        if (!onApplyTemplate) {
+          notifyError('Scene template creation is not available in this surface.')
+          return
+        }
+        setBusy(true)
+        setError(null)
+        onApplyTemplate(
+          confirmedPlan.templateId,
+          confirmedPlan.title,
+          'personal',
+          confirmedPlan.adaptationPrompt ?? confirmedPlan.prompt,
+        )
+          .then(() => {
+            emitPlannerEvent('planner.scene_template_applied', {
+              canvasId,
+              templateId: confirmedPlan.templateId,
+              message: confirmedPlan.title,
+              intent: 'edit',
+            })
+            onNotify?.('success', `Created scene canvas from ${confirmedPlan.templateId}.`)
+          })
+          .catch((err) => notifyError((err as Error).message || 'Failed to create scene canvas'))
+          .finally(() => setBusy(false))
+        return
+      }
       setBusy(true)
       setError(null)
       const actorId = plannerState?.access.actorId
@@ -1751,9 +1818,32 @@ function PlannerGraphInner({
     }
 
     handleGenerate(trimmed)
-  }, [canvasId, handleGenerate, hasActionableDrift, notifyError, plannerState, proposal, selectedNode, userProfile?.userId])
+  }, [canvasId, handleGenerate, hasActionableDrift, notifyError, onApplyTemplate, onNotify, plannerState, proposal, selectedNode, userProfile?.userId])
 
-  const handleUseRecommendedTemplate = useCallback(() => {
+  const handleUseRecommendedTemplate = useCallback((recommendation?: { id?: string; title?: string; templateId?: string; adaptationPrompt?: string }) => {
+    if (recommendation?.templateId) {
+      if (!onApplyTemplate) {
+        notifyError('Scene template creation is not available in this surface.')
+        return
+      }
+      setBusy(true)
+      setError(null)
+      const name = recommendation.title?.trim() || canvasName || 'Scene Canvas'
+      onApplyTemplate(recommendation.templateId, name, 'personal', recommendation.adaptationPrompt)
+        .then(() => {
+          emitPlannerEvent('planner.scene_template_applied', {
+            canvasId,
+            templateId: recommendation.templateId,
+            message: name,
+            intent: 'edit',
+            reason: 'recommended-template',
+          })
+          onNotify?.('success', `Created scene canvas from ${recommendation.templateId}.`)
+        })
+        .catch((err) => notifyError((err as Error).message || 'Failed to create scene canvas'))
+        .finally(() => setBusy(false))
+      return
+    }
     setBusy(true)
     setError(null)
     createPlannerDeliveryPipeline(canvasId)
@@ -1766,7 +1856,7 @@ function PlannerGraphInner({
       })
       .catch((err) => setError((err as Error).message || 'Failed to create recommended template proposal'))
       .finally(() => setBusy(false))
-  }, [canvasId])
+  }, [canvasId, canvasName, notifyError, onApplyTemplate, onNotify])
 
   const handleApproveAndApply = useCallback(() => {
     if (!proposal || busy) return
@@ -1963,9 +2053,23 @@ function PlannerGraphInner({
             )}
           </div>
         )}
-        <div className="planner-flow" data-guide-target="planner-flow">
+        <div
+          className={[
+            'planner-flow',
+            plannerState && plannerState.canvas.id === canvasId && plannerState.canvas.sceneSpec ? 'planner-flow--scene' : '',
+          ].filter(Boolean).join(' ')}
+          data-guide-target="planner-flow"
+        >
           {flowContent ? (
             flowContent
+          ) : plannerState && plannerState.canvas.id === canvasId && plannerState.canvas.sceneSpec ? (
+            <CanvasSceneLayer
+              sceneSpec={plannerState.canvas.sceneSpec}
+              nodes={plannerState.nodes ?? []}
+              artifacts={plannerState.artifacts ?? []}
+              onOpenNode={handleOpenNodeDetails}
+              onSceneAction={handleSceneAction}
+            />
           ) : (
             <>
           {/* Canvas runtime Atom 4 — owner-curated monitor grid. Self-gates on
@@ -2826,6 +2930,86 @@ function PlannerWorkspacePreview({
       </ReactFlow>
     </div>
   )
+}
+
+function buildPokerSceneActionPrompt(
+  scene: CanvasSceneSpec,
+  artifacts: PlannerArtifact[],
+  action: CanvasSceneAction,
+  node: PlanningNode,
+): string {
+  if (!action.id.startsWith('ask-')) return ''
+  const playerId = action.id.replace(/^ask-/, '').toLowerCase()
+  if (!playerId || playerId === 'dealer') return ''
+  const state = resolveCanvasSceneState(scene, artifacts)
+  const players = Array.isArray(state.players) ? state.players : []
+  const actor = players
+    .map((item) => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null)
+    .find((item) => String(item?.id ?? '').toLowerCase() === playerId)
+  if (!actor) return action.prompt?.trim() ?? ''
+  const publicPlayers = players
+    .map((item) => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null)
+    .filter(Boolean)
+    .map((item) => ({
+      id: String(item?.id ?? ''),
+      name: String(item?.name ?? ''),
+      stack: item?.stack ?? null,
+      status: String(item?.status ?? ''),
+      seat: String(item?.seat ?? ''),
+      style: String(item?.style ?? ''),
+      holeCards: String(item?.id ?? '').toLowerCase() === playerId ? item?.holeCards ?? [] : ['hidden', 'hidden'],
+    }))
+  const pack = {
+    nodeContract: {
+      nodeId: node.id,
+      title: node.title,
+      goal: node.schema.goal,
+      output: `${playerId}-action.json`,
+    },
+    roleSlice: {
+      playerId,
+      phase: state.phase ?? 'Pre-flop',
+      pot: state.pot ?? 0,
+      nextActor: state.nextActor ?? state.nextAction ?? '',
+      communityCards: state.communityCards ?? [],
+      legalActions: state.legalActions ?? ['fold', 'call', 'raise'],
+      players: publicPlayers,
+      recentActionLog: Array.isArray(state.actionLog) ? state.actionLog.slice(-8) : [],
+    },
+    outputSchema: {
+      artifact: `${playerId}-action.json`,
+      playerId,
+      action: 'fold | call | raise | check',
+      amount: 'number | null',
+      rationale: 'string',
+    },
+  }
+  return [
+    action.prompt?.trim() || `现在轮到 ${playerId} 行动。`,
+    '',
+    'Use this deterministic Poker Context Pack. Do not assume hidden cards outside your role slice.',
+    JSON.stringify(pack, null, 2),
+  ].join('\n')
+}
+
+function dispatchNextPokerAutoNode(
+  graph: PlannerGraphState,
+  createSession: (nodeId: string, runner: PlannerDispatchRunner, initialPrompt?: string) => void,
+) {
+  const scene = graph.canvas.sceneSpec
+  if (!scene || scene.kind !== 'poker-table') return
+  const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
+  const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
+    ? state.setup as Record<string, unknown>
+    : {}
+  if (setup.autoRun === false) return
+  const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
+  if (!nextActor || nextActor === 'setup') return
+  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
+  if (!action) return
+  const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
+  if (!node || node.executionMode === 'human' || node.executorType === 'human') return
+  createSession(node.id, dispatchRunnerForExecutor(node.executorType), buildPokerSceneActionPrompt(scene, graph.artifacts ?? [], action, node))
 }
 
 function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {
