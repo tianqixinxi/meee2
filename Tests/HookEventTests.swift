@@ -53,6 +53,19 @@ final class HookEventTests: XCTestCase {
         XCTAssertEqual(event.lastAssistantMessage, "Task completed successfully")
     }
 
+    func testParseMeee2AssistantSessionMarker() throws {
+        let json = """
+        {
+            "hook_event_name": "Stop",
+            "session_id": "abc-123",
+            "meee2AssistantSession": true
+        }
+        """
+        let event = try JSONDecoder().decode(HookEvent.self, from: json.data(using: .utf8)!)
+        XCTAssertTrue(event.meee2AssistantSession)
+        XCTAssertTrue(event.suppressesAssistantCompletionSound)
+    }
+
     func testParseSessionStartWithTerminalInfo() throws {
         let json = """
         {
@@ -141,5 +154,28 @@ final class HookEventTests: XCTestCase {
         // Non-permission event → not urgent
         let tool = HookEvent(event: .postToolUse, sessionId: "s")
         XCTAssertFalse(tool.shouldShowUrgentPanel)
+    }
+
+    func testMeee2AssistantSessionOnlySuppressesCompletionSounds() {
+        let stopEvent = HookEvent(event: .stop, sessionId: "s", meee2AssistantSession: true)
+        XCTAssertTrue(stopEvent.suppressesAssistantCompletionSound)
+
+        let completedNotification = HookEvent(
+            event: .notification,
+            sessionId: "s",
+            notification: "Task completed.",
+            meee2AssistantSession: true
+        )
+        XCTAssertTrue(completedNotification.suppressesAssistantCompletionSound)
+
+        let permissionEvent = HookEvent(
+            event: .permissionRequest,
+            sessionId: "s",
+            meee2AssistantSession: true
+        )
+        XCTAssertFalse(permissionEvent.suppressesAssistantCompletionSound)
+
+        let userStopEvent = HookEvent(event: .stop, sessionId: "s")
+        XCTAssertFalse(userStopEvent.suppressesAssistantCompletionSound)
     }
 }

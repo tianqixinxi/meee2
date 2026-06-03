@@ -182,6 +182,9 @@ public struct HookEvent: Decodable, Sendable {
     /// 主用作 capture-phase 锚定；运行时 AppleScript 寻址 Apple Terminal 用 tty 更稳。
     public let appleTerminalSessionId: String?
 
+    /// meee2 自己发起的本地 assistant / recap `claude -p` session。
+    public let meee2AssistantSession: Bool
+
     /// 时间戳
     public let timestamp: Date?
 
@@ -403,6 +406,7 @@ public struct HookEvent: Decodable, Sendable {
         case ghosttyTerminalId
         case iTermSessionId
         case appleTerminalSessionId
+        case meee2AssistantSession
         case timestamp
     }
 
@@ -431,6 +435,7 @@ public struct HookEvent: Decodable, Sendable {
         ghosttyTerminalId: String? = nil,
         iTermSessionId: String? = nil,
         appleTerminalSessionId: String? = nil,
+        meee2AssistantSession: Bool = false,
         timestamp: Date? = nil,
         rawData: String? = nil
     ) {
@@ -455,6 +460,7 @@ public struct HookEvent: Decodable, Sendable {
         self.ghosttyTerminalId = ghosttyTerminalId
         self.iTermSessionId = iTermSessionId
         self.appleTerminalSessionId = appleTerminalSessionId
+        self.meee2AssistantSession = meee2AssistantSession
         self.timestamp = timestamp
         self.rawData = rawData
     }
@@ -496,6 +502,7 @@ public struct HookEvent: Decodable, Sendable {
         ghosttyTerminalId = try container.decodeIfPresent(String.self, forKey: .ghosttyTerminalId)
         iTermSessionId = try container.decodeIfPresent(String.self, forKey: .iTermSessionId)
         appleTerminalSessionId = try container.decodeIfPresent(String.self, forKey: .appleTerminalSessionId)
+        meee2AssistantSession = try container.decodeIfPresent(Bool.self, forKey: .meee2AssistantSession) ?? false
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp)
     }
 }
@@ -503,6 +510,22 @@ public struct HookEvent: Decodable, Sendable {
 // MARK: - 解析助手
 
 public extension HookEvent {
+    /// meee2 自己的 assistant / recap session 仍进状态流,但完成音不要打扰用户。
+    var suppressesAssistantCompletionSound: Bool {
+        guard meee2AssistantSession else { return false }
+        switch event {
+        case .stop, .sessionEnd:
+            return true
+        case .notification:
+            let message = (notification ?? "").lowercased()
+            return message.contains("completed") || message.contains("finished")
+        case .none, .sessionStart, .permissionRequest, .postToolUse, .postToolUseFailure,
+             .preToolUse, .preCompact, .postCompact, .stopFailure, .cwdChanged,
+             .subagentStart, .subagentStop, .userPromptSubmit:
+            return false
+        }
+    }
+
     /// 从 JSON 字符串解析 HookEvent
     static func parse(from jsonString: String) -> HookEvent? {
         guard let data = jsonString.data(using: .utf8) else { return nil }

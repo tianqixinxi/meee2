@@ -3,8 +3,6 @@ import {
   Archive,
   LayoutTemplate,
   Network,
-  PanelLeftClose,
-  PanelLeftOpen,
   Settings,
   User,
   UsersRound,
@@ -21,32 +19,25 @@ interface WorkspaceRailProps {
   activeCanvasId: string
   mode: WorkspaceMode
   userProfile: UserProfile | null
-  collapsed: boolean
-  onCollapsedChange: (collapsed: boolean) => void
   onModeChange: (mode: WorkspaceMode) => void
 }
 
-const RAIL_WIDTH = 208
-const RAIL_COLLAPSED_WIDTH = 52
+const RAIL_WIDTH = 176
 
 export function WorkspaceRail({
   mode,
   userProfile,
-  collapsed,
-  onCollapsedChange,
   onModeChange,
 }: WorkspaceRailProps) {
   const { t } = useI18n()
   useEffect(() => {
-    document.documentElement.style.setProperty('--sidebar-width', `${collapsed ? RAIL_COLLAPSED_WIDTH : RAIL_WIDTH}px`)
+    document.documentElement.style.setProperty('--sidebar-width', `${RAIL_WIDTH}px`)
     document.documentElement.classList.add('board-sidebar-rail')
-    document.documentElement.classList.toggle('board-sidebar-collapsed', collapsed)
     return () => {
       document.documentElement.style.removeProperty('--sidebar-width')
       document.documentElement.classList.remove('board-sidebar-rail')
-      document.documentElement.classList.remove('board-sidebar-collapsed')
     }
-  }, [collapsed])
+  }, [])
 
   const showTeam = Boolean(userProfile?.connected)
 
@@ -68,24 +59,16 @@ export function WorkspaceRail({
   const showFallbackUserIcon = !avatarUrl && !avatarInitials
 
   return (
-    <nav className={`workspace-rail${collapsed ? ' is-collapsed' : ''}`} aria-label={t('rail.workspace')}>
+    <nav className="workspace-rail" aria-label={t('rail.workspace')}>
       <div className="workspace-rail__top">
         <button
           type="button"
           className={`workspace-rail__avatar${avatarUrl ? ' has-image' : ''}${showFallbackUserIcon ? ' has-user-icon' : ''}`}
-          title={avatarLabel}
+          title={t('rail.settings')}
           aria-label={avatarLabel}
+          onClick={() => onModeChange('settings')}
         >
           {avatarUrl ? <img src={avatarUrl} alt="" /> : showFallbackUserIcon ? <User size={20} /> : avatarInitials}
-        </button>
-        <button
-          type="button"
-          className="workspace-rail__collapse"
-          aria-label={collapsed ? t('rail.expand') : t('rail.collapse')}
-          title={collapsed ? t('rail.expand') : t('rail.collapse')}
-          onClick={() => onCollapsedChange(!collapsed)}
-        >
-          {collapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
         </button>
       </div>
 

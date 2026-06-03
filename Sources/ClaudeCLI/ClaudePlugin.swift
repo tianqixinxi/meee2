@@ -650,7 +650,11 @@ class ClaudePlugin: SessionPlugin {
 
         // 触发音效
         if let eventType = event.event, let soundEvent = eventType.soundEvent {
-            SoundManager.shared.play(event: soundEvent)
+            if event.suppressesAssistantCompletionSound {
+                MDebug("[ClaudePlugin] Suppressed assistant completion sound sid=\(sessionId.prefix(8)) event=\(eventType.rawValue)")
+            } else {
+                SoundManager.shared.play(event: soundEvent)
+            }
         }
     }
 
