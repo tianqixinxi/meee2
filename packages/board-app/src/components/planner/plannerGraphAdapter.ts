@@ -53,6 +53,28 @@ function widgetDefaultSize(kind: string | undefined | null): { width: number; he
   }
 }
 
+// 会话 id 别名匹配 — board DTO 暴露的 canonical/internal id 与节点绑定的
+// provider/resume/de-prefixed id 之间,planner 各处(open-session 匹配、backend
+// monitor)都按「相等 或 互为 `-` 前后缀」来认。集中在此,PlannerGraph 与本
+// adapter 共用,避免某处退化成字节级精确匹配、让别名绑定的节点状态错乱。
+export function sessionMatchesBoundId(liveId: string, boundId: string): boolean {
+  return liveId === boundId
+    || liveId.endsWith(`-${boundId}`)
+    || boundId.endsWith(`-${liveId}`)
+}
+
+// 节点当前绑定的会话是否仍存活、可打开。liveSessionIds 是「精确」id 集合,但绑定
+// id 可能是别名(见 sessionMatchesBoundId),精确命中之外再按别名规则兜一遍,否则
+// 别名绑定的节点会从「在线待命」错误回退成「未启动/完成」。
+export function boundSessionIsLive(liveSessionIds: Set<string> | undefined, boundId: string | null): boolean {
+  if (!liveSessionIds || !boundId) return false
+  if (liveSessionIds.has(boundId)) return true
+  for (const liveId of liveSessionIds) {
+    if (sessionMatchesBoundId(liveId, boundId)) return true
+  }
+  return false
+}
+
 /** 卡片用的「简略进展」—— 和 inspector「进展」段订阅同一个数据源(实时
  *  boardState.sessions,按 node.sessionId 匹配),但只取卡片放大后要露出的极少
  *  信息。目前就一条:最近一条 AI(assistant)回复(文本已截断)。注入逻辑见
@@ -286,7 +308,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
     // 一个存活、可打开的会话。喂给 deriveDisplayStatus,让 done/未启动 但会话还在的
     // 节点显示「在线待命」而非自相矛盾的「完成/未启动」。
     const boundSessionId = (input.runNodeStates?.[node.id]?.sessionId ?? node.sessionId) ?? null
-    const boundSessionLive = Boolean(boundSessionId && input.liveSessionIds?.has(boundSessionId))
+    const boundSessionLive = boundSessionIsLive(input.liveSessionIds, boundSessionId)
     return {
       id: node.id,
       type: 'plannerNode' as const,

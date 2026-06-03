@@ -97,7 +97,7 @@ import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { TransformInsertEdge } from './TransformInsertEdge'
-import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type NodeLiveProgress, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
+import { buildPlannerGraph, sessionMatchesBoundId, type IOArtifactDirection, type IOArtifactVisibility, type NodeLiveProgress, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
 import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
 
@@ -2491,11 +2491,8 @@ function plannerNodeDoesNotNeedLiveSession(node: PlanningNode): boolean {
   return node.status === 'done' || node.workflowRunState === 'done'
 }
 
-function sessionMatchesBoundId(liveId: string, boundId: string): boolean {
-  return liveId === boundId
-    || liveId.endsWith(`-${boundId}`)
-    || boundId.endsWith(`-${liveId}`)
-}
+// sessionMatchesBoundId 下沉到 plannerGraphAdapter(与 boundSessionLive 共用同一
+// 别名匹配规则),改从那里 import — 见文件顶部 import。
 
 function dispatchRunnerForExecutor(executorType: PlanningNode['executorType']): PlannerDispatchRunner {
   if (executorType === 'codex') return 'codex'

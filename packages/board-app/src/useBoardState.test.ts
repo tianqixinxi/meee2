@@ -70,4 +70,32 @@ describe('useBoardState.forceRefresh', () => {
     await act(async () => { await result.current.forceRefresh() })
     expect(result.current.state?.sessions.some((s) => s.id === 'claude-internal-NEW')).toBe(true)
   })
+
+  it('does not let a stale refresh that resolves late clobber the forced snapshot', async () => {
+    // mount lands the stale list
+    apiMocks.fetchState.mockResolvedValueOnce(boardWith(['old-1']))
+    const { result } = renderHook(() => useBoardState())
+    await waitFor(() => expect(result.current.state?.sessions.length).toBe(1))
+
+    // refresh()'s fetch is held pending so it resolves *after* forceRefresh's —
+    // the exact ordering codex flagged (older request commits a stale snapshot).
+    let releaseStale: (s: BoardState) => void = () => {}
+    const staleInFlight = new Promise<BoardState>((res) => { releaseStale = res })
+    apiMocks.fetchState.mockReturnValueOnce(staleInFlight)                   // refresh() — seq=2
+    apiMocks.fetchState.mockResolvedValueOnce(boardWith(['old-1', 'NEW']))   // forceRefresh() — seq=3
+
+    await act(async () => {
+      result.current.refresh()              // issues seq=2, fetch stays pending
+      await result.current.forceRefresh()   // issues seq=3, resolves fresh, commits
+    })
+    expect(result.current.state?.sessions.some((s) => s.id === 'NEW')).toBe(true)
+
+    // the older refresh finally resolves (stale, seq=2 < committed 3) → must be dropped
+    await act(async () => {
+      releaseStale(boardWith(['old-1']))
+      await staleInFlight
+      await Promise.resolve()
+    })
+    expect(result.current.state?.sessions.some((s) => s.id === 'NEW')).toBe(true)
+  })
 })

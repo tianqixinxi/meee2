@@ -39,6 +39,24 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
   // 用 JSON.stringify 做快速 diff，不变就跳过 setState（新对象引用一旦进入
   // React 必然触发下游 rerender，哪怕 props 深度相等）。
   const lastSigRef = useRef<string>('')
+  // 请求代际:每次 fetch(refresh / forceRefresh)发起前领一个单调递增序号,响应
+  // 回来时只有「迄今最新发起」的请求能 commit。防止 forceRefresh 与 in-flight
+  // refresh 并发时,更早发起的 refresh 响应后到、用 stale 快照覆盖掉刚强制刷新的
+  // 结果(lastSigRef 只挡内容相同,挡不住旧响应覆盖新响应)。
+  const fetchSeqRef = useRef(0)
+  const committedSeqRef = useRef(0)
+
+  // 按代际提交:seq 比已提交的更旧(更早发起却后到)就丢弃,避免 stale 覆盖。
+  const commitState = useCallback((s: BoardState, seq: number) => {
+    if (seq < committedSeqRef.current) return
+    committedSeqRef.current = seq
+    const sig = signatureFor(s)
+    if (sig !== lastSigRef.current) {
+      lastSigRef.current = sig
+      hasState.current = true
+      setState(s)
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     if (document.visibilityState === 'hidden' && hasState.current) {
@@ -50,24 +68,10 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
       return
     }
     inFlight.current = true
+    const seq = ++fetchSeqRef.current
     try {
       const s = await fetchState()
-      // issue #25 诊断：抓 fetched state 的形状，配合服务端
-      // [StateTrace][channelDTO] 判断 0-member 是否真的来自 server。
-      // const zeroMembers = s.channels.filter((c) => c.members.length === 0).length
-      // console.log(
-      //   '[StateTrace][board-state] fetched: sessions=' + s.sessions.length +
-      //   ' channels=' + s.channels.length +
-      //   ', channels-with-zero-members=' + zeroMembers,
-      // )
-      // 快速指纹：排除频繁变但 UI 不直接看的字段（lastActivity 每秒都可能
-      // bump）。如果 sessions 的关键字段 + channels 都没变，视作同态。
-      const sig = signatureFor(s)
-      if (sig !== lastSigRef.current) {
-        lastSigRef.current = sig
-        hasState.current = true
-        setState(s)
-      }
+      commitState(s, seq)
       setError(null)
     } catch (e) {
       setError((e as Error).message)
@@ -83,28 +87,26 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
         }, 160)
       }
     }
-  }, [])
+  }, [commitState])
 
-  // Unguarded sibling of `refresh`: always fetches and commits. Intended for
-  // explicit navigations (open-session) where staleness shows up as an empty
-  // workspace. Concurrent with an in-flight `refresh` is fine — last write wins
-  // and `signatureFor` suppresses no-op re-renders.
+  // Unguarded sibling of `refresh`: always fetches and commits immediately (no
+  // in-flight/visibility guard). Intended for explicit navigations (open-session)
+  // where staleness shows up as an empty workspace. Concurrency with an in-flight
+  // `refresh` is handled by the seq gate in `commitState`: the latest-*issued*
+  // fetch wins, so an older refresh that resolves late can no longer clobber the
+  // freshly forced snapshot (which would make a just-created session disappear).
   const forceRefresh = useCallback(async () => {
+    const seq = ++fetchSeqRef.current
     try {
       const s = await fetchState()
-      const sig = signatureFor(s)
-      if (sig !== lastSigRef.current) {
-        lastSigRef.current = sig
-        hasState.current = true
-        setState(s)
-      }
+      commitState(s, seq)
       setError(null)
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [commitState])
 
   const scheduleRefresh = useCallback(() => {
     if (document.visibilityState === 'hidden' && hasState.current) {
