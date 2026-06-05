@@ -1777,6 +1777,37 @@ final class PlannerCoreTests: XCTestCase {
     /// E2E keystone: a single proposal that creates a DataSource + a first-class
     /// queue-claim Edge + a MonitorSpec must, once applied, surface those atoms
     /// on the persisted canvas (and round-trip through the graph-state API).
+    func testDelegatedApplyStillRequiresApprovedProposal() throws {
+        // P1(codex)回归:开启 sidecar 委托后,未 approved 的「可委托」proposal 仍必须被
+        // proposalNotApproved 挡住 —— 委托路不能绕过 applyNodeChange 的 approved 门。
+        setenv("MEEE2_APPLY_VIA_SIDECAR", "1", 1)
+        setenv("MEEE2_PLANNER_RUNTIME_URL", "http://127.0.0.1:1", 1) // 不可达:确保不真发委托请求
+        defer {
+            unsetenv("MEEE2_APPLY_VIA_SIDECAR")
+            unsetenv("MEEE2_PLANNER_RUNTIME_URL")
+        }
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeA = try XCTUnwrap(record.nodes.first)
+        let proposal = PlanProposal(
+            id: "proposal-unapproved-delegate",
+            canvasId: "canvas-a",
+            summary: "Pending update (delegatable kind)",
+            changes: [.updateNode(id: nodeA.id, title: "Should not apply")],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        // 故意不 approve —— 委托路应在 store.applyProposal 的 approved guard 处抛错。
+        XCTAssertThrowsError(try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
+        }
+    }
+
     func testApplyProposalPopulatesDataSourceEdgeAndMonitorSpec() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")

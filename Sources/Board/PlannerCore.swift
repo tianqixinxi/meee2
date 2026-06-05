@@ -4493,25 +4493,35 @@ final class PlannerStore {
         return url
     }
 
-    /// 锁外:判 gate + 短锁读 snapshot + POST sidecar。返回委托算好的结构(走委托),
+    /// 委托结果 + 它所基于的 pre-apply snapshot —— 锁内据 snapshot 做乐观并发检查(P2)。
+    private struct DelegatedApply {
+        let resultNodes: [PlanningNode]
+        let resultEdges: [Edge]
+        let beforeNodes: [PlanningNode]
+        let beforeEdges: [Edge]
+    }
+
+    /// 锁外:判 gate + 短锁读 snapshot + POST sidecar。返回委托结果 + 其 snapshot(走委托),
     /// 或 nil(不适用 / 网络失败 → 本地 fallback),或 throw applyRejected(校验拒绝)。
-    private func delegateApplyToSidecar(canvasId: String, proposalId: String) throws -> (nodes: [PlanningNode], edges: [Edge])? {
+    private func delegateApplyToSidecar(canvasId: String, proposalId: String) throws -> DelegatedApply? {
         guard let base = sidecarApplyBaseURL() else { return nil }
         // 短锁拿 snapshot 后立即释放(performSync 不能持主锁)。
-        let request: SidecarApplyRequest? = withLock {
+        let snapshot: (request: SidecarApplyRequest, beforeNodes: [PlanningNode], beforeEdges: [Edge])? = withLock {
             guard let record = document.canvases[canvasId],
                   let proposal = record.proposals.first(where: { $0.id == proposalId }),
+                  proposal.status == .approved,  // P1:未 approved 绝不委托(本地 applyNodeChange 也只对 approved 生效)
                   !proposal.changes.isEmpty,
                   proposal.changes.allSatisfy({ Self.sidecarDelegatableKinds.contains($0.kind) }) else { return nil }
-            return SidecarApplyRequest(
+            let req = SidecarApplyRequest(
                 state: SidecarStateDTO(
                     canvasId: canvasId, version: 0,
                     nodes: record.nodes, edges: record.canvas.edges, sources: [], cards: []
                 ),
                 changes: proposal.changes
             )
+            return (req, record.nodes, record.canvas.edges)
         }
-        guard let request, let body = try? JSONEncoder().encode(request) else { return nil }
+        guard let snapshot, let body = try? JSONEncoder().encode(snapshot.request) else { return nil }
         var req = URLRequest(url: base.appendingPathComponent("api/planner/runtime/apply"), timeoutInterval: 12)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -4524,7 +4534,10 @@ final class PlannerStore {
             throw PlannerCoreError.applyRejected(resp.violations ?? ["sidecar rejected without detail"])
         }
         guard let st = resp.state else { return nil }
-        return (st.nodes, st.edges)
+        return DelegatedApply(
+            resultNodes: st.nodes, resultEdges: st.edges,
+            beforeNodes: snapshot.beforeNodes, beforeEdges: snapshot.beforeEdges
+        )
     }
 
     private static func sidecarPostSync(_ request: URLRequest) -> (Data?, Int) {
@@ -4557,13 +4570,23 @@ final class PlannerStore {
             // saveProposal path already normalizes).
             try PlannerProposalValidator.validate(&proposal, canvas: record.canvas, nodes: record.nodes)
             record.proposals[index] = proposal
-            if let delegated {
+            // P1(codex):委托路绕过了 applyNodeChange 的 approved 门(validate 只查结构);
+            // 在此统一 enforce,委托 / 本地两条路都不放过未 approved 的 proposal。
+            guard proposal.status == .approved else {
+                throw PlannerCoreError.proposalNotApproved
+            }
+            // P2(codex):委托结果是锁外基于 pre-apply snapshot 算的。只有当 record 自 snapshot
+            // 后未被并发 apply 改动(nodes/edges 仍一致)才采用;否则回落本地 apply 重算 ——
+            // 避免两个并发 apply 各用各的 stale snapshot 互相覆盖。
+            if let delegated,
+               delegated.beforeNodes == record.nodes,
+               delegated.beforeEdges == record.canvas.edges {
                 // 方向 A:用 sidecar 算好的结构(纯 node/edge),本地只补节点事件 + reconcile。
                 // 持久化 / artifacts / status / proposalApplied 事件仍走下方公共后处理。
                 let before = record.nodes
-                record.nodes = delegated.nodes
-                record.events.append(contentsOf: events(for: proposal, before: before, after: delegated.nodes))
-                record.canvas.edges = delegated.edges
+                record.nodes = delegated.resultNodes
+                record.events.append(contentsOf: events(for: proposal, before: before, after: delegated.resultNodes))
+                record.canvas.edges = delegated.resultEdges
                 reconcileEdgesAndDependencies(&record)
             } else {
                 let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
