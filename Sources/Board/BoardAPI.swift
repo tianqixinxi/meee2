@@ -5971,8 +5971,10 @@ enum BoardAPI {
 
     private static func sidecarBaseURL() -> URL? {
         let env = ProcessInfo.processInfo.environment
-        guard let raw = env[HTTPPlannerAgentRuntime.runtimeUrlEnvVar]?.trimmingCharacters(in: .whitespaces),
-              !raw.isEmpty else { return nil }
+        let configured = env[HTTPPlannerAgentRuntime.runtimeUrlEnvVar]?.trimmingCharacters(in: .whitespaces)
+        // env 未设 → 默认本地 dev sidecar(`pnpm runtime:sidecar` 的 :18890)。没 sidecar 时
+        // 本地连接秒拒、上层静默 [],省去用户每次手动配 env 才能看到 canvas-script 模板。
+        let raw = (configured?.isEmpty == false) ? configured! : "http://127.0.0.1:18890"
         return URL(string: raw)
     }
 
