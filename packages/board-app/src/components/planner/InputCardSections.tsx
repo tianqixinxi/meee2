@@ -154,7 +154,7 @@ export function InputCardSections({
           <ul className="planner-input-card__upstream-list">
             {upstreamLinks.map((link, i) => (
               <li
-                key={`${link.sourceNodeId}:${link.inputKey ?? i}`}
+                key={`${link.sourceNodeId}:${link.sourceKey ?? ''}:${link.artifactId ?? ''}:${link.inputKey ?? i}`}
                 className="planner-input-card__upstream-row"
               >
                 <span
