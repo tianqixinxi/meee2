@@ -4436,6 +4436,17 @@ final class PlannerStore {
         patchField("versionStrategy") { (v: VersionStrategy) in ds.versionStrategy = v }
         patchField("freshness") { (v: FreshnessPolicy) in ds.freshness = v }
         patchField("binding") { (v: DataSourceIntegrationBinding) in ds.binding = v }
+        // Legacy patch 兼容(codex P2):旧 client / 升级前持久化的 updateDataSource patch
+        // 带 `title`/`pathPattern`;迁移后只认 semantics/selector,直接忽略会让这些旧
+        // proposal approve 后无可见效果。翻译:title → semantics.label、pathPattern →
+        // declarative selector(仅当对应新字段缺席,不覆盖显式的新 patch)。
+        if fields["semantics"] == nil, let legacyTitle = fields["title"]?.stringValue {
+            ds.semantics.label = legacyTitle
+        }
+        if fields["selector"] == nil, let legacyPath = fields["pathPattern"]?.stringValue {
+            let dialect = ds.identity.connectorKind == "fs" ? "glob" : "path"
+            ds.selector = Selector.declarative(dialect: dialect, expr: legacyPath)
+        }
     }
 
     /// Apply an `updateMonitorCard` patch (§9.3) onto a card. Permissive JSON
