@@ -102,31 +102,30 @@ describe('edgeModeLabel (canvas runtime EdgeMode → 时机)', () => {
   })
 })
 
-describe('deriveUpstreamLinks (真实一类边)', () => {
-  it('keeps node→node edges targeting this node, drops DataSource edges and other targets', () => {
+describe('deriveUpstreamLinks (step → artifact → step)', () => {
+  it('keeps every edge targeting this node and carries the intermediary artifact dataSourceId', () => {
     const edges: CanvasEdge[] = [
       {
         id: 'e1',
-        sourceRef: { nodeId: 'main', sourceKey: 'frontend_spec' },
+        sourceRef: { nodeId: 'main', sourceKey: 'frontend_spec', dataSourceId: 'art-1' },
         targetRef: { nodeId: 'node-1', inputKey: 'frontend_spec' },
         edgeMode: { mode: 'document-snapshot', strategy: { kind: 'follow-latest' } },
       },
       {
-        id: 'e2',
-        sourceRef: { nodeId: 'x', dataSourceId: 'ds-1' }, // DataSource 边 → 不算上游节点
-        targetRef: { nodeId: 'node-1', inputKey: 'docs' },
-        edgeMode: { mode: 'document-snapshot' },
-      },
-      {
         id: 'e3',
         sourceRef: { nodeId: 'main' },
-        targetRef: { nodeId: 'other' }, // 别的节点
+        targetRef: { nodeId: 'other' }, // 别的 target → 不算
         edgeMode: { mode: 'queue-claim' },
       },
     ]
     const links = deriveUpstreamLinks(node(), edges)
     expect(links).toHaveLength(1)
-    expect(links[0]).toMatchObject({ sourceNodeId: 'main', sourceKey: 'frontend_spec', inputKey: 'frontend_spec' })
+    expect(links[0]).toMatchObject({
+      sourceNodeId: 'main',
+      sourceKey: 'frontend_spec',
+      inputKey: 'frontend_spec',
+      artifactId: 'art-1', // 中介 artifact 不再被排除
+    })
   })
 })
 
@@ -187,6 +186,32 @@ describe('InputCardSections (modal variant)', () => {
     )
     expect(screen.getByText('跟随最新')).toBeInTheDocument()
     expect(screen.getByText('主 Agent')).toBeInTheDocument()
+  })
+
+  it('renders the intermediary artifact label on an upstream link (step→artifact→step)', () => {
+    const edges: CanvasEdge[] = [
+      {
+        id: 'e1',
+        sourceRef: { nodeId: 'main', sourceKey: 'ideas', dataSourceId: 'art-ideas' },
+        targetRef: { nodeId: 'node-1', inputKey: 'ideas' },
+        edgeMode: { mode: 'document-snapshot', strategy: { kind: 'follow-latest' } },
+      },
+    ]
+    const dataSources: DataSourceRecord[] = [
+      { id: 'art-ideas', title: '本周想法清单', kind: 'canvas-runtime', currentVersion: 0, semantics: { label: '本周想法清单' } },
+    ]
+    render(
+      <InputCardSections
+        node={node()}
+        variant="modal"
+        canvasEdges={edges}
+        canvasDataSources={dataSources}
+        nodeTitleById={{ main: 'Capture ideas' }}
+      />,
+    )
+    expect(screen.getByText('Capture ideas')).toBeInTheDocument()
+    expect(screen.getByText('本周想法清单')).toBeInTheDocument() // 中介 artifact label
+    expect(screen.getByText('跟随最新')).toBeInTheDocument()
   })
 
   it('renders sub-views from schema.subViews (Part C)', () => {

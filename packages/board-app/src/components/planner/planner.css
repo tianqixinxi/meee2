@@ -7422,6 +7422,22 @@
   white-space: nowrap;
 }
 
+/* 中介 artifact pill —— Part C:上游连接经过的 artifact DataSource */
+.planner-input-card__artifact-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border: 1px solid rgba(166, 142, 196, 0.30);
+  border-radius: 999px;
+  background: rgba(166, 142, 196, 0.10);
+  color: rgba(166, 142, 196, 0.95);
+  font-size: 9px;
+  white-space: nowrap;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .planner-input-card__badge--subview {
   border-color: rgba(166, 142, 196, 0.32);
   background: rgba(166, 142, 196, 0.12);

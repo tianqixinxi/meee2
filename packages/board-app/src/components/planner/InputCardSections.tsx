@@ -53,17 +53,21 @@ interface UpstreamLink {
   sourceNodeId: string
   sourceKey?: string
   inputKey?: string
+  /** 中介 artifact DataSource(Part C:数据流是 step → artifact → step)。 */
+  artifactId?: string
   mode: CanvasEdge['edgeMode']
 }
 
-/** 真实上游连接:指向本节点的一类边(每条 = 一个命名输入槽的来源,排除 DataSource 边)。 */
+/** 上游连接:指向本节点的边。Part C 下数据流是 step → artifact → step —— 每条边带中介
+ *  artifact 的 `sourceRef.dataSourceId`(不再排除它,而是把它当上游产物展示)。 */
 export function deriveUpstreamLinks(node: PlanningNode, edges?: CanvasEdge[]): UpstreamLink[] {
   return (edges ?? [])
-    .filter((e) => e.targetRef?.nodeId === node.id && e.sourceRef?.nodeId && !e.sourceRef?.dataSourceId)
+    .filter((e) => e.targetRef?.nodeId === node.id && e.sourceRef?.nodeId)
     .map((e) => ({
       sourceNodeId: e.sourceRef.nodeId,
       sourceKey: e.sourceRef.sourceKey,
       inputKey: e.targetRef.inputKey,
+      artifactId: e.sourceRef.dataSourceId,
       mode: e.edgeMode,
     }))
 }
@@ -122,7 +126,9 @@ export function InputCardSections({
   nodeTitleById,
 }: InputCardSectionsProps) {
   const upstreamLinks = deriveUpstreamLinks(node, canvasEdges)
-  const dataSourceInputs = deriveDataSourceInputs(node, canvasEdges, canvasDataSources)
+  const artifactLabelById = new Map(
+    (canvasDataSources ?? []).map((d) => [d.id, d.semantics?.label ?? d.title] as const),
+  )
   // 回落:没有一类边数据时,沿用旧派生(dependsOnNodeIds / contextSources)。
   const legacyUpstream = deriveUpstream(node)
   const legacyExternal = deriveExternalInputs(node)
@@ -148,7 +154,7 @@ export function InputCardSections({
           <ul className="planner-input-card__upstream-list">
             {upstreamLinks.map((link, i) => (
               <li
-                key={`${link.sourceNodeId}:${link.inputKey ?? i}`}
+                key={`${link.sourceNodeId}:${link.sourceKey ?? ''}:${link.artifactId ?? ''}:${link.inputKey ?? i}`}
                 className="planner-input-card__upstream-row"
               >
                 <span
@@ -158,6 +164,14 @@ export function InputCardSections({
                   <ArrowUpRight size={11} aria-hidden />
                   <span>{nodeTitleById?.[link.sourceNodeId] || link.sourceNodeId}</span>
                 </span>
+                {link.artifactId && (
+                  <span
+                    className="planner-input-card__artifact-pill"
+                    title={`经产物 artifact:${artifactLabelById.get(link.artifactId) ?? link.artifactId}`}
+                  >
+                    {artifactLabelById.get(link.artifactId) ?? '产物'}
+                  </span>
+                )}
                 {(link.sourceKey || link.inputKey) && (
                   <span
                     className="planner-input-card__slot-wire"
@@ -187,38 +201,16 @@ export function InputCardSections({
         )}
       </section>
 
-      {/* External / DataSource */}
+      {/* External —— 纯外部源(contextSources,无 producer step 的 connector 引用)。
+          上游 step 产出的 artifact 已在「上游」区块以中介 artifact 展示,不在此重复。 */}
       <section className="planner-input-card__section planner-input-card__section--external">
         <div className="planner-input-card__section-head">
           <span className="planner-input-card__badge planner-input-card__badge--external">外部源</span>
-          {(dataSourceInputs.length || legacyExternal.length) > 0 && (
-            <em className="planner-input-card__section-count">
-              {dataSourceInputs.length || legacyExternal.length}
-            </em>
+          {legacyExternal.length > 0 && (
+            <em className="planner-input-card__section-count">{legacyExternal.length}</em>
           )}
         </div>
-        {dataSourceInputs.length > 0 ? (
-          <ul className="planner-input-card__external-list">
-            {dataSourceInputs.map((ds) => (
-              <li key={ds.id} className="planner-input-card__external-row">
-                <Plug size={11} aria-hidden />
-                <span
-                  className="planner-input-card__external-ref"
-                  title={`${ds.connectorKind ?? ''} · ${ds.selectorHint ?? ''}`}
-                >
-                  <strong>{ds.label}</strong>
-                  {ds.connectorKind && (
-                    <em>
-                      {ds.connectorKind}
-                      {ds.selectorHint ? ` · ${shortRef(ds.selectorHint)}` : ''}
-                    </em>
-                  )}
-                </span>
-                {ds.inputKey && <span className="planner-input-card__slot-wire">→ {ds.inputKey}</span>}
-              </li>
-            ))}
-          </ul>
-        ) : legacyExternal.length > 0 ? (
+        {legacyExternal.length > 0 ? (
           <ul className="planner-input-card__external-list">
             {legacyExternal.map((row, index) => {
               const lastSync = row.sync_session
