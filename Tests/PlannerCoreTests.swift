@@ -1808,6 +1808,28 @@ final class PlannerCoreTests: XCTestCase {
         }
     }
 
+    func testCanvasScriptProposalDecodesToPlanChanges() throws {
+        // R3 回归:sidecar instantiate 返回的 canvas-script proposal(真实形状)能被 Swift
+        // [PlanChange] 正确 decode —— 命名槽 schema / document-snapshot edgeMode / kanban
+        // widget。BoardAPI.applyCanvasScriptTemplate 的接入就依赖这条 decode 不丢字段。
+        let json = """
+        {"changes":[
+          {"kind":"addNode","node":{"id":"n1","canvasId":"cx","title":"主 Agent","schema":{"inputs":[],"outputs":["frontend_spec","backend_spec","refactor_spec"],"goal":"拆分"},"contextSources":[],"executionMode":"auto","executorType":"claude","doerId":"","reviewerIds":[],"approverIds":[],"handoffPolicy":"none","status":"ready","nodeKind":"step"}},
+          {"kind":"addNode","node":{"id":"n2","canvasId":"cx","title":"PR 看板","schema":{"inputs":["pull_requests"],"outputs":[],"goal":"看板"},"contextSources":[],"executionMode":"auto","executorType":"claude","doerId":"","reviewerIds":[],"approverIds":[],"handoffPolicy":"none","status":"ready","nodeKind":"step","widget":{"kind":"kanban","source":{"inputKind":"external","inputIndex":0},"mapping":{"statusField":"state","titleField":"title"}}}},
+          {"kind":"addEdge","edge":{"id":"e1","canvasId":"cx","sourceRef":{"nodeId":"n1","sourceKey":"frontend_spec"},"targetRef":{"nodeId":"n2","inputKey":"frontend_spec"},"edgeMode":{"mode":"document-snapshot","strategy":{"kind":"follow-latest"}},"createdAt":"1970-01-01T00:00:00.000Z","modeRevision":0}}
+        ]}
+        """
+        struct Wrap: Decodable { let changes: [PlanChange] }
+        let wrap = try JSONDecoder().decode(Wrap.self, from: Data(json.utf8))
+        XCTAssertEqual(wrap.changes.count, 3)
+        XCTAssertEqual(wrap.changes[0].kind, .addNode)
+        XCTAssertEqual(wrap.changes[0].node?.schema.outputs, ["frontend_spec", "backend_spec", "refactor_spec"])
+        XCTAssertEqual(wrap.changes[1].node?.widget?.kind, .kanban)
+        XCTAssertEqual(wrap.changes[2].kind, .addEdge)
+        XCTAssertEqual(wrap.changes[2].edge?.sourceRef.sourceKey, "frontend_spec")
+        XCTAssertEqual(wrap.changes[2].edge?.edgeMode.mode, "document-snapshot")
+    }
+
     func testApplyProposalPopulatesDataSourceEdgeAndMonitorSpec() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")

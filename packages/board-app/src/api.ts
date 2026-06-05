@@ -666,7 +666,7 @@ export interface CanvasTemplateNodeSpec {
   positionHint?: Record<string, number> | null
 }
 
-export type CanvasTemplateSource = 'official' | 'team' | 'private'
+export type CanvasTemplateSource = 'official' | 'team' | 'private' | 'canvas-script'
 
 export interface CanvasTemplate {
   id: string
