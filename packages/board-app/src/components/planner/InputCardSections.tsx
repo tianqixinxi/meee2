@@ -1,32 +1,19 @@
 /**
- * UI-4 · Two-section Input card surface (Upstream / External).
+ * UI · step 节点输入面 —— 对齐 canvas runtime 数据模型(Edge/EdgeMode + DataSource +
+ * sub-view),不再只从旧的 dependsOnNodeIds/contextSources 派生。
  *
- * Replaces the legacy field-level Mapping/Inputs binding surface. Per ENG-1's
- * `NodeContractV2`, an executable node now consumes two concrete input
- * sources, in declared order:
- *
- *   1. Upstream   — output of one source canvas node (read-only badge here)
- *   2. External   — N attached connector refs (each backed by a sync session)
- *
- * The Dialogue (rolling chat window) section was removed in the
- * ui-simplification PR2 pass — dialogue retention is no longer surfaced on
- * the input card; it remains a node-contract concern handled elsewhere.
- *
- * The component intentionally derives sections from existing `PlanningNode`
- * fields when the `v2` contract envelope is not yet propagated to the
- * canvas-state DTO (it lives inside `read_node_contract` today). When the
- * graph DTO grows a `node.contract.v2` field, swap the `derive*` helpers for
- * the real values — the visual contract is unchanged.
+ * 优先读真实一类边(canvasEdges)和画板数据源(canvasDataSources):
+ *   1. 上游   —— 指向本节点的 Edge,显示「源节点 · sourceKey→inputKey · EdgeMode 时机」
+ *   2. 外部源 —— Edge 的 sourceRef.dataSourceId 关联的 DataSource,显示 semantics/selector
+ *   3. 子视图 —— node.schema.subViews,每个槽对数据的投影 + 语义(Part C)
+ * 没拿到这些时回落旧派生(dependsOnNodeIds / contextSources),保证不破坏既有画面。
  */
 
-import {
-  ArrowUpRight,
-  Plug,
-  Plus,
-  RefreshCw,
-} from 'lucide-react'
+import { ArrowUpRight, Layers, Plug, Plus, RefreshCw } from 'lucide-react'
 import type {
+  CanvasEdge,
   ContextSource,
+  DataSourceRecord,
   NodeContractExternalInput,
   NodeContractUpstreamInput,
   PlanningNode,
@@ -34,26 +21,93 @@ import type {
 
 export interface InputCardSectionsProps {
   node: PlanningNode
-  /** Resolved title of the upstream source node (rendered in the badge). */
   upstreamLabel?: string | null
-  /** Compact mode renders inside the canvas card body (no headers etc.). */
   variant?: 'card' | 'modal'
-  /**
-   * If true, the External attach CTA and Refresh-now buttons are interactive.
-   * Defaults to true; tests / read-only previews can disable.
-   */
   interactive?: boolean
-  /**
-   * Open the connector-pick popover for the parent node. Wired by container —
-   * UI-4 emits a no-op API call (see PlannerGraph.handleAttachDataSource); the
-   * binding side is INT-2's responsibility.
-   */
   onAttachDataSource?: (nodeId: string) => void
-  /**
-   * Trigger a one-off sync run for an external row. No-op stub today; emits a
-   * TODO log line. Real implementation will dispatch the bound sync session.
-   */
   onRefreshExternal?: (nodeId: string, external: NodeContractExternalInput) => void
+  /** Canvas runtime 一类边 —— 读真实上游连接(命名槽 + EdgeMode);缺省回落 dependsOnNodeIds。 */
+  canvasEdges?: CanvasEdge[]
+  /** 画板数据源 —— 读 identity/selector/semantics;缺省回落 contextSources。 */
+  canvasDataSources?: DataSourceRecord[]
+  /** nodeId → 标题,给上游连接展示源节点名。 */
+  nodeTitleById?: Record<string, string>
+}
+
+/** EdgeMode → 人类可读的「时机」标签(替代旧的硬编码「全量传入」)。 */
+export function edgeModeLabel(mode?: CanvasEdge['edgeMode']): string {
+  if (!mode) return ''
+  switch (mode.mode) {
+    case 'queue-claim':
+      return mode.ordering ? `逐条认领 · ${mode.ordering}` : '逐条认领'
+    case 'document-snapshot':
+      return mode.strategy?.kind === 'pin-at-attempt-start' ? '开工时冻结' : '跟随最新'
+    case 'dependency':
+      return '依赖'
+    default:
+      return mode.mode
+  }
+}
+
+interface UpstreamLink {
+  sourceNodeId: string
+  sourceKey?: string
+  inputKey?: string
+  mode: CanvasEdge['edgeMode']
+}
+
+/** 真实上游连接:指向本节点的一类边(每条 = 一个命名输入槽的来源,排除 DataSource 边)。 */
+export function deriveUpstreamLinks(node: PlanningNode, edges?: CanvasEdge[]): UpstreamLink[] {
+  return (edges ?? [])
+    .filter((e) => e.targetRef?.nodeId === node.id && e.sourceRef?.nodeId && !e.sourceRef?.dataSourceId)
+    .map((e) => ({
+      sourceNodeId: e.sourceRef.nodeId,
+      sourceKey: e.sourceRef.sourceKey,
+      inputKey: e.targetRef.inputKey,
+      mode: e.edgeMode,
+    }))
+}
+
+interface DataSourceInputView {
+  id: string
+  label: string
+  connectorKind?: string
+  selectorHint?: string
+  inputKey?: string
+}
+
+/** 真实外部数据源:本节点入边里带 dataSourceId 的,关联到画板 DataSource。 */
+export function deriveDataSourceInputs(
+  node: PlanningNode,
+  edges?: CanvasEdge[],
+  dataSources?: DataSourceRecord[],
+): DataSourceInputView[] {
+  const byId = new Map((dataSources ?? []).map((d) => [d.id, d]))
+  const out: DataSourceInputView[] = []
+  const seen = new Set<string>()
+  for (const e of edges ?? []) {
+    if (e.targetRef?.nodeId !== node.id) continue
+    const dsId = e.sourceRef?.dataSourceId
+    if (!dsId || seen.has(dsId)) continue
+    const ds = byId.get(dsId)
+    if (!ds) continue
+    seen.add(dsId)
+    out.push({
+      id: ds.id,
+      label: ds.semantics?.label ?? ds.title,
+      connectorKind: ds.identity?.connectorKind ?? ds.kind,
+      selectorHint: selectorHint(ds),
+      inputKey: e.targetRef?.inputKey,
+    })
+  }
+  return out
+}
+
+function selectorHint(ds: DataSourceRecord): string | undefined {
+  const s = ds.selector
+  if (!s) return undefined
+  if (s.mode === 'curated') return s.intent ? `聚合 · ${s.intent}` : '聚合'
+  return s.expr
 }
 
 export function InputCardSections({
@@ -63,58 +117,110 @@ export function InputCardSections({
   interactive = true,
   onAttachDataSource,
   onRefreshExternal,
+  canvasEdges,
+  canvasDataSources,
+  nodeTitleById,
 }: InputCardSectionsProps) {
-  const upstream = deriveUpstream(node)
-  const external = deriveExternalInputs(node)
+  const upstreamLinks = deriveUpstreamLinks(node, canvasEdges)
+  const dataSourceInputs = deriveDataSourceInputs(node, canvasEdges, canvasDataSources)
+  // 回落:没有一类边数据时,沿用旧派生(dependsOnNodeIds / contextSources)。
+  const legacyUpstream = deriveUpstream(node)
+  const legacyExternal = deriveExternalInputs(node)
+  const subViews = node.schema?.subViews ?? {}
+  const subViewKeys = Object.keys(subViews)
 
   return (
     <div
-      className={[
-        'planner-input-card',
-        `planner-input-card--${variant}`,
-      ].join(' ')}
+      className={['planner-input-card', `planner-input-card--${variant}`].join(' ')}
       aria-label="Node inputs"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      {/* Upstream row */}
+      {/* Upstream */}
       <section className="planner-input-card__section planner-input-card__section--upstream">
         <div className="planner-input-card__section-head">
-          <span className="planner-input-card__badge planner-input-card__badge--upstream">
-            上游
-          </span>
-        </div>
-        <div className="planner-input-card__upstream-row">
-          {upstream.source_node ? (
-            <span
-              className="planner-input-card__upstream-pill"
-              title={upstreamLabel || upstream.source_node}
-            >
-              <ArrowUpRight size={11} aria-hidden />
-              <span>{upstreamLabel || upstream.source_node}</span>
-            </span>
-          ) : (
-            <span className="planner-input-card__muted">画板入口</span>
+          <span className="planner-input-card__badge planner-input-card__badge--upstream">上游</span>
+          {upstreamLinks.length > 1 && (
+            <em className="planner-input-card__section-count">{upstreamLinks.length}</em>
           )}
-          <em className="planner-input-card__upstream-mode">
-            {upstream.mode === 'item_scoped' ? '按项隔离' : '全量传入'}
-          </em>
         </div>
+        {upstreamLinks.length > 0 ? (
+          <ul className="planner-input-card__upstream-list">
+            {upstreamLinks.map((link, i) => (
+              <li
+                key={`${link.sourceNodeId}:${link.inputKey ?? i}`}
+                className="planner-input-card__upstream-row"
+              >
+                <span
+                  className="planner-input-card__upstream-pill"
+                  title={nodeTitleById?.[link.sourceNodeId] || link.sourceNodeId}
+                >
+                  <ArrowUpRight size={11} aria-hidden />
+                  <span>{nodeTitleById?.[link.sourceNodeId] || link.sourceNodeId}</span>
+                </span>
+                {(link.sourceKey || link.inputKey) && (
+                  <span
+                    className="planner-input-card__slot-wire"
+                    title={`${link.sourceKey ?? '?'} → ${link.inputKey ?? '?'}`}
+                  >
+                    {link.sourceKey ?? '·'} → {link.inputKey ?? '·'}
+                  </span>
+                )}
+                <em className="planner-input-card__upstream-mode">{edgeModeLabel(link.mode)}</em>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="planner-input-card__upstream-row">
+            {legacyUpstream.source_node ? (
+              <span
+                className="planner-input-card__upstream-pill"
+                title={upstreamLabel || legacyUpstream.source_node}
+              >
+                <ArrowUpRight size={11} aria-hidden />
+                <span>{upstreamLabel || legacyUpstream.source_node}</span>
+              </span>
+            ) : (
+              <span className="planner-input-card__muted">画板入口</span>
+            )}
+          </div>
+        )}
       </section>
 
-      {/* External sources */}
+      {/* External / DataSource */}
       <section className="planner-input-card__section planner-input-card__section--external">
         <div className="planner-input-card__section-head">
-          <span className="planner-input-card__badge planner-input-card__badge--external">
-            外部源
-          </span>
-          {external.length > 0 && (
-            <em className="planner-input-card__section-count">{external.length}</em>
+          <span className="planner-input-card__badge planner-input-card__badge--external">外部源</span>
+          {(dataSourceInputs.length || legacyExternal.length) > 0 && (
+            <em className="planner-input-card__section-count">
+              {dataSourceInputs.length || legacyExternal.length}
+            </em>
           )}
         </div>
-        {external.length > 0 ? (
+        {dataSourceInputs.length > 0 ? (
           <ul className="planner-input-card__external-list">
-            {external.map((row, index) => {
+            {dataSourceInputs.map((ds) => (
+              <li key={ds.id} className="planner-input-card__external-row">
+                <Plug size={11} aria-hidden />
+                <span
+                  className="planner-input-card__external-ref"
+                  title={`${ds.connectorKind ?? ''} · ${ds.selectorHint ?? ''}`}
+                >
+                  <strong>{ds.label}</strong>
+                  {ds.connectorKind && (
+                    <em>
+                      {ds.connectorKind}
+                      {ds.selectorHint ? ` · ${shortRef(ds.selectorHint)}` : ''}
+                    </em>
+                  )}
+                </span>
+                {ds.inputKey && <span className="planner-input-card__slot-wire">→ {ds.inputKey}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : legacyExternal.length > 0 ? (
+          <ul className="planner-input-card__external-list">
+            {legacyExternal.map((row, index) => {
               const lastSync = row.sync_session
                 ? `已同步 · 来自 ${shortRef(row.sync_session)}`
                 : '尚未同步'
@@ -163,11 +269,37 @@ export function InputCardSections({
         </button>
       </section>
 
+      {/* Sub-views (Part C) —— 每个槽对数据的投影 + 语义 */}
+      {subViewKeys.length > 0 && (
+        <section className="planner-input-card__section planner-input-card__section--subview">
+          <div className="planner-input-card__section-head">
+            <span className="planner-input-card__badge planner-input-card__badge--subview">子视图</span>
+            <em className="planner-input-card__section-count">{subViewKeys.length}</em>
+          </div>
+          <ul className="planner-input-card__subview-list">
+            {subViewKeys.map((slot) => {
+              const sv = subViews[slot]
+              return (
+                <li key={slot} className="planner-input-card__subview-row">
+                  <Layers size={11} aria-hidden />
+                  <span
+                    className="planner-input-card__subview-ref"
+                    title={sv.semantics?.purpose || slot}
+                  >
+                    <strong>{sv.semantics?.label || slot}</strong>
+                    {sv.project && sv.project.length > 0 && <em>{sv.project.join(' · ')}</em>}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
     </div>
   )
 }
 
-/* -------- derivation helpers -------- */
+/* -------- legacy derivation helpers (fallback + 既有测试) -------- */
 
 export function deriveUpstream(node: PlanningNode): NodeContractUpstreamInput {
   const firstDependency = (node.dependsOnNodeIds ?? [])[0] ?? null
@@ -195,8 +327,7 @@ function isExternalSource(source: ContextSource): boolean {
 
 export function connectorFromSource(source: ContextSource): string {
   // Heuristic: pick scheme from reference when present (e.g. `github://repo`),
-  // otherwise fall back to `kind`. INT-2 will replace this with the actual
-  // connector slug stored on `NodeContractExternalInput.connector`.
+  // otherwise fall back to `kind`.
   const ref = source.reference || ''
   const schemeMatch = ref.match(/^([a-z][a-z0-9+.-]*):/i)
   if (schemeMatch) return schemeMatch[1].toLowerCase()

@@ -92,10 +92,25 @@ struct PlanningCanvas: Codable, Equatable {
     }
 }
 
+/// Part C —— step 槽对数据源的子视图(投影 + 语义)。decode 透传到前端展示。
+struct SubView: Codable, Equatable {
+    var semantics: Semantics
+    var project: [String]?
+}
+
 struct NodeSchema: Codable, Equatable {
     var inputs: [String]
     var outputs: [String]
     var goal: String
+    /// Part C:每个槽的子视图(key = 槽名)。canvas-script 生成、随 graph 透传到 UI。
+    var subViews: [String: SubView]?
+
+    init(inputs: [String], outputs: [String], goal: String, subViews: [String: SubView]? = nil) {
+        self.inputs = inputs
+        self.outputs = outputs
+        self.goal = goal
+        self.subViews = subViews
+    }
 }
 
 struct ContextSource: Codable, Equatable {
