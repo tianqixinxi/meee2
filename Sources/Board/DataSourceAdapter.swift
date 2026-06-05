@@ -219,8 +219,9 @@ final class LocalFsAdapter: DataSourceAdapter {
 
     init(source: DataSourceRecord, baseDirectory: URL) throws {
         self.source = source
-        // pathPattern is resolved relative to the canvas workspace base.
-        let pattern = source.pathPattern.isEmpty ? source.id : source.pathPattern
+        // selector 的 declarative expr(旧 pathPattern)relative to the canvas
+        // workspace base;为空时退回 source.id。
+        let pattern = source.pathHint
         self.root = baseDirectory.appendingPathComponent(pattern, isDirectory: true)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         try fm.createDirectory(at: root.appendingPathComponent(".claimed"), withIntermediateDirectories: true)
@@ -332,7 +333,7 @@ extension PlannerBoardBridge {
         guard let source = record.canvas.dataSources.first(where: { $0.id == sourceId }) else {
             throw PlannerCoreError.dataSourceNotFound(sourceId)
         }
-        switch source.kind {
+        switch source.connectorKind {
         case "fs":
             let base = (try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId))
                 .map { URL(fileURLWithPath: $0, isDirectory: true) }

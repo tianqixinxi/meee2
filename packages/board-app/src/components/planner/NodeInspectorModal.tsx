@@ -25,6 +25,8 @@ import {
 import { loadSpawnProvider } from '../../preferences'
 import type { TeamMember } from '../../api'
 import type {
+  CanvasEdge,
+  DataSourceRecord,
   Session,
   NodeContractExternalInput,
   NodeStateSnapshot,
@@ -45,6 +47,10 @@ import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGra
 interface Props {
   node: PlanningNode
   canvasId: string
+  /** Canvas runtime 一类边 / 数据源 / 节点标题 —— 喂给输入面读真实 Edge/DataSource(否则回落旧派生)。 */
+  canvasEdges?: CanvasEdge[]
+  canvasDataSources?: DataSourceRecord[]
+  nodeTitleById?: Record<string, string>
   variant?: 'board' | 'template'
   state: NodeStateSnapshot | null
   artifacts?: PlannerArtifact[]
@@ -94,6 +100,9 @@ interface Props {
 export function NodeInspectorModal({
   node,
   canvasId,
+  canvasEdges,
+  canvasDataSources,
+  nodeTitleById,
   variant = 'board',
   state,
   artifacts = [],
@@ -502,6 +511,9 @@ export function NodeInspectorModal({
           <InputCardSections
             node={node}
             variant="modal"
+            canvasEdges={canvasEdges}
+            canvasDataSources={canvasDataSources}
+            nodeTitleById={nodeTitleById}
             onAttachDataSource={onAttachDataSource}
             onRefreshExternal={onRefreshExternalInput}
           />
