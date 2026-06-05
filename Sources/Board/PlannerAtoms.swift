@@ -139,15 +139,124 @@ struct DataSourceIntegrationBinding: Codable, Equatable {
     var entityRef: String
 }
 
-/// Atom 1 — `DataSource` (§3.1). The named addressable location artifacts live
-/// at. Governance-layer object; decode-only here.
+/// `SourceIdentity` (addendum Part A) —— 共享真相键 `connectorKind` + `realm`。
+/// `realm` 是「一套凭证 + 一次一致同步」能覆盖的最小单元;两个 DataSource 同
+/// identity ⇒ 共享真相。取代旧单层 `kind`/`pathPattern` 里的 `kind` 维度。
+struct SourceIdentity: Codable, Equatable {
+    var connectorKind: String
+    var realm: String
+
+    enum CodingKeys: String, CodingKey { case connectorKind, realm }
+
+    init(connectorKind: String = "managed", realm: String = "") {
+        self.connectorKind = connectorKind
+        self.realm = realm
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        connectorKind = try c.decodeIfPresent(String.self, forKey: .connectorKind) ?? "managed"
+        realm = try c.decodeIfPresent(String.self, forKey: .realm) ?? ""
+    }
+}
+
+/// `MemberRef` —— curated selector 的单个成员(某物理源里的一个单元,可跨 identity)。
+struct MemberRef: Codable, Equatable {
+    var identity: SourceIdentity
+    var ref: String
+}
+
+/// `Selector` discriminated union (addendum Part A §4.1)。两种成员求值模式:
+///  - `declarative`:规则(`dialect` + `expr`),connector 机械求值 + 静态求交。
+///  - `curated`:AI session 物化成员集(可跨源),非同构 / 语义聚合。
+/// 沿用本文件 `EdgeMode` 的容忍式 struct 惯例(keyed by `mode`),未知 mode 也 round-trip。
+struct Selector: Codable, Equatable {
+    /// `declarative | curated | <forward-compat>`.
+    var mode: String
+    // declarative
+    var dialect: String?
+    var expr: String?
+    // curated
+    var curatorSessionId: String?
+    var members: [MemberRef]?
+    var intent: String?
+    /// curated `shapeSchema` —— AI 定义的形状,引擎对其 opaque(`z.unknown()`)。
+    var shapeSchema: PlannerAtomJSON?
+
+    enum CodingKeys: String, CodingKey {
+        case mode, dialect, expr, curatorSessionId, members, intent, shapeSchema
+    }
+
+    init(
+        mode: String = "declarative",
+        dialect: String? = nil,
+        expr: String? = nil,
+        curatorSessionId: String? = nil,
+        members: [MemberRef]? = nil,
+        intent: String? = nil,
+        shapeSchema: PlannerAtomJSON? = nil
+    ) {
+        self.mode = mode
+        self.dialect = dialect
+        self.expr = expr
+        self.curatorSessionId = curatorSessionId
+        self.members = members
+        self.intent = intent
+        self.shapeSchema = shapeSchema
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "declarative"
+        dialect = try c.decodeIfPresent(String.self, forKey: .dialect)
+        expr = try c.decodeIfPresent(String.self, forKey: .expr)
+        curatorSessionId = try c.decodeIfPresent(String.self, forKey: .curatorSessionId)
+        members = try c.decodeIfPresent([MemberRef].self, forKey: .members)
+        intent = try c.decodeIfPresent(String.self, forKey: .intent)
+        shapeSchema = try c.decodeIfPresent(PlannerAtomJSON.self, forKey: .shapeSchema)
+    }
+
+    /// declarative 便捷构造。
+    static func declarative(dialect: String, expr: String) -> Selector {
+        Selector(mode: "declarative", dialect: dialect, expr: expr)
+    }
+}
+
+/// `Semantics` (addendum Part G §10.2) —— 每个原子的语义层(给 agent 治理 + UI 读)。
+/// DataSource 用 `label` 收编旧 `title`。
+struct Semantics: Codable, Equatable {
+    /// 业务名(= UI title)。
+    var label: String
+    /// 为什么存在 / 职责(可选)。
+    var purpose: String?
+
+    enum CodingKeys: String, CodingKey { case label, purpose }
+
+    init(label: String = "", purpose: String? = nil) {
+        self.label = label
+        self.purpose = purpose
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        purpose = try c.decodeIfPresent(String.self, forKey: .purpose)
+    }
+}
+
+/// Atom 1 — `DataSource` (§3.1 + addendum Part A/G). The named addressable
+/// location artifacts live at. `identity`(共享真相键)+ `selector`(成员求值)
+/// 取代旧 `kind`/`pathPattern`;`semantics.label` 收编旧 `title`。Governance-layer
+/// object;此处 decode-tolerant,并把 on-disk 旧形状合成成新形状(平滑升级)。
 struct DataSourceRecord: Codable, Equatable {
     var id: String
     var canvasId: String
-    /// Open enum (registry-extensible). Core ships `managed` / `fs`.
-    var kind: String
-    var title: String
-    var pathPattern: String
+    /// addendum Part A —— 共享真相键(connectorKind + realm),取代旧 `kind`。
+    var identity: SourceIdentity
+    /// addendum Part A —— 成员求值(declarative 规则 / curated 物化成员集),取代旧 `pathPattern`。
+    var selector: Selector
+    /// addendum Part G —— 语义层(`label` 收编旧 `title`)。
+    var semantics: Semantics
     /// Stored as String for forward-compat. Default `'none'`.
     var partitionRule: String
     var partitionTimezone: String
@@ -160,25 +269,42 @@ struct DataSourceRecord: Codable, Equatable {
     var createdAt: String
     /// Fully qualified to survive timezone changes (§3.4).
     var lastPartitionKey: String?
-    /// PR6+7: governance archive marker (§10.4). `archiveDataSource` sets this
-    /// rather than physically deleting the record. Not in the TS contract's
-    /// DataSource shape yet (it is a local apply-state flag), so it is
-    /// optional-with-default and tolerant on both decode and round-trip.
+    /// PR6+7: governance archive marker (§10.4). Swift-local apply-state flag —
+    /// NOT in the TS `DataSource` contract, so a delegated sidecar apply strips
+    /// it; `applyProposal` re-merges it by id after adopting the sidecar result.
     var archived: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, canvasId, kind, title, pathPattern, partitionRule
+        case id, canvasId, identity, selector, semantics, partitionRule
         case partitionTimezone, capabilities, versionStrategy, freshness
         case binding, currentVersion, createdAt, lastPartitionKey, archived
+    }
+
+    /// Pre-addendum on-disk keys (`kind`/`title`/`pathPattern`). Decode-only:
+    /// legacy `state.json` 里的旧 DataSource 由它们合成 identity/selector/semantics。
+    private enum LegacyCodingKeys: String, CodingKey {
+        case kind, title, pathPattern
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         canvasId = try c.decode(String.self, forKey: .canvasId)
-        kind = try c.decode(String.self, forKey: .kind)
-        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
-        pathPattern = try c.decodeIfPresent(String.self, forKey: .pathPattern) ?? ""
+        // 新形状优先;`identity` 缺失 ⇒ 旧形状,合成 identity/selector/semantics。
+        if let identity0 = try c.decodeIfPresent(SourceIdentity.self, forKey: .identity) {
+            identity = identity0
+            selector = try c.decodeIfPresent(Selector.self, forKey: .selector)
+                ?? Selector.declarative(dialect: "", expr: "")
+            semantics = try c.decodeIfPresent(Semantics.self, forKey: .semantics) ?? Semantics()
+        } else {
+            let lc = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            let legacyKind = try lc.decodeIfPresent(String.self, forKey: .kind) ?? "managed"
+            let legacyPath = try lc.decodeIfPresent(String.self, forKey: .pathPattern) ?? ""
+            let legacyTitle = try lc.decodeIfPresent(String.self, forKey: .title) ?? ""
+            identity = SourceIdentity(connectorKind: legacyKind, realm: "\(legacyKind):\(canvasId)")
+            selector = Selector.declarative(dialect: legacyKind == "fs" ? "glob" : "path", expr: legacyPath)
+            semantics = Semantics(label: legacyTitle)
+        }
         partitionRule = try c.decodeIfPresent(String.self, forKey: .partitionRule) ?? "none"
         partitionTimezone = try c.decodeIfPresent(String.self, forKey: .partitionTimezone) ?? "UTC"
         capabilities = try c.decodeIfPresent(DataSourceCapabilities.self, forKey: .capabilities)
@@ -199,9 +325,9 @@ struct DataSourceRecord: Codable, Equatable {
     init(
         id: String,
         canvasId: String,
-        kind: String = "managed",
-        title: String = "",
-        pathPattern: String = "",
+        identity: SourceIdentity = SourceIdentity(),
+        selector: Selector = Selector.declarative(dialect: "", expr: ""),
+        semantics: Semantics = Semantics(),
         partitionRule: String = "none",
         partitionTimezone: String = "UTC",
         capabilities: DataSourceCapabilities = DataSourceCapabilities(),
@@ -215,9 +341,9 @@ struct DataSourceRecord: Codable, Equatable {
     ) {
         self.id = id
         self.canvasId = canvasId
-        self.kind = kind
-        self.title = title
-        self.pathPattern = pathPattern
+        self.identity = identity
+        self.selector = selector
+        self.semantics = semantics
         self.partitionRule = partitionRule
         self.partitionTimezone = partitionTimezone
         self.capabilities = capabilities
@@ -228,6 +354,20 @@ struct DataSourceRecord: Codable, Equatable {
         self.createdAt = createdAt
         self.lastPartitionKey = lastPartitionKey
         self.archived = archived
+    }
+
+    // MARK: Compat accessors —— 收敛 adapter / UI 对旧 `kind`/`title`/`pathPattern` 的读取。
+
+    /// 旧 `kind`(= `identity.connectorKind`)。
+    var connectorKind: String { identity.connectorKind }
+    /// 旧 `title`(= `semantics.label`)。
+    var label: String { semantics.label }
+    /// declarative selector 的 `expr`(curated / 未知 mode ⇒ nil)。
+    var declarativeExpr: String? { selector.mode == "declarative" ? selector.expr : nil }
+    /// fs adapter 的相对路径提示:declarative `expr` 非空,否则退回 `id`。
+    var pathHint: String {
+        if let expr = declarativeExpr, !expr.isEmpty { return expr }
+        return id
     }
 }
 
