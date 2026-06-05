@@ -6031,19 +6031,26 @@ enum BoardAPI {
         guard let base = sidecarBaseURL() else {
             return errorResponse("unavailable", "canvas-script sidecar 未配置(MEEE2_PLANNER_RUNTIME_URL)", status: 503)
         }
+        // 先建空 canvas;createCanvas 之后任一步失败都回滚删除,避免 sidecar 瞬时故障 /
+        // decode / apply 失败留下一张空 canvas(codex P2)。
+        let snapshot: BoardLayoutStore.Snapshot
         do {
-            let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: .board)
-            let canvasId = snapshot.activeCanvasId
-            guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
-                return errorResponse("internal", "freshly created canvas missing from snapshot", status: 500)
-            }
-            let ownerId = boardCanvas.ownerUserId ?? boardCanvas.createdBy ?? "local-owner"
-            let planning = PlanningCanvas(
-                id: boardCanvas.id,
-                ownerId: ownerId,
-                title: boardCanvas.name,
-                plannerContext: "canvas-script:\(templateId)"
-            )
+            snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: .board)
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+        let canvasId = snapshot.activeCanvasId
+        func rollback(_ response: HttpResponse) -> HttpResponse {
+            _ = try? BoardLayoutStore.shared.deleteCanvas(id: canvasId)
+            return response
+        }
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return rollback(errorResponse("internal", "freshly created canvas missing from snapshot", status: 500))
+        }
+        do {
+            // planningCanvas(for:) 按 scope 设 visibility(team → .public);手动 init 会漏掉,
+            // 导致 team 模板存成 .private、其他成员 canViewCanvas 看不到这张图(codex P2)。
+            let planning = planningCanvas(for: boardCanvas, context: "canvas-script:\(templateId)")
             _ = try PlannerBoardBridge.store.record(for: planning, seedNodes: [])
 
             var req = URLRequest(
@@ -6055,7 +6062,7 @@ enum BoardAPI {
             req.httpBody = try JSONSerialization.data(withJSONObject: ["canvasId": canvasId])
             let (data, status) = sidecarSyncRequest(req)
             guard let data, (200..<300).contains(status) else {
-                return errorResponse("sidecar_error", "instantiate 失败(status \(status))", status: 502)
+                return rollback(errorResponse("sidecar_error", "instantiate 失败(status \(status))", status: 502))
             }
             let decoded = try JSONDecoder().decode(SidecarInstantiateResponse.self, from: data)
 
@@ -6064,18 +6071,18 @@ enum BoardAPI {
                 changes: decoded.proposal.changes,
                 for: canvasId,
                 snapshot: snapshot,
-                actorUserId: ownerId
+                actorUserId: planning.ownerId
             )
             _ = try PlannerBoardBridge.approveProposal(
-                proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId
+                proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: planning.ownerId
             )
             _ = try PlannerBoardBridge.applyProposal(
-                proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId
+                proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: planning.ownerId
             )
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
-            return errorResponse("bad_request", error.localizedDescription, status: 400)
+            return rollback(errorResponse("bad_request", error.localizedDescription, status: 400))
         }
     }
 
