@@ -3305,6 +3305,9 @@ enum BoardAPI {
             // UI / agent can suggest the step + dispatch.runner=claude
             // migration rather than treating it as a generic 400.
             return errorResponse("session_kind_no_longer_creatable", err.localizedDescription, status: 400)
+        case .applyRejected:
+            // 方向 A:apply 委托 sidecar 时 governance 校验拒绝(引用完整性 / 事务原子 / footgun)。
+            return errorResponse("apply_rejected", err.localizedDescription, status: 422)
         }
     }
 

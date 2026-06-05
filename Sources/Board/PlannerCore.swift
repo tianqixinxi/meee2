@@ -2578,6 +2578,9 @@ enum PlannerCoreError: LocalizedError, Equatable {
     /// §6.6 footgun guard: wholesale `setMonitorSpec` over a non-empty prior
     /// spec is rejected unless `intent == 'wipe-and-rebuild'`.
     case monitorSpecReplaceGuard
+    /// 方向 A(Principle 13):apply 委托 meee2-online sidecar 时,sidecar 的
+    /// governance 校验(引用完整性 / 事务原子 / footgun)不过,带回 violations。
+    case applyRejected([String])
 
     var errorDescription: String? {
         switch self {
@@ -2587,6 +2590,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "plan proposal must be approved before apply"
         case .proposalNotFound(let id):
             return "plan proposal not found: \(id)"
+        case .applyRejected(let violations):
+            return "proposal rejected by sidecar: \(violations.joined(separator: "; "))"
         case .canvasMismatch(let expected, let actual):
             return "proposal canvas mismatch: expected \(expected), got \(actual)"
         case .emptyProposalChanges:
@@ -4444,12 +4449,117 @@ final class PlannerStore {
         if let raw = fields["config"] { card.config = raw }
     }
 
+    // MARK: - Apply 委托 sidecar(方向 A / Principle 13:apply 逻辑归 meee2-online)
+    //
+    // env-gated(MEEE2_PLANNER_RUNTIME_URL + MEEE2_APPLY_VIA_SIDECAR=1),默认关 →
+    // 行为与改动前完全一致。开启时把「算结构」这步委托给 meee2-online 的
+    // `/api/planner/runtime/apply`(纯函数:输入当前结构 + changes,输出新结构 or
+    // violations)。持久化 / 事件 / artifacts / 锁仍在本地 —— sidecar 不碰这些。
+    //
+    // 委托范围(最小、无 ledger 副作用):纯 add/update node + add/update/remove edge。
+    // 删节点(级联清理 dependsOnNodeIds)、DataSource(Swift 端仍旧形状,未跟 addendum
+    // 迁移)、Monitor、writeSourceVersion / attach*(版本链 ledger 副作用)暂走本地 fallback。
+
+    private struct SidecarStateDTO: Codable {
+        var canvasId: String
+        var version: Int
+        var nodes: [PlanningNode]
+        var edges: [Edge]
+        var sources: [DataSourceRecord]
+        var cards: [MonitorCard]
+    }
+    private struct SidecarApplyRequest: Codable {
+        var state: SidecarStateDTO
+        var changes: [PlanChange]
+    }
+    private struct SidecarApplyResponse: Codable {
+        var ok: Bool
+        var state: SidecarStateDTO?
+        var violations: [String]?
+    }
+
+    /// 可委托的 change kind(无本地 ledger 副作用 / 无级联清理)。
+    private static let sidecarDelegatableKinds: Set<PlanChange.Kind> = [
+        .addNode, .updateNode, .addEdge, .updateEdgeMode, .removeEdge
+    ]
+
+    /// 双重 env gate;任一缺失 ⇒ nil ⇒ 完全走本地(默认行为不变)。
+    private func sidecarApplyBaseURL() -> URL? {
+        let env = ProcessInfo.processInfo.environment
+        let flag = (env["MEEE2_APPLY_VIA_SIDECAR"] ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        guard flag == "1" || flag == "true" else { return nil }
+        guard let raw = env[HTTPPlannerAgentRuntime.runtimeUrlEnvVar]?.trimmingCharacters(in: .whitespaces),
+              !raw.isEmpty, let url = URL(string: raw) else { return nil }
+        return url
+    }
+
+    /// 委托结果 + 它所基于的 pre-apply snapshot —— 锁内据 snapshot 做乐观并发检查(P2)。
+    private struct DelegatedApply {
+        let resultNodes: [PlanningNode]
+        let resultEdges: [Edge]
+        let beforeNodes: [PlanningNode]
+        let beforeEdges: [Edge]
+    }
+
+    /// 锁外:判 gate + 短锁读 snapshot + POST sidecar。返回委托结果 + 其 snapshot(走委托),
+    /// 或 nil(不适用 / 网络失败 → 本地 fallback),或 throw applyRejected(校验拒绝)。
+    private func delegateApplyToSidecar(canvasId: String, proposalId: String) throws -> DelegatedApply? {
+        guard let base = sidecarApplyBaseURL() else { return nil }
+        // 短锁拿 snapshot 后立即释放(performSync 不能持主锁)。
+        let snapshot: (request: SidecarApplyRequest, beforeNodes: [PlanningNode], beforeEdges: [Edge])? = withLock {
+            guard let record = document.canvases[canvasId],
+                  let proposal = record.proposals.first(where: { $0.id == proposalId }),
+                  proposal.status == .approved,  // P1:未 approved 绝不委托(本地 applyNodeChange 也只对 approved 生效)
+                  !proposal.changes.isEmpty,
+                  proposal.changes.allSatisfy({ Self.sidecarDelegatableKinds.contains($0.kind) }) else { return nil }
+            let req = SidecarApplyRequest(
+                state: SidecarStateDTO(
+                    canvasId: canvasId, version: 0,
+                    nodes: record.nodes, edges: record.canvas.edges, sources: [], cards: []
+                ),
+                changes: proposal.changes
+            )
+            return (req, record.nodes, record.canvas.edges)
+        }
+        guard let snapshot, let body = try? JSONEncoder().encode(snapshot.request) else { return nil }
+        var req = URLRequest(url: base.appendingPathComponent("api/planner/runtime/apply"), timeoutInterval: 12)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (data, status) = Self.sidecarPostSync(req)
+        guard let data, let resp = try? JSONDecoder().decode(SidecarApplyResponse.self, from: data) else {
+            return nil // 网络 / 解码失败 → 本地 fallback(不破坏 apply)
+        }
+        if status == 422 || resp.ok == false {
+            throw PlannerCoreError.applyRejected(resp.violations ?? ["sidecar rejected without detail"])
+        }
+        guard let st = resp.state else { return nil }
+        return DelegatedApply(
+            resultNodes: st.nodes, resultEdges: st.edges,
+            beforeNodes: snapshot.beforeNodes, beforeEdges: snapshot.beforeEdges
+        )
+    }
+
+    private static func sidecarPostSync(_ request: URLRequest) -> (Data?, Int) {
+        var out: (Data?, Int) = (nil, 0)
+        let sema = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { sema.signal() }
+            out = (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }.resume()
+        _ = sema.wait(timeout: .now() + 13)
+        return out
+    }
+
     func applyProposal(
         proposalId: String,
         canvasId: String,
         service: PlannerCoreService
     ) throws -> CanvasRecord {
-        try withLock {
+        // 方向 A:先在锁外把「算结构」委托给 sidecar(env-gated;不适用/失败→nil 走本地;
+        // 校验拒绝→throw)。HTTP 不能持主锁,故 snapshot 读 + POST 都在 withLock 之外。
+        let delegated = try delegateApplyToSidecar(canvasId: canvasId, proposalId: proposalId)
+        return try withLock {
             var record = try requireRecord(canvasId: canvasId)
             guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
                 throw PlannerCoreError.proposalNotFound(proposalId)
@@ -4460,16 +4570,38 @@ final class PlannerStore {
             // saveProposal path already normalizes).
             try PlannerProposalValidator.validate(&proposal, canvas: record.canvas, nodes: record.nodes)
             record.proposals[index] = proposal
-            let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
-            record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
-            record.nodes = nodes
-            // Canvas runtime 5-atom governance (PR6+7): apply DataSource / Edge
-            // / Monitor / writeSourceVersion / external-artifact changes onto
-            // the canvas + version chain. Node-level changes (removeNode, skill
-            // bindings) already applied above in `applyNodeChange`; this pass
-            // reconciles first-class edges against the post-removal node set.
-            try applyCanvasAtomChanges(record: &record, proposal: proposal)
+            // P1(codex):委托路绕过了 applyNodeChange 的 approved 门(validate 只查结构);
+            // 在此统一 enforce,委托 / 本地两条路都不放过未 approved 的 proposal。
+            guard proposal.status == .approved else {
+                throw PlannerCoreError.proposalNotApproved
+            }
+            // P2(codex):委托结果是锁外基于 pre-apply snapshot 算的。只有当 record 自 snapshot
+            // 后未被并发 apply 改动(nodes/edges 仍一致)才采用;否则回落本地 apply 重算 ——
+            // 避免两个并发 apply 各用各的 stale snapshot 互相覆盖。
+            if let delegated,
+               delegated.beforeNodes == record.nodes,
+               delegated.beforeEdges == record.canvas.edges {
+                // 方向 A:用 sidecar 算好的结构(纯 node/edge),本地只补节点事件 + reconcile。
+                // 持久化 / artifacts / status / proposalApplied 事件仍走下方公共后处理。
+                let before = record.nodes
+                record.nodes = delegated.resultNodes
+                record.events.append(contentsOf: events(for: proposal, before: before, after: delegated.resultNodes))
+                record.canvas.edges = delegated.resultEdges
+                reconcileEdgesAndDependencies(&record)
+            } else {
+                let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
+                record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
+                record.nodes = nodes
+                // Canvas runtime 5-atom governance (PR6+7): apply DataSource / Edge
+                // / Monitor / writeSourceVersion / external-artifact changes onto
+                // the canvas + version chain. Node-level changes (removeNode, skill
+                // bindings) already applied above in `applyNodeChange`; this pass
+                // reconciles first-class edges against the post-removal node set.
+                try applyCanvasAtomChanges(record: &record, proposal: proposal)
+            }
             record.proposals[index].status = .applied
+            // 两个分支(委托 / fallback)都已写好 record.nodes;下方版本链 / artifacts 统一读它。
+            let nodes = record.nodes
             let newArtifactsFromProposal = proposalArtifacts(from: proposal, nodes: nodes, canvasId: canvasId)
             record.artifacts = mergeArtifacts(
                 record.artifacts,
