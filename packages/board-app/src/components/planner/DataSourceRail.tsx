@@ -89,12 +89,16 @@ export function DataSourceRail({ canvasId, dataSources }: DataSourceRailProps) {
           {dataSources.map((source) => {
             const badge = partitionBadge(source.partitionRule)
             return (
-              <li key={source.id} className="datasource-chip" title={`${source.title} · ${source.kind}`}>
+              <li
+                key={source.id}
+                className="datasource-chip"
+                title={`${source.semantics?.label ?? source.title} · ${source.identity?.connectorKind ?? source.kind}`}
+              >
                 <span className="datasource-chip__cylinder" aria-hidden>
                   <Database size={14} />
                 </span>
                 <span className="datasource-chip__body">
-                  <span className="datasource-chip__title">{source.title}</span>
+                  <span className="datasource-chip__title">{source.semantics?.label ?? source.title}</span>
                   <span className="datasource-chip__meta">
                     {badge && <span className="datasource-chip__partition">{badge}</span>}
                     <span className="datasource-chip__version">v{source.currentVersion}</span>
