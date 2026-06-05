@@ -52,11 +52,12 @@ type WorkflowImportTarget =
   | { kind: 'library'; id: string; name: string; commandName: string; path: string }
   | { kind: 'upload'; filename: string; source: string; name: string; commandName: string; path: string }
 
-const SOURCE_ORDER: CanvasTemplateSource[] = ['official', 'team', 'private']
+const SOURCE_ORDER: CanvasTemplateSource[] = ['official', 'team', 'private', 'canvas-script']
 const SOURCE_LABEL: Record<CanvasTemplateSource, string> = {
   official: 'Official',
   team: 'Team',
   private: 'Private',
+  'canvas-script': 'Canvas Script',
 }
 const CLAUDE_WORKFLOW_MAX_BYTES = 256 * 1024
 
