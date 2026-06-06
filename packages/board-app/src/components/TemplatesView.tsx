@@ -471,6 +471,7 @@ export function TemplatesView({
           title={`Preview - ${previewTarget.name}`}
           subtitle="Read-only template canvas. Preview does not create a canvas."
           onClose={() => setPreviewTarget(null)}
+          wide
         >
           <TemplatePreviewCanvas template={previewTarget} />
           <div className="template-preview__actions">
@@ -597,10 +598,22 @@ function GalleryCard({ template, owner, onUse, onPreview, onEdit, onMetadata }: 
   )
 }
 
-function TemplateModal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: ReactNode }) {
+function TemplateModal({
+  title,
+  subtitle,
+  onClose,
+  children,
+  wide = false,
+}: {
+  title: string
+  subtitle: string
+  onClose: () => void
+  children: ReactNode
+  wide?: boolean
+}) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className="modal canvas-confirm-modal template-gallery__apply-modal" role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`modal canvas-confirm-modal template-gallery__apply-modal${wide ? ' template-gallery__apply-modal--wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <div className="modal-title">{title}</div>
           <div className="modal-subtitle">{subtitle}</div>
@@ -639,6 +652,12 @@ interface TemplatePreviewModel {
 function TemplatePreviewCanvas({ template }: { template: CanvasTemplate }) {
   const model = useMemo(() => buildTemplatePreviewModel(template), [template])
   const sceneKind = template.renderProfile?.logic.layout === 'spatial' || template.sceneSpec ? template.sceneSpec?.kind : null
+  if (template.sceneSpec?.kind === 'poker-table') {
+    return <PokerTemplatePreview template={template} />
+  }
+  if (template.sceneSpec?.kind === 'travel-squad') {
+    return <TravelTemplatePreview template={template} />
+  }
   if (model.objects.length === 0) {
     return (
       <div className="template-preview template-preview--empty">
@@ -689,6 +708,118 @@ function TemplatePreviewCanvas({ template }: { template: CanvasTemplate }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function PokerTemplatePreview({ template }: { template: CanvasTemplate }) {
+  const state = asRecord(template.sceneSpec?.initialState) ?? {}
+  const players = readArray(state.players)
+  const cards = normalizeCards(readArray(state.communityCards), 5)
+  const actions = template.sceneSpec?.actions ?? []
+  return (
+    <div className="template-preview template-preview--poker" aria-label={`${template.name} poker preview`}>
+      <div className="template-preview__scene-header">
+        <span>Poker Table</span>
+        <strong>{readString(state.title, template.name)}</strong>
+        <em>Rules Orchestrator · node-scoped state artifacts</em>
+      </div>
+      <div className="template-preview-poker__felt">
+        <div className="template-preview-poker__cards">
+          {cards.map((card, index) => <span key={`${card}-${index}`}>{card}</span>)}
+        </div>
+        {players.map((player, index) => {
+          const item = asRecord(player) ?? {}
+          const seat = readString(item.seat, `seat-${index}`)
+          const name = readString(item.name, readString(item.id, `Player ${index + 1}`))
+          const stack = readString(item.stack, '0')
+          const status = readString(item.status, 'ready')
+          return (
+            <div key={readString(item.id, name)} className={`template-preview-poker__seat template-preview-poker__seat--${cssToken(seat)}`}>
+              <strong>{name}</strong>
+              <span>{status}</span>
+              <em>{stack}</em>
+            </div>
+          )
+        })}
+      </div>
+      <aside className="template-preview__side-panel">
+        <div>
+          <span>Phase</span>
+          <strong>{readString(state.phase, 'Setup')}</strong>
+        </div>
+        <div>
+          <span>Pot</span>
+          <strong>{readString(state.pot, '0')}</strong>
+        </div>
+        <div>
+          <span>Actions</span>
+          <strong>{actions.length}</strong>
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+function TravelTemplatePreview({ template }: { template: CanvasTemplate }) {
+  const state = asRecord(template.sceneSpec?.initialState) ?? {}
+  const route = readArray(state.route)
+  const timeline = readArray(state.timeline).slice(0, 3)
+  const hotels = readArray(state.hotels).slice(0, 2)
+  const budget = asRecord(state.budget)
+  return (
+    <div className="template-preview template-preview--travel" aria-label={`${template.name} travel preview`}>
+      <div className="template-preview__scene-header">
+        <span>Travel Squad</span>
+        <strong>{readString(state.title, template.name)}</strong>
+        <em>{readString(state.summary, template.description)}</em>
+      </div>
+      <div className="template-preview-travel__map">
+        <svg viewBox="0 0 100 100" role="img" aria-label="Travel route preview">
+          <polyline
+            points={route.map((stop, index) => {
+              const item = asRecord(stop) ?? {}
+              return `${readNumber(item.x, 18 + index * 26)},${readNumber(item.y, 50)}`
+            }).join(' ')}
+          />
+          {route.map((stop, index) => {
+            const item = asRecord(stop) ?? {}
+            const x = readNumber(item.x, 18 + index * 26)
+            const y = readNumber(item.y, 50)
+            return (
+              <g key={readString(item.id, String(index))} transform={`translate(${x} ${y})`}>
+                <circle r="4.2" />
+                <text y="-7">{readString(item.label, `Stop ${index + 1}`)}</text>
+                <text y="10">{readString(item.days, '')}</text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+      <aside className="template-preview__side-panel">
+        <div>
+          <span>Budget</span>
+          <strong>{readString(budget?.label, 'Awaiting')}</strong>
+        </div>
+        {timeline.map((item, index) => {
+          const row = asRecord(item) ?? {}
+          return (
+            <div key={`timeline-${index}`}>
+              <span>{readString(row.day, `D${index + 1}`)}</span>
+              <strong>{readString(row.title, 'Itinerary')}</strong>
+            </div>
+          )
+        })}
+        {hotels.map((item, index) => {
+          const row = asRecord(item) ?? {}
+          return (
+            <div key={`hotel-${index}`}>
+              <span>{readString(row.city, 'Hotel')}</span>
+              <strong>{readString(row.title, 'Candidate')}</strong>
+            </div>
+          )
+        })}
+      </aside>
     </div>
   )
 }
@@ -853,6 +984,32 @@ function objectCenterPercent(object: TemplatePreviewObject, bounds: TemplatePrev
     x: frame.left + frame.width / 2,
     y: frame.top + frame.height / 2,
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function readString(value: unknown, fallback: string): string {
+  if (typeof value === 'string' && value.trim()) return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return fallback
+}
+
+function readNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function normalizeCards(values: unknown[], count: number): string[] {
+  const cards = values.map((value) => readString(value, '??')).slice(0, count)
+  while (cards.length < count) cards.push('??')
+  return cards
 }
 
 function cssToken(value: string): string {
