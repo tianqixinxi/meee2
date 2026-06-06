@@ -92,6 +92,34 @@ _Avoid_: Sessions page, terminal workspace, session list modal
 A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and Artifacts. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
 _Avoid_: Graph editor as the product, separate monitor workspace
 
+**Template Canvas**:
+A Canvas Workspace that is published or reusable as a starting point for new canvases. A Template Canvas is still a canvas, not a separate canvas kind.
+_Avoid_: Template kind, template-only workspace
+
+**Canvas Render Protocol**:
+The shared language for deriving what appears on a canvas from canvas content, render rules, and user-editable render values. It lets workflow graphs, monitors, scene canvases, and artifact boards share one canvas model.
+_Avoid_: Graph-only canvas, scene-specific bypass
+
+**Canvas Render Profile**:
+The canvas-owned description of how a Canvas Workspace should be presented. A Canvas Render Profile combines Render Logic with Render Values.
+_Avoid_: Node layout as truth, hidden renderer state
+
+**Canvas Object**:
+An item that can be rendered on a canvas, either backed by a real entity such as a node, Artifact, session, or subcanvas, or render-only such as a label, region, asset, or background.
+_Avoid_: Fake node, visual-only workflow node
+
+**Canvas Relation**:
+A renderable relationship between Canvas Objects, such as dependency, dataflow, membership, projection, spatial link, or grouping.
+_Avoid_: Edge as only dependency, implicit visual link
+
+**Render Logic**:
+The declarative rules that say which Canvas Objects and Canvas Relations exist and which built-in renderers, layouts, and actions present them.
+_Avoid_: User React code, arbitrary CSS, plugin renderer
+
+**Render Values**:
+The user-editable presentation values for a canvas, such as position, size, visibility, collapsed state, pinning, and renderer variant.
+_Avoid_: Workflow status, Artifact truth, execution state
+
 **Canvas Scene**:
 A canvas-level presentation surface for spatial or simulated experiences such as a travel map or poker table. A Canvas Scene is not a node, because it does not own work; it presents Scene State and routes user intent to executable nodes.
 _Avoid_: Scene Host Node, game page, map node

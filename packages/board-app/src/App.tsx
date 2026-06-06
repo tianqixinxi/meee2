@@ -181,13 +181,13 @@ function fallbackCanvasList(): CanvasList {
 }
 
 function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): CanvasKind {
-  if (canvas?.kind === 'template') return 'template'
   if (canvas?.kind === 'monitor') return 'monitor'
   return 'board'
 }
 
 function isWorkspaceCanvas(canvas: CanvasList['canvases'][number] | null | undefined): boolean {
-  return canvasKind(canvas) !== 'template'
+  void canvas
+  return true
 }
 
 function canvasListSignature(list: CanvasList): string {
@@ -1180,12 +1180,7 @@ export default function App() {
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
     setWorkspaceMode(nextMode)
-    if (nextMode !== 'planner' || !canvasList) return
-    const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
-    if (canvasKind(currentCanvas) !== 'template') return
-    const firstWorkspaceCanvas = canvasList.canvases.find(isWorkspaceCanvas)
-    if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
-  }, [activeCanvasId, canvasList, handleSetActiveCanvas])
+  }, [])
 
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()

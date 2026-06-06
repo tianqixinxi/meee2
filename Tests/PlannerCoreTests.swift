@@ -1366,7 +1366,11 @@ final class PlannerCoreTests: XCTestCase {
     }
 
     func testTemplateCanvasSeedsDefaultWorkflowWhenEmpty() throws {
-        let snapshot = boardSnapshot(canvasId: "template-a", ownerId: "owner-a", kind: .template)
+        let snapshot = boardSnapshot(
+            canvasId: "template-a",
+            ownerId: "owner-a",
+            templateMetadata: BoardLayoutStore.TemplateMetadata()
+        )
 
         let state = try PlannerBoardBridge.canvasState(
             for: "template-a",
@@ -2815,7 +2819,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(updated.activities.first?.selectedNodeId, node.id)
     }
 
-    func testDeliveryPipelineTemplateCreatesStepAndExternalNodes() throws {
+    func testDeliveryPipelineTemplateCreatesExecutableNodesOnly() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
 
         let proposal = try PlannerBoardBridge.deliveryPipelineProposal(
@@ -2827,8 +2831,8 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(proposal.status, .pending)
         XCTAssertEqual(proposal.changes.count, 5)
         let nodes = proposal.changes.compactMap(\.node)
-        XCTAssertEqual(nodes.filter { $0.nodeKind == .step }.count, 4)
-        XCTAssertEqual(nodes.last?.nodeKind, .external)
+        XCTAssertEqual(nodes.filter { $0.nodeKind == .step }.count, 5)
+        XCTAssertEqual(nodes.last?.doerId, "release-automation")
         XCTAssertEqual(nodes.first?.dispatch?.runner, .byoaLocal)
         XCTAssertEqual(nodes[2].gate?.onFailGotoNodeId, "m3-impl-verify")
         XCTAssertTrue(nodes[2].artifactRefs?.contains("artifact://prerelease-verdict") == true)
@@ -2944,6 +2948,15 @@ final class PlannerCoreTests: XCTestCase {
         )
 
         XCTAssertTrue(graph.artifacts.contains { $0.reference == "repo://prd.md" })
+        let artifact = try XCTUnwrap(graph.artifacts.first { $0.reference == "repo://prd.md" })
+        XCTAssertTrue(graph.renderObjects.contains {
+            $0.id == "artifact:\(artifact.id)" && $0.entityRef?.kind == .artifact
+        })
+        XCTAssertTrue(graph.renderRelations.contains {
+            $0.kind == .dataflow
+                && $0.source.objectId == "node:\(node.id)"
+                && $0.target.objectId == "artifact:\(artifact.id)"
+        })
         XCTAssertFalse(graph.edges.isEmpty)
         XCTAssertEqual(moved.nodes.first { $0.id == node.id }?.layout?.x, 10)
     }
@@ -3411,6 +3424,158 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-2" })
         XCTAssertTrue(contract.allowedRouteTargets.contains { $0.id == "owner" })
         XCTAssertFalse(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-3" })
+    }
+
+    // MARK: - Canvas Render Protocol
+
+    func testGraphStateLazilyMigratesMissingRenderProfile() throws {
+        let canvasId = "canvas-render-a"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: canvasId, ownerId: "owner-a")
+        let profilePath = PlannerBoardBridge.store.renderProfilePath(canvasId: canvasId)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: profilePath))
+
+        let graph = try PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: profilePath))
+        XCTAssertEqual(graph.renderProfileStatus?.state, .missingMigrated)
+        XCTAssertEqual(graph.renderProfile?.version, CanvasRenderProfile.defaultVersion)
+        XCTAssertTrue(graph.renderObjects.contains { $0.entityRef?.kind == .node })
+        XCTAssertTrue(graph.renderRelations.contains { $0.kind == .dependency })
+    }
+
+    func testInvalidRenderProfileFallsBackToLastValidProfile() throws {
+        let canvasId = "canvas-render-invalid"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: canvasId, ownerId: "owner-a")
+        _ = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: "owner-a")
+        let profilePath = PlannerBoardBridge.store.renderProfilePath(canvasId: canvasId)
+        try "{ not valid json".data(using: .utf8)!.write(to: URL(fileURLWithPath: profilePath), options: .atomic)
+
+        let graph = try PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(graph.renderProfileStatus?.state, .invalidUsingLastValid)
+        XCTAssertNotNil(graph.renderProfileStatus?.error)
+        XCTAssertEqual(graph.renderProfile?.version, CanvasRenderProfile.defaultVersion)
+        XCTAssertFalse(graph.renderObjects.isEmpty)
+    }
+
+    func testRenderValuesPatchMergesObjectFields() throws {
+        let canvasId = "canvas-render-values-merge"
+        _ = try seedPlannerNodes(canvasId: canvasId, ownerId: "owner-a")
+        _ = try PlannerBoardBridge.store.patchRenderValues(
+            canvasId: canvasId,
+            objectValues: [
+                "node:\(canvasId)-node-1": CanvasRenderObjectValues(
+                    x: nil,
+                    y: nil,
+                    width: nil,
+                    height: nil,
+                    zIndex: nil,
+                    hidden: true,
+                    collapsed: nil,
+                    pinned: true,
+                    rendererVariant: nil,
+                    density: nil,
+                    icon: nil,
+                    designToken: nil
+                )
+            ],
+            relationValues: [:],
+            renderOnlyObjects: nil
+        )
+
+        let profile = try PlannerBoardBridge.store.patchRenderValues(
+            canvasId: canvasId,
+            objectValues: [
+                "node:\(canvasId)-node-1": CanvasRenderObjectValues(
+                    x: 42,
+                    y: 84,
+                    width: 360,
+                    height: nil,
+                    zIndex: nil,
+                    hidden: nil,
+                    collapsed: nil,
+                    pinned: nil,
+                    rendererVariant: nil,
+                    density: nil,
+                    icon: nil,
+                    designToken: nil
+                )
+            ],
+            relationValues: [:],
+            renderOnlyObjects: nil
+        )
+
+        let values = try XCTUnwrap(profile.values.objects["node:\(canvasId)-node-1"])
+        XCTAssertEqual(values.x, 42)
+        XCTAssertEqual(values.y, 84)
+        XCTAssertEqual(values.width, 360)
+        XCTAssertEqual(values.hidden, true)
+        XCTAssertEqual(values.pinned, true)
+    }
+
+    func testReplaceRenderLogicProposalUpdatesProfileLogic() throws {
+        let canvasId = "canvas-render-logic"
+        let ownerId = "owner-a"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: ownerId)
+        let record = try seedPlannerNodes(canvasId: canvasId, ownerId: ownerId)
+        _ = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        var logic = CanvasRenderLogic.workflowDefault
+        logic.layout = .collection
+        logic.actions.append(CanvasRenderActionRule(
+            id: "custom-reveal",
+            action: .revealProfile,
+            label: "Reveal profile",
+            targetObjectId: nil,
+            sceneActionId: nil
+        ))
+        let proposal = PlanProposal(
+            id: "proposal-render-logic",
+            canvasId: canvasId,
+            summary: "Switch render profile to collection layout",
+            changes: [
+                PlanChange(
+                    kind: .replaceRenderLogic,
+                    node: nil,
+                    nodeId: nil,
+                    title: nil,
+                    status: nil,
+                    renderLogic: logic
+                )
+            ],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+
+        _ = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+        let graph = try PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+
+        XCTAssertEqual(graph.renderProfile?.logic.layout, .collection)
+        XCTAssertEqual(graph.renderProfile?.logic.actions.last?.id, "custom-reveal")
     }
 
     // MARK: - Node Contract v2 (ENG-1)
@@ -5322,7 +5487,8 @@ final class PlannerCoreTests: XCTestCase {
         canvasId: String,
         ownerId: String,
         memberships: [BoardLayoutStore.CanvasSession] = [],
-        kind: BoardLayoutStore.CanvasKind = .board
+        kind: BoardLayoutStore.CanvasKind = .board,
+        templateMetadata: BoardLayoutStore.TemplateMetadata? = nil
     ) -> BoardLayoutStore.Snapshot {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let canvas = BoardLayoutStore.Canvas(
@@ -5335,6 +5501,7 @@ final class PlannerCoreTests: XCTestCase {
             isDefault: true,
             workspaceFolderName: nil,
             createdBy: ownerId,
+            templateMetadata: templateMetadata,
             createdAt: now,
             updatedAt: now
         )

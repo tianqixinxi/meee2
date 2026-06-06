@@ -321,6 +321,10 @@ struct PlannerGraphStateEnvelope: Encodable {
     let events: [PlannerEvent]
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
+    let renderProfile: CanvasRenderProfile?
+    let renderProfileStatus: CanvasRenderProfileStatus?
+    let renderObjects: [CanvasObject]
+    let renderRelations: [CanvasRelation]
     let nodeAssignments: [NodeAssignmentDTO]
     let canEditInternals: Bool
     /// P3.0 widget data — present when any node has a kanban/inbox/matrix
@@ -337,6 +341,10 @@ struct PlannerGraphStateEnvelope: Encodable {
         events: [PlannerEvent],
         artifacts: [PlannerArtifact],
         edges: [PlannerGraphEdge],
+        renderProfile: CanvasRenderProfile? = nil,
+        renderProfileStatus: CanvasRenderProfileStatus? = nil,
+        renderObjects: [CanvasObject] = [],
+        renderRelations: [CanvasRelation] = [],
         nodeAssignments: [NodeAssignmentDTO] = [],
         canEditInternals: Bool = true,
         integrationEntities: [IntegrationEntityDTO]? = nil
@@ -350,6 +358,10 @@ struct PlannerGraphStateEnvelope: Encodable {
         self.events = events
         self.artifacts = artifacts
         self.edges = edges
+        self.renderProfile = renderProfile
+        self.renderProfileStatus = renderProfileStatus
+        self.renderObjects = renderObjects
+        self.renderRelations = renderRelations
         self.nodeAssignments = nodeAssignments
         self.canEditInternals = canEditInternals
         self.integrationEntities = integrationEntities
@@ -493,6 +505,9 @@ struct CanvasTemplateDTO: Encodable {
     let updatedAt: Date?
     let defaultNodes: [CanvasTemplateNodeSpecDTO]
     let sceneSpec: CanvasSceneSpec?
+    let renderProfile: CanvasRenderProfile?
+    let renderObjects: [CanvasObject]
+    let renderRelations: [CanvasRelation]
 }
 
 struct CanvasTemplatesEnvelope: Encodable {

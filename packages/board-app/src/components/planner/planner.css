@@ -1606,6 +1606,151 @@
   fill: rgba(178, 174, 163, 0.62);
 }
 
+.planner-flow__edge--render .react-flow__edge-path {
+  stroke: rgba(138, 155, 148, 0.46);
+  stroke-dasharray: 5 6;
+}
+
+.planner-flow__edge--render-dataflow .react-flow__edge-path {
+  stroke: rgba(126, 177, 154, 0.56);
+}
+
+.canvas-object-card {
+  width: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+}
+
+.canvas-object-card.is-selected {
+  border-color: rgba(220, 154, 115, 0.52);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(220, 154, 115, 0.2);
+}
+
+.canvas-object-card.is-pinned {
+  border-color: rgba(141, 174, 155, 0.48);
+}
+
+.canvas-object-card__header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 8px;
+}
+
+.canvas-object-card__icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+}
+
+.canvas-object-card__title {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.canvas-object-card__title strong,
+.canvas-object-card__title span,
+.canvas-object-card__body p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-object-card__title strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.canvas-object-card__title span {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.canvas-object-card__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.canvas-object-card__actions button,
+.canvas-object-card__open {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+}
+
+.canvas-object-card__actions button {
+  width: 24px;
+  height: 24px;
+}
+
+.canvas-object-card__actions button:hover,
+.canvas-object-card__open:hover {
+  border-color: rgba(220, 154, 115, 0.42);
+  color: var(--text);
+}
+
+.canvas-object-card__body {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.canvas-object-card__badge {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.canvas-object-card__body p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.canvas-object-card__open {
+  width: fit-content;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.canvas-object-card--artifact {
+  background: color-mix(in srgb, var(--bg-elevated) 84%, rgba(120, 145, 136, 0.18));
+}
+
+.canvas-object-card--data-source {
+  background: color-mix(in srgb, var(--bg-elevated) 84%, rgba(112, 132, 165, 0.16));
+}
+
 .planner-flow__controls {
   overflow: hidden;
   border: 1px solid rgba(168, 165, 155, 0.18);

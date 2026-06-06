@@ -166,7 +166,7 @@ describe('TemplatesView Claude Code workflow imports', () => {
           description: 'Team view',
           icon: 'users',
           source: 'team',
-          kind: 'template',
+          kind: 'board',
           defaultCanvasKind: 'board',
           category: 'team',
           tags: ['ops'],
@@ -192,6 +192,73 @@ describe('TemplatesView Claude Code workflow imports', () => {
     expect(screen.getByText('Ops Tower')).toBeInTheDocument()
   })
 
+  it('previews a template canvas without applying it', async () => {
+    const onApplyTemplate = vi.fn().mockResolvedValue('new-canvas')
+    apiMocks.fetchTemplateCatalog.mockResolvedValue({
+      tags: ['engineering'],
+      templates: [
+        {
+          id: 'official-release',
+          name: 'Release Checklist',
+          description: 'Ship safely',
+          icon: 'rocket',
+          source: 'official',
+          kind: 'board',
+          defaultCanvasKind: 'board',
+          category: 'official',
+          tags: ['engineering'],
+          ownerUserId: null,
+          ownerName: 'meee2',
+          version: 1,
+          readOnly: true,
+          canEdit: false,
+          canReplace: false,
+          defaultNodesCount: 2,
+          updatedAt: null,
+          defaultNodes: [],
+          renderObjects: [
+            {
+              id: 'node:a',
+              label: 'Run CI suite',
+              entityRef: { kind: 'node', id: 'a', nodeId: 'a' },
+              renderer: 'card',
+              values: { x: 0, y: 0, width: 240, height: 120 },
+            },
+            {
+              id: 'node:b',
+              label: 'Tag release',
+              entityRef: { kind: 'node', id: 'b', nodeId: 'b' },
+              renderer: 'card',
+              values: { x: 300, y: 0, width: 240, height: 120 },
+            },
+          ],
+          renderRelations: [
+            {
+              id: 'dep:a:b',
+              kind: 'dependency',
+              source: { objectId: 'node:a' },
+              target: { objectId: 'node:b' },
+              renderer: 'directed-edge',
+            },
+          ],
+        },
+      ],
+    })
+    renderView({ onApplyTemplate })
+
+    expect(await screen.findByText('Release Checklist')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Preview template Release Checklist' }))
+
+    expect(screen.getByRole('dialog', { name: /Preview - Release Checklist/ })).toBeInTheDocument()
+    expect(screen.getByText('Run CI suite')).toBeInTheDocument()
+    expect(screen.getByText('Tag release')).toBeInTheDocument()
+    expect(onApplyTemplate).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use template' }))
+    expect(screen.getByRole('dialog', { name: /Use template - Release Checklist/ })).toBeInTheDocument()
+    expect(onApplyTemplate).not.toHaveBeenCalled()
+  })
+
   it('shows owner-gated team template editing', async () => {
     apiMocks.fetchTemplateCatalog.mockResolvedValue({
       tags: ['ops'],
@@ -202,7 +269,7 @@ describe('TemplatesView Claude Code workflow imports', () => {
           description: 'Team view',
           icon: 'users',
           source: 'team',
-          kind: 'template',
+          kind: 'board',
           defaultCanvasKind: 'board',
           category: 'team',
           tags: ['ops'],

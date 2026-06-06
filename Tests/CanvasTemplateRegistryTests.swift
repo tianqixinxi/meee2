@@ -44,7 +44,12 @@ final class CanvasTemplateRegistryTests: XCTestCase {
             ownerId: ownerId
         )
         _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [])
-        return try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+        let record = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+        try PlannerBoardBridge.store.writeRenderProfile(
+            CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
+            canvasId: canvasId
+        )
+        return record
     }
 
     func testCodingOrchestrationIsRegistered() {
@@ -70,6 +75,26 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         XCTAssertEqual(poker?.defaultNodes.count, 5)
     }
 
+    func testSceneTemplatesMaterializeRenderProfiles() throws {
+        let travel = try XCTUnwrap(CanvasTemplateRegistry.get("travel-squad"))
+        let travelProfile = CanvasTemplateRegistry.materializeRenderProfile(template: travel, canvasId: "travel-canvas")
+        XCTAssertEqual(travelProfile.logic.layout, .spatial)
+        XCTAssertTrue(travelProfile.values.renderOnlyObjects.contains { object in
+            object.id == "scene:travel-squad:background"
+        })
+        XCTAssertTrue(travelProfile.logic.actions.contains { $0.id == "scene-action:replan-route" })
+        XCTAssertNotNil(travelProfile.values.objects["node:travel-canvas-travel-squad-0"])
+
+        let poker = try XCTUnwrap(CanvasTemplateRegistry.get("poker-table"))
+        let pokerProfile = CanvasTemplateRegistry.materializeRenderProfile(template: poker, canvasId: "poker-canvas")
+        XCTAssertEqual(pokerProfile.logic.layout, .spatial)
+        XCTAssertTrue(pokerProfile.values.renderOnlyObjects.contains { object in
+            object.metadata != nil && object.id == "scene:poker-table:background"
+        })
+        XCTAssertTrue(pokerProfile.logic.actions.contains { $0.id == "scene-action:start-game" })
+        XCTAssertEqual(pokerProfile.values.objects["node:poker-canvas-poker-table-0"]?.rendererVariant, nil)
+    }
+
     func testTravelSquadMaterializesSceneAnchorsAndInitialState() throws {
         let template = try XCTUnwrap(CanvasTemplateRegistry.get("travel-squad"))
         let canvasId = "canvas-travel-\(UUID().uuidString)"
@@ -82,6 +107,9 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         XCTAssertTrue(scene.nodeAnchors.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-travel-squad-") })
         XCTAssertTrue(scene.actions.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-travel-squad-") })
         XCTAssertTrue(scene.artifactBindings.contains { $0.reference == "itinerary.json" })
+        let render = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId)
+        XCTAssertEqual(render.status.state, .valid)
+        XCTAssertEqual(render.profile.logic.layout, .spatial)
     }
 
     func testPokerTableMaterializesSceneAnchorsAndInitialState() throws {

@@ -84,10 +84,24 @@ public final class BoardLayoutStore {
     public enum CanvasKind: String, Codable, Equatable {
         case board     // ReactFlow dep-graph (default workflow editor)
         case monitor   // Workspace monitor (aggregated session / canvas health)
-        case template  // Template gallery entry, not a working canvas
-        // Note (2026-05-28): kanban/inbox/matrix were briefly modeled as canvas
-        // kinds and reverted. Correct model is node-level `widget` (see widget
-        // schema added in this same wave). DO NOT add view modes here.
+        // Note (2026-06-06): Template Canvas is no longer a CanvasKind.
+        // Legacy persisted `kind:"template"` decodes to `.board`; template
+        // identity lives in `Canvas.templateMetadata`.
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            switch raw {
+            case Self.monitor.rawValue:
+                self = .monitor
+            default:
+                self = .board
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 
     public struct Point: Codable, Equatable {
@@ -934,7 +948,7 @@ public final class BoardLayoutStore {
             guard let idx = store.canvases.firstIndex(where: { $0.id == id }) else {
                 throw storeError("canvas not found: \(id)")
             }
-            guard (store.canvases[idx].kind ?? .board) == .template else {
+            guard store.canvases[idx].templateMetadata != nil else {
                 throw storeError("canvas is not a template: \(id)")
             }
             let context = currentContext()

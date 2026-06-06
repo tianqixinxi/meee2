@@ -531,6 +531,10 @@ enum BoardAPI {
             events: state.events,
             artifacts: state.artifacts,
             edges: state.edges,
+            renderProfile: state.renderProfile,
+            renderProfileStatus: state.renderProfileStatus,
+            renderObjects: state.renderObjects,
+            renderRelations: state.renderRelations,
             nodeAssignments: nodeAssignments(for: state),
             canEditInternals: state.access.role == .owner,
             integrationEntities: integrationEntitiesFor(nodes: state.nodes)
@@ -1204,6 +1208,56 @@ enum BoardAPI {
         }
     }
 
+    private struct RenderValuesPatchRequest: Decodable {
+        let objects: [String: CanvasRenderObjectValues]?
+        let relations: [String: CanvasRenderRelationValues]?
+        let renderOnlyObjects: [CanvasObject]?
+    }
+
+    static func patchCanvasRenderValues(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: RenderValuesPatchRequest.self) else {
+            return errorResponse("invalid_json", "body must be a render values patch", status: 400)
+        }
+        do {
+            _ = try PlannerBoardBridge.store.patchRenderValues(
+                canvasId: canvasId,
+                objectValues: body.objects ?? [:],
+                relationValues: body.relations ?? [:],
+                renderOnlyObjects: body.renderOnlyObjects
+            )
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func revealCanvasRenderProfile(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            _ = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId)
+            let path = PlannerBoardBridge.store.renderProfilePath(canvasId: canvasId)
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            return jsonResponse(["path": path])
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     /// Integration-entity pool for `external` widgets.
     ///
     /// 设计原则(2026-05-29):integration 层只做 schema 定义 + view 渲染,真实数据由
@@ -1230,18 +1284,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1844,18 +1887,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2120,18 +2152,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2152,18 +2173,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2312,18 +2322,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2365,18 +2364,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2404,18 +2392,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2443,18 +2420,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2496,18 +2462,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2528,18 +2483,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2689,7 +2633,7 @@ enum BoardAPI {
             let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
             guard let scene = state.canvas.sceneSpec,
                   scene.kind == "poker-table",
-                  (scene.orchestration == nil || scene.orchestration?.kind == "poker-rules-v1") else {
+                  scene.orchestration == nil || scene.orchestration?.kind == "poker-rules-v1" else {
                 return errorResponse("unsupported_scene_action", "only poker-rules-v1 scene actions are supported", status: 400)
             }
             guard let dealerNodeId = scene.orchestration?.stateNodeId
@@ -3561,17 +3505,7 @@ enum BoardAPI {
                         subCanvasId: existingSubCanvasId,
                         action: "opened",
                         message: "Opened existing sub-canvas.",
-                        graph: PlannerGraphStateEnvelope(
-                            canvas: state.canvas,
-                            nodes: state.nodes,
-                            states: state.states,
-                            proposals: state.proposals,
-                            access: state.access,
-                            activities: state.activities,
-                            events: state.events,
-                            artifacts: state.artifacts,
-                            edges: state.edges
-                        )
+                        graph: graphEnvelope(state)
                     ))
                 }
             }
@@ -3596,17 +3530,7 @@ enum BoardAPI {
                 message: existingSubCanvasId?.isEmpty == false
                     ? "Previous sub-canvas was missing; created and linked a new one."
                     : "Created and linked a sub-canvas.",
-                graph: PlannerGraphStateEnvelope(
-                    canvas: state.canvas,
-                    nodes: state.nodes,
-                    states: state.states,
-                    proposals: state.proposals,
-                    access: state.access,
-                    activities: state.activities,
-                    events: state.events,
-                    artifacts: state.artifacts,
-                    edges: state.edges
-                )
+                graph: graphEnvelope(state)
             ), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -3631,17 +3555,7 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -5975,18 +5889,12 @@ enum BoardAPI {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
         let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
-        guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board, monitor, or template", status: 400)
+        guard rawKind != "template",
+              let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
+            return errorResponse("bad_request", "kind must be board or monitor", status: 400)
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
-            if kind == .template,
-               let templateCanvas = snapshot.canvases.first(where: { $0.id == snapshot.activeCanvasId }) {
-                _ = try PlannerBoardBridge.store.record(
-                    for: planningCanvas(for: templateCanvas, context: "template:\(templateCanvas.id):version:1"),
-                    seedNodes: []
-                )
-            }
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -6090,7 +5998,7 @@ enum BoardAPI {
             officialTemplateDTO(template)
         }
         let custom = BoardLayoutStore.shared.snapshot().canvases
-            .filter { ($0.kind ?? .board) == .template }
+            .filter { $0.templateMetadata != nil }
             .compactMap { canvas -> CanvasTemplateDTO? in
                 customTemplateDTO(canvas, actor: actor)
             }
@@ -6103,7 +6011,8 @@ enum BoardAPI {
     }
 
     private static func officialTemplateDTO(_ template: CanvasTemplate) -> CanvasTemplateDTO {
-        CanvasTemplateDTO(
+        let preview = officialTemplateRenderPreview(template)
+        return CanvasTemplateDTO(
             id: template.id,
             name: template.name,
             description: template.description,
@@ -6122,7 +6031,10 @@ enum BoardAPI {
             defaultNodesCount: template.defaultNodes.count,
             updatedAt: nil,
             defaultNodes: template.defaultNodes.map(templateNodeDTO(_:)),
-            sceneSpec: template.sceneSpec
+            sceneSpec: template.sceneSpec,
+            renderProfile: preview.profile,
+            renderObjects: preview.objects,
+            renderRelations: preview.relations
         )
     }
 
@@ -6143,13 +6055,15 @@ enum BoardAPI {
         let metadata = templateMetadata(for: canvas)
         let canEdit = ownerId == actor.userId
         let count = PlannerBoardBridge.store.reusableNodeCount(canvasId: canvas.id)
+        let renderProfile = try? PlannerBoardBridge.store.renderProfileState(canvasId: canvas.id).profile
+        let renderPreview = customTemplateRenderPreview(canvasId: canvas.id)
         return CanvasTemplateDTO(
             id: canvas.id,
             name: canvas.name,
             description: metadata.description,
             icon: metadata.icon,
             source: canvas.scope == .team ? "team" : "private",
-            kind: (canvas.kind ?? .template).rawValue,
+            kind: metadata.defaultCanvasKind.rawValue,
             defaultCanvasKind: metadata.defaultCanvasKind.rawValue,
             category: canvas.scope == .team ? "team" : "private",
             tags: metadata.tags,
@@ -6162,8 +6076,49 @@ enum BoardAPI {
             defaultNodesCount: count,
             updatedAt: metadata.updatedAt,
             defaultNodes: [],
-            sceneSpec: PlannerBoardBridge.store.reusableSceneSpec(canvasId: canvas.id)
+            sceneSpec: PlannerBoardBridge.store.reusableSceneSpec(canvasId: canvas.id),
+            renderProfile: renderProfile,
+            renderObjects: renderPreview.objects,
+            renderRelations: renderPreview.relations
         )
+    }
+
+    private static func officialTemplateRenderPreview(
+        _ template: CanvasTemplate
+    ) -> (profile: CanvasRenderProfile, objects: [CanvasObject], relations: [CanvasRelation]) {
+        let canvasId = template.id
+        let ownerId = "meee2"
+        let profile = CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId)
+        let canvas = PlanningCanvas(
+            id: canvasId,
+            ownerId: ownerId,
+            title: template.name,
+            plannerContext: template.description,
+            sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(template: template, canvasId: canvasId)
+        )
+        let nodes = CanvasTemplateRegistry.materializeNodes(
+            template: template,
+            canvasId: canvasId,
+            ownerId: ownerId
+        )
+        let resolved = CanvasRenderResolver.resolve(
+            record: PlannerStore.CanvasRecord(canvas: canvas, nodes: nodes, proposals: []),
+            profile: profile
+        )
+        return (profile, resolved.objects, resolved.relations)
+    }
+
+    private static func customTemplateRenderPreview(
+        canvasId: String
+    ) -> (objects: [CanvasObject], relations: [CanvasRelation]) {
+        guard let state = try? PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: BoardLayoutStore.shared.snapshot(),
+            actorUserId: PlannerPermission.currentActorId()
+        ) else {
+            return ([], [])
+        }
+        return (state.renderObjects, state.renderRelations)
     }
 
     private static func templateNodeDTO(_ spec: TemplateNodeSpec) -> CanvasTemplateNodeSpecDTO {
@@ -6236,7 +6191,7 @@ enum BoardAPI {
     ) throws -> (canvas: BoardLayoutStore.Canvas, metadata: BoardLayoutStore.TemplateMetadata, actor: (userId: String, teamId: String)) {
         let actor = BoardLayoutStore.shared.currentActorContext()
         guard let canvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
-              (canvas.kind ?? .board) == .template else {
+              canvas.templateMetadata != nil else {
             throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "template not found: \(templateId)"])
         }
         let ownerId = canvas.ownerUserId ?? canvas.createdBy ?? "local-user"
@@ -6279,8 +6234,8 @@ enum BoardAPI {
 
     private static func canvasKind(from raw: String?, fallback: BoardLayoutStore.CanvasKind = .board) -> BoardLayoutStore.CanvasKind {
         guard let raw,
-              let kind = BoardLayoutStore.CanvasKind(rawValue: raw),
-              kind != .template else {
+              raw != "template",
+              let kind = BoardLayoutStore.CanvasKind(rawValue: raw) else {
             return fallback
         }
         return kind
@@ -6386,6 +6341,10 @@ enum BoardAPI {
             )
             _ = try PlannerBoardBridge.store.record(for: planning, seedNodes: [])
             _ = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+            try PlannerBoardBridge.store.writeRenderProfile(
+                CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
+                canvasId: canvasId
+            )
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -6400,7 +6359,7 @@ enum BoardAPI {
     ) -> HttpResponse {
         let actor = BoardLayoutStore.shared.currentActorContext()
         guard let templateCanvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
-              (templateCanvas.kind ?? .board) == .template,
+              templateCanvas.templateMetadata != nil,
               customTemplateDTO(templateCanvas, actor: actor) != nil else {
             return errorResponse("not_found", "template not found: \(templateId)", status: 404)
         }
@@ -6510,7 +6469,10 @@ enum BoardAPI {
                 defaultNodesCount: item.nodeCount,
                 updatedAt: nil,
                 defaultNodes: [],
-                sceneSpec: nil
+                sceneSpec: nil,
+                renderProfile: nil,
+                renderObjects: [],
+                renderRelations: []
             )
         }
     }
@@ -6615,7 +6577,7 @@ enum BoardAPI {
             let created = try BoardLayoutStore.shared.createCanvas(
                 name: name,
                 scope: scope,
-                kind: .template,
+                kind: metadata.defaultCanvasKind,
                 templateMetadata: metadata
             )
             let templateId = created.activeCanvasId

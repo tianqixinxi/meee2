@@ -12,6 +12,11 @@ import type {
   SessionIntakeDiagnostics,
   CanvasList,
   CanvasKind,
+  CanvasObject,
+  CanvasRelation,
+  CanvasRenderProfile,
+  CanvasRenderObjectValues,
+  CanvasRenderRelationValues,
   CanvasSceneSpec,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -682,7 +687,7 @@ export interface CanvasTemplate {
    * canvases), so we declare it non-optional here.
    */
   kind: NonNullable<CanvasList['canvases'][number]['kind']>
-  defaultCanvasKind: Exclude<NonNullable<CanvasList['canvases'][number]['kind']>, 'template'>
+  defaultCanvasKind: NonNullable<CanvasList['canvases'][number]['kind']>
   /** Legacy bucket retained for older callers; source is the catalog grouping. */
   category: string
   tags: string[]
@@ -696,6 +701,9 @@ export interface CanvasTemplate {
   updatedAt?: string | null
   defaultNodes: CanvasTemplateNodeSpec[]
   sceneSpec?: CanvasSceneSpec | null
+  renderProfile?: CanvasRenderProfile | null
+  renderObjects?: CanvasObject[]
+  renderRelations?: CanvasRelation[]
 }
 
 export interface CanvasTemplateCatalog {
@@ -1021,7 +1029,7 @@ export interface TemplateMetadataInput {
   scope?: CanvasScope
   tags?: string[]
   icon?: string
-  defaultCanvasKind?: Exclude<CanvasKind, 'template'>
+  defaultCanvasKind?: CanvasKind
 }
 
 export function createTemplateFromCanvas(input: TemplateMetadataInput & { canvasId: string }): Promise<CanvasList> {
@@ -2208,6 +2216,30 @@ export function updatePlannerNodeLayout(
       method: 'PATCH',
       body: JSON.stringify(layout),
     },
+  )
+}
+
+export function patchCanvasRenderValues(
+  canvasId: string,
+  input: {
+    objects?: Record<string, CanvasRenderObjectValues>
+    relations?: Record<string, CanvasRenderRelationValues>
+    renderOnlyObjects?: CanvasObject[]
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/render-profile/values`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function revealCanvasRenderProfile(canvasId: string): Promise<{ path: string }> {
+  return jsonRequest<{ path: string }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/render-profile/reveal`,
+    { method: 'POST' },
   )
 }
 

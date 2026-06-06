@@ -24,6 +24,7 @@ import {
 import {
   fetchTeamMembers,
   fetchTemplateCatalog,
+  revealCanvasRenderProfile,
   setPlannerCanvasDescription,
   streamAssistantChat,
   type TemplateMetadataInput,
@@ -68,7 +69,7 @@ interface Props {
   onReplaceTemplate?: (
     templateId: string,
     canvasId: string,
-    input: { name?: string; description?: string; tags?: string[]; defaultCanvasKind?: Exclude<CanvasKind, 'template'> },
+    input: { name?: string; description?: string; tags?: string[]; defaultCanvasKind?: CanvasKind },
   ) => Promise<void | string> | void
   onResolveCanvasConflict?: (canvasId: string, choice: 'current' | 'remote') => Promise<void> | void
   userProfile?: UserProfile | null
@@ -167,6 +168,7 @@ export function CanvasToolbar({
   const [saveTemplateError, setSaveTemplateError] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [infoTab, setInfoTab] = useState<'overview' | 'settings' | 'danger'>('overview')
+  const [infoError, setInfoError] = useState<string | null>(null)
   const [canvasQuery, setCanvasQuery] = useState('')
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasDescriptionDraft, setCanvasDescriptionDraft] = useState('')
@@ -628,7 +630,7 @@ export function CanvasToolbar({
   }
 
   const openSaveTemplate = () => {
-    if (!activeCanvas || activeCanvas.kind === 'template' || activeCanvas.kind === 'monitor') return
+    if (!activeCanvas || activeCanvas.kind === 'monitor') return
     setSaveTemplateName(`${displayCanvasName(activeCanvas)} template`)
     setSaveTemplateDescription(recap?.description ?? '')
     setSaveTemplateScope('personal')
@@ -717,14 +719,23 @@ export function CanvasToolbar({
   const recapSummary = recap?.summary?.trim() || ''
   const recapDetails = recap?.details ?? []
   const canExpandRecap = recapSummary.length > 0 || recapDetails.length > 0
-  const isSceneCanvas = Boolean(plannerState?.canvas.id === activeCanvas.id && plannerState.canvas.sceneSpec)
+  const isSceneCanvas = Boolean(plannerState?.canvas.id === activeCanvas.id && hasScenePresentation(plannerState))
+  const renderProfileStatus = plannerState?.canvas.id === activeCanvas.id ? plannerState.renderProfileStatus : null
+  const renderProfileHasError = renderProfileStatus?.state === 'invalid-using-last-valid'
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
   const canSaveActiveCanvasAsTemplate = Boolean(
-    onSaveCanvasAsTemplate && activeCanvas.kind !== 'template' && activeCanvas.kind !== 'monitor',
+    onSaveCanvasAsTemplate && activeCanvas.kind !== 'monitor',
   )
   const recapContextStyle: CSSProperties | undefined = recapPosition
     ? { position: 'fixed', left: recapPosition.x, top: recapPosition.y }
     : undefined
+
+  const revealRenderProfile = () => {
+    revealCanvasRenderProfile(activeCanvas.id)
+      .catch((error) => {
+        setInfoError((error as Error).message || 'Failed to reveal render profile')
+      })
+  }
 
   return (
     <div
@@ -808,12 +819,24 @@ export function CanvasToolbar({
             setMenuOpen(false)
             setCanvasNameDraft(activeCanvas.name)
             setCanvasDescriptionDraft(recap?.description ?? '')
+            setInfoError(null)
             setInfoTab('overview')
             setInfoOpen(true)
           }}
         >
           <Info size={14} aria-hidden />
         </button>
+        {renderProfileHasError && (
+          <button
+            type="button"
+            className="canvas-toolbar__info"
+            aria-label="Render profile has an error"
+            title={renderProfileStatus?.error || 'Render profile has an error'}
+            onClick={revealRenderProfile}
+          >
+            <AlertTriangle size={14} aria-hidden />
+          </button>
+        )}
 
         {menuOpen && (
           <div className="canvas-toolbar__panel">
@@ -1212,6 +1235,7 @@ export function CanvasToolbar({
               ))}
             </div>
             <div className="modal-body col canvas-info-modal__body">
+              {infoError && <div className="templates-error">{infoError}</div>}
               {infoTab === 'overview' && (
                 <>
                   <div className="canvas-info-modal__row">
@@ -1223,6 +1247,24 @@ export function CanvasToolbar({
                       <span>{t('canvas.aggregation')}</span>
                       <strong>{t('canvas.monitorAggregation')}</strong>
                     </div>
+                  )}
+                  {renderProfileStatus && (
+                    <>
+                      <div className="canvas-info-modal__row">
+                        <span>Render profile</span>
+                        <strong>{renderProfileStatus.state}</strong>
+                      </div>
+                      <div className="canvas-info-modal__row">
+                        <span>Profile file</span>
+                        <button type="button" className="ghost" onClick={revealRenderProfile}>Reveal</button>
+                      </div>
+                      {renderProfileStatus.error && (
+                        <div className="canvas-info-modal__row">
+                          <span>Error</span>
+                          <strong>{renderProfileStatus.error}</strong>
+                        </div>
+                      )}
+                    </>
                   )}
                   <div className="canvas-info-modal__row">
                     <span>{t('canvas.visibility')}</span>
@@ -1801,12 +1843,18 @@ function displayCanvasName(canvas: CanvasInfo): string {
 
 function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
   if (canvas.kind === 'monitor') return t('canvas.type.monitor')
-  if (canvas.kind === 'template') return t('canvas.type.template')
   return t('canvas.type.board')
 }
 
 function templateKindForCanvas(canvas: CanvasInfo): TemplateMetadataInput['defaultCanvasKind'] {
   return canvas.kind === 'monitor' ? 'monitor' : 'board'
+}
+
+function hasScenePresentation(state: PlannerGraphState | null | undefined): boolean {
+  if (!state) return false
+  if (state.canvas.sceneSpec) return true
+  return state.renderProfile?.logic.layout === 'spatial'
+    && (state.renderObjects ?? []).some((object) => object.renderOnly?.kind === 'background')
 }
 
 function clampRecapPosition(x: number, y: number, width: number, height: number): { x: number; y: number } {

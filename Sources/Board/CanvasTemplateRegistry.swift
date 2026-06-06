@@ -130,6 +130,11 @@ enum CanvasTemplateRegistry {
         BoardJSONValue.fromAny(raw) ?? .object([:])
     }
 
+    private static func boardJSONValue<T: Encodable>(_ value: T) -> BoardJSONValue? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return try? JSONDecoder().decode(BoardJSONValue.self, from: data)
+    }
+
     // MARK: - Templates
 
     /// 1. code-review — 单个 kanban widget 节点，PR 评审看板。
@@ -774,5 +779,63 @@ enum CanvasTemplateRegistry {
             scene.orchestration = orchestration
         }
         return scene
+    }
+
+    static func materializeRenderProfile(
+        template: CanvasTemplate,
+        canvasId: String
+    ) -> CanvasRenderProfile {
+        let layout: CanvasRenderLayoutKind = template.sceneSpec == nil
+            ? (template.kind == .monitor ? .collection : .graph)
+            : .spatial
+        var profile = CanvasRenderProfile.default(layout: layout)
+
+        for (index, spec) in template.defaultNodes.enumerated() {
+            let nodeId = "\(canvasId)-\(template.id)-\(index)"
+            profile.values.objects["node:\(nodeId)"] = CanvasRenderObjectValues(
+                x: spec.positionHint?["x"] ?? Double(index) * 320,
+                y: spec.positionHint?["y"] ?? 0,
+                width: spec.positionHint?["width"] ?? 300,
+                height: spec.positionHint?["height"] ?? 168,
+                zIndex: nil,
+                hidden: nil,
+                collapsed: nil,
+                pinned: nil,
+                rendererVariant: spec.widget?.kind.rawValue,
+                density: nil,
+                icon: nil,
+                designToken: nil
+            )
+        }
+
+        if let scene = materializeSceneSpec(template: template, canvasId: canvasId) {
+            var metadata: [String: BoardJSONValue] = ["sceneKind": .string(scene.kind)]
+            if let initialState = scene.initialState {
+                metadata["initialState"] = initialState
+            }
+            if let sceneSpecValue = boardJSONValue(scene) {
+                metadata["sceneSpec"] = sceneSpecValue
+            }
+            profile.values.renderOnlyObjects.append(CanvasObject(
+                id: "scene:\(scene.kind):background",
+                label: "\(scene.kind) background",
+                entityRef: nil,
+                renderOnly: CanvasRenderOnlyObject(kind: .background, id: "scene:\(scene.kind):background"),
+                renderer: .asset,
+                values: nil,
+                metadata: .object(metadata)
+            ))
+            for action in scene.actions {
+                profile.logic.actions.append(CanvasRenderActionRule(
+                    id: "scene-action:\(action.id)",
+                    action: .runSceneAction,
+                    label: action.label,
+                    targetObjectId: "node:\(action.nodeId)",
+                    sceneActionId: action.id
+                ))
+            }
+        }
+
+        return profile
     }
 }

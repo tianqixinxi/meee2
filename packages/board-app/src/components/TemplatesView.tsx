@@ -3,6 +3,7 @@ import {
   Gamepad2,
   GitPullRequest,
   Globe2,
+  Eye,
   LockKeyhole,
   Moon,
   RefreshCw,
@@ -15,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { type ChangeEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
-import type { BoardState, CanvasInfo, CanvasScope } from '../types'
+import type { BoardState, CanvasInfo, CanvasObject, CanvasRelation, CanvasScope } from '../types'
 import {
   fetchClaudeWorkflows,
   fetchTeamMembers,
@@ -94,6 +95,7 @@ export function TemplatesView({
   const [availableTags, setAvailableTags] = useState<string[]>([])
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [ownersById, setOwnersById] = useState<Record<string, OwnerIdentity>>({})
+  const [previewTarget, setPreviewTarget] = useState<CanvasTemplate | null>(null)
   const [applyTarget, setApplyTarget] = useState<CanvasTemplate | null>(null)
   const [applyNameDraft, setApplyNameDraft] = useState('')
   const [applyScopeDraft, setApplyScopeDraft] = useState<CanvasScope>('personal')
@@ -403,6 +405,7 @@ export function TemplatesView({
                   template={template}
                   owner={ownerIdentityForTemplate(template, userProfile, ownersById)}
                   onUse={() => openApplyDialog(template)}
+                  onPreview={() => setPreviewTarget(template)}
                   onEdit={() => void onCreateTemplateDraft(template.id)}
                   onMetadata={() => openMetadataDialog(template)}
                 />
@@ -463,6 +466,39 @@ export function TemplatesView({
         </TemplateModal>
       )}
 
+      {previewTarget && (
+        <TemplateModal
+          title={`Preview - ${previewTarget.name}`}
+          subtitle="Read-only template canvas. Preview does not create a canvas."
+          onClose={() => setPreviewTarget(null)}
+        >
+          <TemplatePreviewCanvas template={previewTarget} />
+          <div className="template-preview__actions">
+            {!previewTarget.readOnly && (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void onCreateTemplateDraft(previewTarget.id)}
+                disabled={!previewTarget.canEdit}
+              >
+                Edit draft
+              </button>
+            )}
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                const target = previewTarget
+                setPreviewTarget(null)
+                openApplyDialog(target)
+              }}
+            >
+              Use template
+            </button>
+          </div>
+        </TemplateModal>
+      )}
+
       {metadataMode && (
         <TemplateModal
           title="Edit template details"
@@ -511,11 +547,12 @@ interface GalleryCardProps {
   template: CanvasTemplate
   owner: OwnerIdentity
   onUse: () => void
+  onPreview: () => void
   onEdit: () => void
   onMetadata: () => void
 }
 
-function GalleryCard({ template, owner, onUse, onEdit, onMetadata }: GalleryCardProps) {
+function GalleryCard({ template, owner, onUse, onPreview, onEdit, onMetadata }: GalleryCardProps) {
   const Icon = ICONS_BY_NAME[template.icon] ?? Sparkles
   const nodeCount = template.defaultNodesCount || template.defaultNodes.length
   return (
@@ -542,7 +579,13 @@ function GalleryCard({ template, owner, onUse, onEdit, onMetadata }: GalleryCard
       )}
       <div className="template-gallery__card-foot">
         <span className="template-gallery__node-count">{nodeCount} node{nodeCount === 1 ? '' : 's'} · v{template.version}</span>
-        <button type="button" className="primary template-gallery__use-button" onClick={onUse} aria-label={`Use template ${template.name}`}>Use template</button>
+        <div className="template-gallery__card-actions">
+          <button type="button" className="ghost template-gallery__preview-button" onClick={onPreview} aria-label={`Preview template ${template.name}`}>
+            <Eye size={12} aria-hidden />
+            Preview
+          </button>
+          <button type="button" className="primary template-gallery__use-button" onClick={onUse} aria-label={`Use template ${template.name}`}>Use template</button>
+        </div>
       </div>
       {!template.readOnly && (
         <div className="template-gallery__card-foot">
@@ -573,6 +616,79 @@ function ModalFooter({ onCancel, onSubmit, submitLabel, disabled }: { onCancel: 
     <div className="modal-footer">
       <button className="ghost" type="button" onClick={onCancel}>Cancel</button>
       <button className="primary" type="button" onClick={onSubmit} disabled={disabled}>{submitLabel}</button>
+    </div>
+  )
+}
+
+interface TemplatePreviewObject {
+  id: string
+  label: string
+  kind: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface TemplatePreviewModel {
+  objects: TemplatePreviewObject[]
+  relations: Array<{ id: string; source: string; target: string; kind: string }>
+  bounds: { minX: number; minY: number; width: number; height: number }
+}
+
+function TemplatePreviewCanvas({ template }: { template: CanvasTemplate }) {
+  const model = useMemo(() => buildTemplatePreviewModel(template), [template])
+  const sceneKind = template.renderProfile?.logic.layout === 'spatial' || template.sceneSpec ? template.sceneSpec?.kind : null
+  if (model.objects.length === 0) {
+    return (
+      <div className="template-preview template-preview--empty">
+        <strong>{template.name}</strong>
+        <span>No preview objects are available for this template.</span>
+      </div>
+    )
+  }
+  const objectById = new Map(model.objects.map((object) => [object.id, object]))
+  return (
+    <div className={`template-preview${sceneKind ? ' template-preview--scene' : ''}`} aria-label={`${template.name} preview`}>
+      {sceneKind && <span className="template-preview__scene-pill">{sceneKind}</span>}
+      <svg className="template-preview__edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+        {model.relations.map((relation) => {
+          const source = objectById.get(relation.source)
+          const target = objectById.get(relation.target)
+          if (!source || !target) return null
+          const a = objectCenterPercent(source, model.bounds)
+          const b = objectCenterPercent(target, model.bounds)
+          return (
+            <line
+              key={relation.id}
+              className={`template-preview__edge template-preview__edge--${cssToken(relation.kind)}`}
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+            />
+          )
+        })}
+      </svg>
+      {model.objects.map((object) => {
+        const frame = objectFramePercent(object, model.bounds)
+        return (
+          <div
+            key={object.id}
+            className={`template-preview__object template-preview__object--${cssToken(object.kind)}`}
+            style={{
+              left: `${frame.left}%`,
+              top: `${frame.top}%`,
+              width: `${frame.width}%`,
+              height: `${frame.height}%`,
+            }}
+            title={object.label}
+          >
+            <span>{object.kind}</span>
+            <strong>{object.label}</strong>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -640,6 +756,107 @@ function ownerIdentityForTemplate(
 
 function ownerMatchesProfile(ownerId: string, userProfile: UserProfile): boolean {
   return [userProfile.userId, userProfile.userName, userProfile.userEmail].filter(Boolean).includes(ownerId)
+}
+
+function buildTemplatePreviewModel(template: CanvasTemplate): TemplatePreviewModel {
+  const objects = previewObjectsForTemplate(template)
+  const relations = (template.renderRelations ?? [])
+    .filter((relation) => relation.values?.visible !== false)
+    .map((relation) => ({
+      id: relation.id,
+      source: relation.source.objectId,
+      target: relation.target.objectId,
+      kind: relation.kind,
+    }))
+  return {
+    objects,
+    relations,
+    bounds: boundsForObjects(objects),
+  }
+}
+
+function previewObjectsForTemplate(template: CanvasTemplate): TemplatePreviewObject[] {
+  const objects = (template.renderObjects ?? [])
+    .filter((object) => object.values?.hidden !== true && object.renderOnly?.kind !== 'background')
+    .map(previewObjectFromCanvasObject)
+  if (objects.length > 0) return objects
+  return template.defaultNodes.map((node, index) => {
+    const width = node.positionHint?.width ?? 240
+    const height = node.positionHint?.height ?? 120
+    return {
+      id: `node:${index}`,
+      label: node.title,
+      kind: node.widget ? 'widget' : 'node',
+      x: node.positionHint?.x ?? (index % 3) * 280,
+      y: node.positionHint?.y ?? Math.floor(index / 3) * 160,
+      width,
+      height,
+    }
+  })
+}
+
+function previewObjectFromCanvasObject(object: CanvasObject): TemplatePreviewObject {
+  const values = object.values ?? {}
+  const size = defaultPreviewSize(object)
+  return {
+    id: object.id,
+    label: object.label,
+    kind: object.entityRef?.kind ?? object.renderOnly?.kind ?? object.renderer,
+    x: typeof values.x === 'number' ? values.x : 0,
+    y: typeof values.y === 'number' ? values.y : 0,
+    width: typeof values.width === 'number' ? values.width : size.width,
+    height: typeof values.height === 'number' ? values.height : size.height,
+  }
+}
+
+function defaultPreviewSize(object: CanvasObject): { width: number; height: number } {
+  switch (object.renderer) {
+    case 'kanban':
+    case 'matrix':
+    case 'grid': return { width: 320, height: 190 }
+    case 'list':
+    case 'document': return { width: 260, height: 150 }
+    case 'avatar': return { width: 150, height: 90 }
+    case 'container': return { width: 280, height: 150 }
+    default: return { width: 220, height: 110 }
+  }
+}
+
+function boundsForObjects(objects: TemplatePreviewObject[]): TemplatePreviewModel['bounds'] {
+  if (objects.length === 0) return { minX: 0, minY: 0, width: 1, height: 1 }
+  const minX = Math.min(...objects.map((object) => object.x))
+  const minY = Math.min(...objects.map((object) => object.y))
+  const maxX = Math.max(...objects.map((object) => object.x + object.width))
+  const maxY = Math.max(...objects.map((object) => object.y + object.height))
+  return {
+    minX,
+    minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  }
+}
+
+function objectFramePercent(object: TemplatePreviewObject, bounds: TemplatePreviewModel['bounds']) {
+  const pad = 6
+  const available = 100 - pad * 2
+  return {
+    left: pad + ((object.x - bounds.minX) / bounds.width) * available,
+    top: pad + ((object.y - bounds.minY) / bounds.height) * available,
+    width: Math.max(10, (object.width / bounds.width) * available),
+    height: Math.max(8, (object.height / bounds.height) * available),
+  }
+}
+
+function objectCenterPercent(object: TemplatePreviewObject, bounds: TemplatePreviewModel['bounds']) {
+  const frame = objectFramePercent(object, bounds)
+  return {
+    x: frame.left + frame.width / 2,
+    y: frame.top + frame.height / 2,
+  }
+}
+
+function cssToken(value: string): string {
+  return value.replace(/([a-z])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
 }
 
 function initialsFor(name: string): string {
