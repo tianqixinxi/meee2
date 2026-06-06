@@ -60,6 +60,14 @@ enum BoardAPI {
         return jsonResponse(ErrorDTO(code: code, message: message), status: status, reason: reason)
     }
 
+    static let plannerNodeOutputPayloadHelp = [
+        "body must be a valid PlannerNodeOutput:",
+        "{\"nodeId\":\"...\",\"status\":\"done|blocked|needs_review\",\"message\":{\"summary\":\"...\",\"routeTo\":[\"owner\"]},\"artifacts\":[],\"next\":\"complete|blocked|needs_owner_review\"}.",
+        "For artifact outputs, use artifacts[].reference for the output slot from read_node_contract.",
+        "artifacts[].payload must be a typed object such as {\"type\":\"json\",\"json\":\"{...}\"}, {\"type\":\"text\",\"text\":\"...\"}, or {\"type\":\"file\",\"file\":{\"path\":\"report.md\",\"mimeType\":\"text/markdown\"}}.",
+        "Do not submit a bare string payload, {\"content\":...}, or an artifact_ref wrapper."
+    ].joined(separator: " ")
+
     /// 解析请求 body 为 JSON 字典
     static func parseJSONBody(_ req: HttpRequest) -> [String: Any]? {
         let data = Data(req.body)
@@ -2605,7 +2613,7 @@ enum BoardAPI {
         outputDecoder.dateDecodingStrategy = .iso8601
         guard !bodyData.isEmpty,
               let output = try? outputDecoder.decode(PlannerNodeOutput.self, from: bodyData) else {
-            return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
+            return errorResponse("invalid_json", plannerNodeOutputPayloadHelp, status: 400)
         }
         do {
             // Capture the pre-submit node.status so we can detect the
@@ -2678,6 +2686,7 @@ enum BoardAPI {
             let actor = PlannerPermission.currentActorId()
             let snapshot = BoardLayoutStore.shared.snapshot()
             let state = try PlannerBoardBridge.canvasState(for: canvasId, snapshot: snapshot, actorUserId: actor)
+            let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
             guard let scene = state.canvas.sceneSpec,
                   scene.kind == "poker-table",
                   (scene.orchestration == nil || scene.orchestration?.kind == "poker-rules-v1") else {
@@ -2719,25 +2728,38 @@ enum BoardAPI {
                 BoardServer.shared.broadcastStateChanged()
                 return jsonResponse(result, status: 201, reason: "Created")
             case "pause-auto", "resume-auto", "step":
-                let autoRun = body.actionId == "resume-auto"
-                let status: String
-                switch body.actionId {
-                case "pause-auto": status = "paused"
-                case "resume-auto": status = "auto-running"
-                default: status = "stepped"
+                let currentState = latestPokerSceneState(
+                    artifactVersions: record.artifactVersions,
+                    nodeId: dealerNodeId,
+                    reference: scene.orchestration?.stateReference ?? "game-state.json"
+                )
+                let patch: BoardJSONValue
+                let summary: String
+                if body.actionId == "step" {
+                    patch = try pokerStepStatePatch(
+                        canvasId: canvasId,
+                        scene: scene,
+                        artifacts: state.artifacts,
+                        currentState: currentState
+                    )
+                    summary = "Rules Orchestrator applied player action"
+                } else {
+                    let autoRun = body.actionId == "resume-auto"
+                    let status = body.actionId == "resume-auto" ? "auto-running" : "paused"
+                    patch = mergeBoardJSONObjects(currentState, BoardJSONValue.object([
+                        "setup": BoardJSONValue.object(["autoRun": BoardJSONValue.bool(autoRun)]),
+                        "orchestrationStatus": BoardJSONValue.string(status),
+                        "actionLog": BoardJSONValue.array([
+                            BoardJSONValue.string("Rules Orchestrator \(status)"),
+                            BoardJSONValue.string("下一步由当前行动者节点产出 Player Action Artifact")
+                        ])
+                    ]))
+                    summary = "Rules Orchestrator \(status)"
                 }
-                let patch: BoardJSONValue = .object([
-                    "setup": .object(["autoRun": .bool(autoRun)]),
-                    "orchestrationStatus": .string(status),
-                    "actionLog": .array([
-                        .string("Rules Orchestrator \(status)"),
-                        .string("下一步由当前行动者节点产出 Player Action Artifact")
-                    ])
-                ])
                 var result = try submitPokerSystemState(
                     canvasId: canvasId,
                     dealerNodeId: dealerNodeId,
-                    summary: "Rules Orchestrator \(status)",
+                    summary: summary,
                     gameState: patch,
                     actionLog: .object(["actionLog": patch.objectValue?["actionLog"] ?? .array([])]),
                     actorUserId: actor
@@ -2788,6 +2810,11 @@ enum BoardAPI {
         actionLog: BoardJSONValue,
         actorUserId: String?
     ) throws -> PlannerNodeOutputResult {
+        _ = try PlannerBoardBridge.store.updateNodeGate(
+            canvasId: canvasId,
+            nodeId: dealerNodeId,
+            executionMode: .auto
+        )
         let output = PlannerNodeOutput(
             nodeId: dealerNodeId,
             status: .done,
@@ -2820,6 +2847,206 @@ enum BoardAPI {
             submittedByKind: .system,
             submittedBy: "Rules Orchestrator"
         )
+    }
+
+    private static func latestPokerSceneState(
+        artifactVersions: [PlannerArtifactVersion],
+        nodeId: String,
+        reference: String
+    ) -> BoardJSONValue {
+        var state: BoardJSONValue = .object([:])
+        for version in artifactVersions
+            .filter({ $0.nodeId == nodeId && $0.payloadRef == reference })
+            .sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard let payload = version.payloadInline else { continue }
+            let patch: BoardJSONValue
+            if case .object(let object) = payload,
+               let sceneState = object["sceneState"] {
+                patch = sceneState
+            } else {
+                patch = payload
+            }
+            state = mergeBoardJSONObjects(state, patch)
+        }
+        return state
+    }
+
+    private static func pokerStepStatePatch(
+        canvasId: String,
+        scene: CanvasSceneSpec,
+        artifacts: [PlannerArtifact],
+        currentState: BoardJSONValue
+    ) throws -> BoardJSONValue {
+        guard case .object(let stateObject) = currentState else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator needs an object game-state.json before step.")
+        }
+        let nextActor = stateObject["nextActor"]?.stringValue
+            ?? stateObject["nextAction"]?.stringValue
+            ?? ""
+        let playerId = normalizedPokerPlayerId(nextActor)
+        guard let playerId else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator cannot step: nextActor '\(nextActor)' is not a player.")
+        }
+        guard let playerAnchor = scene.nodeAnchors.first(where: { normalizedPokerPlayerId($0.id) == playerId || normalizedPokerPlayerId($0.label) == playerId }) else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator cannot find node anchor for player '\(playerId)'.")
+        }
+        let reference = "\(playerId)-action.json"
+        let action = try latestPokerPlayerAction(
+            canvasId: canvasId,
+            artifacts: artifacts,
+            nodeId: playerAnchor.nodeId,
+            reference: reference
+        )
+        guard (action["playerId"]?.stringValue ?? playerId).lowercased() == playerId else {
+            throw PlannerCoreError.invalidNodeOutput("Poker action artifact '\(reference)' does not belong to current actor '\(playerId)'.")
+        }
+        let actionName = (action["action"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["fold", "call", "raise", "check"].contains(actionName) else {
+            throw PlannerCoreError.invalidNodeOutput("Poker action artifact '\(reference)' must use action fold/call/raise/check.")
+        }
+        let amount = action["amount"]?.intValue ?? 0
+        return applyPokerAction(
+            state: currentState,
+            playerId: playerId,
+            action: actionName,
+            amount: max(0, amount)
+        )
+    }
+
+    private static func latestPokerPlayerAction(
+        canvasId: String,
+        artifacts: [PlannerArtifact],
+        nodeId: String,
+        reference: String
+    ) throws -> [String: BoardJSONValue] {
+        guard let artifact = artifacts
+            .filter({ $0.nodeId == nodeId && $0.reference == reference })
+            .sorted(by: { $0.createdAt < $1.createdAt })
+            .last else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator is waiting for \(reference).")
+        }
+        if let payload = artifact.payload,
+           let action = try pokerActionObject(from: payload, canvasId: canvasId, fallbackReference: reference) {
+            return action
+        }
+        throw PlannerCoreError.invalidNodeOutput("Poker action artifact '\(reference)' is missing a typed JSON payload.")
+    }
+
+    private static func pokerActionObject(
+        from payload: BoardJSONValue,
+        canvasId: String,
+        fallbackReference: String
+    ) throws -> [String: BoardJSONValue]? {
+        guard case .object(let object) = payload else { return nil }
+        if object["action"] != nil {
+            return object
+        }
+        if let json = object["json"]?.stringValue,
+           let decoded = boardJSONValueFromJSONString(json)?.objectValue {
+            return decoded
+        }
+        if let sceneState = object["sceneState"]?.objectValue,
+           sceneState["action"] != nil {
+            return sceneState
+        }
+        if let ref = object["reference"]?.stringValue ?? object["filename"]?.stringValue,
+           ref == fallbackReference,
+           let decoded = try pokerActionObjectFromWorkspace(canvasId: canvasId, reference: ref) {
+            return decoded
+        }
+        return nil
+    }
+
+    private static func pokerActionObjectFromWorkspace(canvasId: String, reference: String) throws -> [String: BoardJSONValue]? {
+        guard !reference.contains("/"), !reference.contains("\\") else { return nil }
+        let workspace = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        let url = URL(fileURLWithPath: workspace).appendingPathComponent(reference)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        return try? JSONDecoder().decode(BoardJSONValue.self, from: data).objectValue
+    }
+
+    private static func boardJSONValueFromJSONString(_ json: String) -> BoardJSONValue? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(BoardJSONValue.self, from: data)
+    }
+
+    private static func applyPokerAction(
+        state: BoardJSONValue,
+        playerId: String,
+        action: String,
+        amount: Int
+    ) -> BoardJSONValue {
+        guard case .object(var object) = state else { return state }
+        let playerOrder = ["ada", "bruno", "mina"]
+        let displayName = playerId.prefix(1).uppercased() + playerId.dropFirst()
+        var pot = object["pot"]?.intValue ?? 0
+        var folded = Set<String>()
+        let nextPlayer = playerOrder.drop { $0 != playerId }.dropFirst().first
+        if case .array(let players)? = object["players"] {
+            object["players"] = .array(players.map { value in
+                guard case .object(var player) = value,
+                      let id = player["id"]?.stringValue?.lowercased() else {
+                    return value
+                }
+                if player["status"]?.stringValue == "folded" {
+                    folded.insert(id)
+                }
+                if id == playerId {
+                    if action == "fold" {
+                        player["status"] = .string("folded")
+                        folded.insert(id)
+                    } else {
+                        let spend = action == "check" ? 0 : amount
+                        if spend > 0 {
+                            let stack = max(0, (player["stack"]?.intValue ?? 0) - spend)
+                            player["stack"] = .number(Double(stack))
+                            pot += spend
+                        }
+                        player["status"] = .string("acted")
+                    }
+                } else if id == nextPlayer {
+                    player["status"] = .string("to-act")
+                } else if player["status"]?.stringValue != "folded" {
+                    player["status"] = .string("waiting")
+                }
+                return .object(player)
+            })
+        }
+        let eligibleNext = playerOrder.drop { $0 != playerId }.dropFirst().first { !folded.contains($0) }
+        object["pot"] = .number(Double(pot))
+        object["nextActor"] = eligibleNext.map(BoardJSONValue.string) ?? .string("dealer")
+        object["nextAction"] = .string(eligibleNext.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Dealer")
+        object["orchestrationStatus"] = .string(eligibleNext == nil ? "street-complete" : "auto-running")
+        if eligibleNext == nil {
+            object["legalActions"] = .array([])
+            object["handStatus"] = .string("street-complete")
+        }
+        var log = object["actionLog"]?.arrayValue ?? []
+        let amountLabel = amount > 0 ? " \(amount)" : ""
+        log.append(.string("\(displayName) \(action)\(amountLabel)"))
+        if let next = eligibleNext {
+            log.append(.string("下一行动: \(next.prefix(1).uppercased() + next.dropFirst())"))
+        } else {
+            log.append(.string("本轮行动完成，等待 Dealer 推进下一阶段"))
+        }
+        object["actionLog"] = .array(log)
+        return .object(object)
+    }
+
+    private static func mergeBoardJSONObjects(_ base: BoardJSONValue, _ patch: BoardJSONValue) -> BoardJSONValue {
+        guard case .object(var baseObject) = base,
+              case .object(let patchObject) = patch else {
+            return patch
+        }
+        for (key, value) in patchObject {
+            if let existing = baseObject[key] {
+                baseObject[key] = mergeBoardJSONObjects(existing, value)
+            } else {
+                baseObject[key] = value
+            }
+        }
+        return .object(baseObject)
     }
 
     private static func sceneJSONPayload(_ sceneState: BoardJSONValue) -> BoardJSONValue {
@@ -2865,7 +3092,7 @@ enum BoardAPI {
             "handStatus": .string("in-progress"),
             "orchestrationStatus": .string(autoRun ? "auto-running" : "paused"),
             "players": .array([
-                .object(["id": .string("dealer"), "name": .string("Dealer"), "stack": .number(0), "status": .string("active"), "seat": .string("top"), "holeCards": .array([])]),
+                .object(["id": .string("dealer"), "name": .string("Dealer / Table State"), "stack": .number(0), "status": .string("system"), "seat": .string("top"), "holeCards": .array([])]),
                 .object(["id": .string("ada"), "name": .string("Ada"), "style": .string("紧凶型"), "stack": .number(950), "status": .string("to-act"), "seat": .string("left"), "holeCards": .array([.string("As"), .string("Ks")])]),
                 .object(["id": .string("bruno"), "name": .string("Bruno"), "style": .string("诈唬型"), "stack": .number(870), "status": .string("waiting"), "seat": .string("right"), "holeCards": .array([.string("Qh"), .string("Js")])]),
                 .object(["id": .string("mina"), "name": .string("Mina"), "style": .string("保守观察"), "stack": .number(1020), "status": .string("waiting"), "seat": .string("bottom"), "holeCards": .array([.string("9c"), .string("9d")])])
@@ -3628,9 +3855,12 @@ enum BoardAPI {
             "",
             "Artifact submission rules:",
             "- Supported payload.type values: \(artifactTypes).",
+            "- If read_node_contract says output.payload_kind=artifact_ref, submit artifacts[] and put the expected output slot name in artifact.reference; do not submit an artifact_ref wrapper.",
+            "- Canonical inline payload examples: {\"type\":\"json\",\"json\":\"{...}\"}, {\"type\":\"text\",\"text\":\"...\"}, {\"type\":\"html\",\"html\":\"<main>...</main>\"}. Do not use a bare string or {\"content\":...} as artifact payload.",
             "- Inline payloads are allowed up to \(inlineLimitKB)KB.",
             "- For larger text/html/json/file output, write the file inside the workspace and submit payload.file.path.",
             "- Meee2 will copy file-backed artifacts into its artifact store; do not depend on the original file path as the long-term artifact.",
+            "- submit_node_output is the final writeback for the attempt. attach_artifact_to_node is only for interim evidence and does not complete the node.",
             "- If this node is blocked, call submit_node_output with status blocked and include the concrete blocker in message.summary.",
             "",
             "External tools:",

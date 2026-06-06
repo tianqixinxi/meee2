@@ -140,7 +140,7 @@ function normalizeOfficialSceneTemplateId(value: unknown): OfficialSceneTemplate
 function sceneTemplateSteps(templateId: OfficialSceneTemplateId | undefined): PlannerConfirmedPlanStep[] {
   if (templateId === 'poker-table') {
     return [
-      { title: 'Dealer Agent', body: 'Maintains game-state.json and action-log.json for the table.' },
+      { title: 'Dealer / Table State', body: 'System-owned state slot for game-state.json and action-log.json.' },
       { title: 'Player Agents', body: 'Each player node decides legal actions from the current game state.' },
       { title: 'GM / 规则裁判', body: 'Human review node for reveals, legality, and rulings.' },
     ]

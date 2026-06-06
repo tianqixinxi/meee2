@@ -6837,6 +6837,8 @@ final class PlannerStore {
             completionCriteria: [
                 node.schema.goal,
                 "Submit output with status done, blocked, or needs_review.",
+                "If output.payload_kind is artifact_ref, submit artifacts[] and set artifact.reference to the expected output slot; do not submit an artifact_ref wrapper.",
+                "Inline artifact payloads must be typed objects such as {\"type\":\"json\",\"json\":\"{...}\"} or {\"type\":\"text\",\"text\":\"...\"}; do not use a bare string or {\"content\":...}.",
                 "Small artifact payloads may be inline; large text/html/json/file content must be submitted as payload.file.path inside the session cwd or canvas workspace.",
                 "Route messages and artifacts only to downstream nodes or owner.",
                 "Output is always a full snapshot — never submit an increment / diff payload (see Node Contract v2)."
@@ -8405,6 +8407,7 @@ enum PlannerBoardBridge {
 
             let runs = (try? store.runs(canvasId: state.canvas.id)) ?? []
             let artifactsByNodeId = Dictionary(grouping: state.artifacts, by: \.nodeId)
+            let eventDateIndex = PlannerEventDateIndex(events: state.events)
 
             // Pluck the live attempt's awaitingInputSince from the active run
             // (if any) so the monitor can boost stale-awaiting items and the
@@ -8418,7 +8421,7 @@ enum PlannerBoardBridge {
                 statesByNodeId: statesByNodeId,
                 runs: runs,
                 artifactsByNodeId: artifactsByNodeId,
-                events: state.events,
+                eventDateIndex: eventDateIndex,
                 actorId: actorId,
                 role: state.access.role,
                 sessions: sessions,
@@ -8447,7 +8450,7 @@ enum PlannerBoardBridge {
                         evidenceCount: proposal.changes.reduce(0) { total, change in
                             total + (change.artifactRefs?.count ?? 0) + (change.artifact == nil ? 0 : 1)
                         },
-                        updatedAt: latestPlannerEventDate(in: state.events, proposalId: proposal.id)
+                        updatedAt: eventDateIndex.latest(proposalId: proposal.id)
                     ))
                 }
             }
@@ -8467,7 +8470,7 @@ enum PlannerBoardBridge {
         statesByNodeId: [String: NodeStateSnapshot],
         runs: [WorkflowRun],
         artifactsByNodeId: [String: [PlannerArtifact]],
-        events: [PlannerEvent],
+        eventDateIndex: PlannerEventDateIndex,
         actorId: String,
         role: PlannerCanvasRole,
         sessions: [SessionDTO]?,
@@ -8521,7 +8524,7 @@ enum PlannerBoardBridge {
         let evidenceCount = nodeEvidenceCount + runEvidenceCount
         let latestRunUpdate = visibleRuns.map { $0.updatedAt }.max()
         let latestNodeUpdate = visibleStates.compactMap { pair in
-            latestPlannerEventDate(in: events, nodeId: pair.node.id) ?? pair.node.outputSubmittedAt
+            eventDateIndex.latest(nodeId: pair.node.id) ?? pair.node.outputSubmittedAt
         }.max()
         let updatedAt = [
             latestRunUpdate,
@@ -8595,19 +8598,28 @@ enum PlannerBoardBridge {
         }
     }
 
-    private static func latestPlannerEventDate(
-        in events: [PlannerEvent],
-        nodeId: String? = nil,
-        proposalId: String? = nil
-    ) -> Date? {
-        events
-            .filter { event in
-                if let nodeId, event.nodeId == nodeId { return true }
-                if let proposalId, event.proposalId == proposalId { return true }
-                return false
+    private struct PlannerEventDateIndex {
+        private var latestByNodeId: [String: Date] = [:]
+        private var latestByProposalId: [String: Date] = [:]
+
+        init(events: [PlannerEvent]) {
+            for event in events {
+                if let nodeId = event.nodeId {
+                    latestByNodeId[nodeId] = max(latestByNodeId[nodeId] ?? event.createdAt, event.createdAt)
+                }
+                if let proposalId = event.proposalId {
+                    latestByProposalId[proposalId] = max(latestByProposalId[proposalId] ?? event.createdAt, event.createdAt)
+                }
             }
-            .map(\.createdAt)
-            .max()
+        }
+
+        func latest(nodeId: String) -> Date? {
+            latestByNodeId[nodeId]
+        }
+
+        func latest(proposalId: String) -> Date? {
+            latestByProposalId[proposalId]
+        }
     }
 
     private static func monitorSessionPriority(for nodeState: RunNodeState) -> Int {

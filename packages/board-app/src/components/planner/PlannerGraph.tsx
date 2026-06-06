@@ -182,6 +182,8 @@ function PlannerGraphInner({
   // Chunk D: planner-side approval notifications. Diff node workflowRunState
   // for gate-wait transitions across PlannerGraph re-fetches.
   const prevPlannerNodesRef = useRef<Map<string, import('../../types').PlanningNode>>(new Map())
+  const processedPokerActionKeysRef = useRef<Set<string>>(new Set())
+  const processedPokerDispatchKeysRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     const nodes = plannerState?.nodes
     if (!nodes) return
@@ -707,6 +709,25 @@ function PlannerGraphInner({
       || (action ? `${action.label} (${action.id})` : `Run scene action ${actionId}`)
     handleCreateNodeSession(nodeId, dispatchRunnerForExecutor(node.executorType), initialPrompt)
   }, [canvasId, handleCreateNodeSession, handleGraphStateChanged, notifyError, plannerState?.artifacts, plannerState?.canvas.sceneSpec, plannerState?.nodes])
+
+  useEffect(() => {
+    if (!plannerState) return
+    const request = pokerAutoStepRequest(plannerState)
+    if (request && !processedPokerActionKeysRef.current.has(request.key)) {
+      processedPokerActionKeysRef.current.add(request.key)
+      runCanvasSceneAction(canvasId, { actionId: 'step' })
+        .then((result) => {
+          handleGraphStateChanged(result.graph)
+          dispatchNextPokerAutoNode(result.graph, handleCreateNodeSession)
+        })
+        .catch((err) => notifyError((err as Error).message || 'Failed to advance Poker scene'))
+      return
+    }
+    const dispatchRequest = pokerAutoDispatchRequest(plannerState)
+    if (!dispatchRequest || processedPokerDispatchKeysRef.current.has(dispatchRequest.key)) return
+    processedPokerDispatchKeysRef.current.add(dispatchRequest.key)
+    dispatchNextPokerAutoNode(plannerState, handleCreateNodeSession)
+  }, [canvasId, handleCreateNodeSession, handleGraphStateChanged, notifyError, plannerState])
 
   const handleReplaceNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
     const cwd = workspacePath.trim()
@@ -2528,6 +2549,7 @@ function collectReadySessionPlan(
   const recreateBySessionId = new Map<string, ClosedBoundSession>()
   for (const node of nodes) {
     if ((node.nodeKind ?? 'step') !== 'step' || node.status !== 'ready') continue
+    if (plannerNodeDoesNotNeedLiveSession(node)) continue
     const sessionId = node.sessionId?.trim()
     if (!sessionId) {
       create.push(node)
@@ -2611,6 +2633,7 @@ function formatRecoveredSessionToast(items: Array<{ action?: string }>): string 
 }
 
 function plannerNodeDoesNotNeedLiveSession(node: PlanningNode): boolean {
+  if (node.executorType === 'mock') return true
   if (node.schedule?.enabled) return false
   return node.status === 'done' || node.workflowRunState === 'done'
 }
@@ -3008,7 +3031,78 @@ function dispatchNextPokerAutoNode(
   if (!action) return
   const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
   if (!node || node.executionMode === 'human' || node.executorType === 'human') return
+  if (node.status !== 'ready') return
   createSession(node.id, dispatchRunnerForExecutor(node.executorType), buildPokerSceneActionPrompt(scene, graph.artifacts ?? [], action, node))
+}
+
+function pokerAutoDispatchRequest(graph: PlannerGraphState): { key: string } | null {
+  const scene = graph.canvas.sceneSpec
+  if (!scene || scene.kind !== 'poker-table') return null
+  const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
+  const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
+    ? state.setup as Record<string, unknown>
+    : {}
+  if (setup.autoRun === false) return null
+  const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
+  if (!['ada', 'bruno', 'mina'].includes(nextActor)) return null
+  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
+  if (!action) return null
+  const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
+  if (!node || node.executionMode === 'human' || node.executorType === 'human' || node.status !== 'ready') return null
+  const dealerNodeId = scene.orchestration?.stateNodeId
+    ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
+    ?? ''
+  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], dealerNodeId, scene.orchestration?.stateReference ?? 'game-state.json')
+  return {
+    key: [
+      graph.canvas.id,
+      nextActor,
+      node.id,
+      gameStateArtifact?.id ?? 'no-game-state',
+    ].join(':'),
+  }
+}
+
+function pokerAutoStepRequest(graph: PlannerGraphState): { key: string } | null {
+  const scene = graph.canvas.sceneSpec
+  if (!scene || scene.kind !== 'poker-table') return null
+  const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
+  const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
+    ? state.setup as Record<string, unknown>
+    : {}
+  if (setup.autoRun === false) return null
+  const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
+  if (!['ada', 'bruno', 'mina'].includes(nextActor)) return null
+  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
+  if (!action) return null
+  const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
+  if (!node || node.status !== 'done') return null
+  const actionArtifact = latestArtifactForSlot(graph.artifacts ?? [], node.id, `${nextActor}-action.json`)
+  if (!actionArtifact) return null
+  const dealerNodeId = scene.orchestration?.stateNodeId
+    ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
+    ?? ''
+  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], dealerNodeId, scene.orchestration?.stateReference ?? 'game-state.json')
+  return {
+    key: [
+      graph.canvas.id,
+      nextActor,
+      node.id,
+      actionArtifact.id,
+      gameStateArtifact?.id ?? 'no-game-state',
+    ].join(':'),
+  }
+}
+
+function latestArtifactForSlot(
+  artifacts: PlannerArtifact[],
+  nodeId: string,
+  reference: string,
+): PlannerArtifact | null {
+  return artifacts
+    .filter((artifact) => artifact.nodeId === nodeId && artifact.reference === reference)
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+    .slice(-1)[0] ?? null
 }
 
 function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {

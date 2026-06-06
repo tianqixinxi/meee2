@@ -2019,6 +2019,8 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(prompt.isEmpty, "C2: default prompt generated")
         XCTAssertTrue(prompt.contains("read_node_contract"), "C2: prompt carries the node protocol")
         XCTAssertTrue(prompt.contains("submit_node_output"), "C2: prompt instructs writeback")
+        XCTAssertTrue(prompt.contains("output.payload_kind=artifact_ref"), "C2: prompt clarifies artifact_ref output")
+        XCTAssertTrue(prompt.contains("\"type\":\"json\""), "C2: prompt gives typed artifact payload examples")
 
         // ---- Criterion 4: artifact produced → consumed downstream → monitor -
         // producer (root) completes with an artifact — a clean dispatch→done.

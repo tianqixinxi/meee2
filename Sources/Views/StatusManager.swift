@@ -10,6 +10,9 @@ public class StatusManager: ObservableObject {
     /// Island attention 重算的最小间隔(throttle 窗口)。高频 hook 风暴下,
     /// 重算被合并成「每个窗口最多一次」,避免主线程被全量 session 关联计算吃满。
     private static let islandAttentionRecomputeInterval: DispatchQueue.SchedulerTimeType.Stride = .seconds(1)
+    /// Dynamic Island 只需要近实时的 monitor attention,不应该每秒执行完整
+    /// workspaceMonitor(canvasState + event sort)。Board 页面/API 仍然实时计算。
+    private static let islandMonitorCacheTTL: TimeInterval = 10
 
     // MARK: - Published Properties
 
@@ -27,6 +30,7 @@ public class StatusManager: ObservableObject {
 
     /// Dynamic Island 的高维 attention 聚合状态。
     @Published var islandAttentionState: IslandAttentionState = .empty()
+    private var islandMonitorItemsCache: (generatedAt: Date, items: [PlannerMonitorItem])?
 
     /// 刘海尺寸 (由 AppDelegate 设置)
     @Published public var notchSize: CGSize = CGSize(width: 150, height: 32)
@@ -146,6 +150,7 @@ public class StatusManager: ObservableObject {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
+            islandMonitorItemsCache = nil
             refreshIslandAttentionState()
         } catch {
             MWarn("[StatusManager] failed to reject proposal from Island: \(error.localizedDescription)")
@@ -258,13 +263,22 @@ public class StatusManager: ObservableObject {
     private func refreshIslandAttentionState(sessions sourceSessions: [PluginSession]? = nil) {
         let visibleSessions = sourceSessions ?? sessions
         islandAttentionState = IslandAttentionBuilder.build(sessions: visibleSessions) {
-            let monitor = try PlannerBoardBridge.workspaceMonitor(
-                snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId(),
-                sessions: BoardSessionSnapshotProvider.currentBoardSessions()
-            )
-            return monitor.items
+            try cachedIslandMonitorItems()
         }
+    }
+
+    private func cachedIslandMonitorItems() throws -> [PlannerMonitorItem] {
+        if let cached = islandMonitorItemsCache,
+           Date().timeIntervalSince(cached.generatedAt) < Self.islandMonitorCacheTTL {
+            return cached.items
+        }
+        let monitor = try PlannerBoardBridge.workspaceMonitor(
+            snapshot: BoardLayoutStore.shared.snapshot(),
+            actorUserId: PlannerPermission.currentActorId(),
+            sessions: BoardSessionSnapshotProvider.currentBoardSessions()
+        )
+        islandMonitorItemsCache = (Date(), monitor.items)
+        return monitor.items
     }
 }
 

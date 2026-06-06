@@ -116,6 +116,10 @@ _Avoid_: full scene state as player context, hidden information leak
 A node-produced Artifact that records one player role's proposed action for the current scene turn. A Player Action Artifact is not the authoritative Scene State; the Rules Orchestrator must validate and apply it before Scene State advances.
 _Avoid_: player-owned game state, direct scene mutation
 
+**Dealer / Table State**:
+The Poker Table state owner used to keep authoritative `game-state.json` and `action-log.json` node-scoped. It is rendered as a system table-state control, not as a player seat and not as an AI session node.
+_Avoid_: AI Dealer as flow controller, Dealer player node
+
 **Monitor Canvas**:
 The default Canvas Workspace that aggregates active live sessions, subcanvases, blocked work, approvals, recap, and Artifacts into a top-level operating view.
 _Avoid_: Separate Monitor product, history dashboard
@@ -224,7 +228,7 @@ Domain expert: "No. Artifacts are traceable work proof attached to Canvas Worksp
 
 Developer: "Should a poker table or travel map be represented as one giant node?"
 
-Domain expert: "No. That is a Canvas Scene: the table or map presents Scene State at the canvas level. Only the Dealer, player agents, route planner, hotel agent, or human approvals become nodes because they own executable work."
+Domain expert: "No. That is a Canvas Scene: the table or map presents Scene State at the canvas level. Player agents, route planner, hotel agent, or human approvals become nodes because they own executable work. Poker Dealer / Table State is only the node-scoped home for system-written state artifacts."
 
 Developer: "If the poker felt or travel background ships with a template, is that an Artifact?"
 

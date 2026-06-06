@@ -542,6 +542,17 @@ enum BoardDTOBuilder {
         let teamName: String?
     }
 
+    private struct SyncInfoIndex {
+        let checkedAt: Date
+        let teamId: String?
+        let teamName: String?
+        let referencedAliases: Set<String>
+    }
+
+    private static let syncInfoCacheTTL: TimeInterval = 10
+    private static let syncInfoCacheLock = NSLock()
+    private static var syncInfoIndexCache: SyncInfoIndex?
+
     /// 缓存 ISO8601 formatter（带毫秒精度）
     static let iso8601: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -675,40 +686,72 @@ enum BoardDTOBuilder {
     }
 
     private static func syncInfo(forSessionId sessionId: String) -> SyncInfo {
-        let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: "meee2Connected") else {
+        guard let index = syncInfoIndex() else {
             return SyncInfo(enabled: false, teamId: nil, teamName: nil)
         }
-
         let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
+        let enabled = !aliases.isDisjoint(with: index.referencedAliases)
+        return SyncInfo(
+            enabled: enabled,
+            teamId: enabled ? index.teamId : nil,
+            teamName: enabled ? index.teamName : nil
+        )
+    }
+
+    private static func syncInfoIndex() -> SyncInfoIndex? {
+        syncInfoCacheLock.lock()
+        if let cached = syncInfoIndexCache,
+           Date().timeIntervalSince(cached.checkedAt) < syncInfoCacheTTL {
+            syncInfoCacheLock.unlock()
+            return cached
+        }
+        syncInfoCacheLock.unlock()
+
+        guard let fresh = computeSyncInfoIndex() else { return nil }
+        syncInfoCacheLock.lock()
+        syncInfoIndexCache = fresh
+        syncInfoCacheLock.unlock()
+        return fresh
+    }
+
+    private static func computeSyncInfoIndex() -> SyncInfoIndex? {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else {
+            return nil
+        }
+
         let teams = meee2OnlineTeams()
         let teamId = teams.first?.id ?? defaults.string(forKey: "meee2TeamId") ?? ""
         guard !teamId.isEmpty else {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+            return nil
         }
         let teamCanvasIds = BoardLayoutStore.shared.snapshot().canvases.compactMap { canvas -> String? in
             guard canvas.scope == .team, (canvas.teamId ?? teamId) == teamId else { return nil }
             return canvas.id
         }
-        guard teamCanvasIds.contains(where: { canvasId in
+        var referencedAliases: Set<String> = []
+        for canvasId in teamCanvasIds {
             guard let record = try? PlannerStore.shared.canvasRecordForBridge(canvasId: canvasId) else {
-                return false
+                continue
             }
-            return record.nodes.contains { node in
+            for node in record.nodes {
                 let candidates = [node.sessionId, node.chatThreadId]
                     .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
-                return candidates.contains { candidate in
-                    !aliases.isDisjoint(with: Meee2OnlinePusher.sessionIdAliases(candidate))
+                for candidate in candidates {
+                    referencedAliases.formUnion(Meee2OnlinePusher.sessionIdAliases(candidate))
                 }
             }
-        }) else {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
         }
         let teamName = teams.first(where: { $0.id == teamId })?.name
             ?? defaults.string(forKey: "meee2TeamName")
             ?? "Default team"
-        return SyncInfo(enabled: true, teamId: teamId, teamName: teamName)
+        return SyncInfoIndex(
+            checkedAt: Date(),
+            teamId: teamId,
+            teamName: teamName,
+            referencedAliases: referencedAliases
+        )
     }
 
     /// 按 channel 统计 pending + held 计数

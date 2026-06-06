@@ -125,18 +125,28 @@ describe('CanvasSceneLayer', () => {
         nextAction: 'Ada',
         communityCards: ['??', '??', '??', '??', '??'],
         players: [
+          { id: 'dealer', name: 'Dealer', stack: 0, status: 'active', seat: 'top', holeCards: [] },
           { id: 'ada', name: 'Ada', style: '紧凶型', stack: 950, status: 'to-act', seat: 'left', holeCards: ['As', 'Ks'] },
+          { id: 'bruno', name: 'Bruno', style: '诈唬型', stack: 870, status: 'waiting', seat: 'right', holeCards: ['Qh', 'Js'] },
         ],
       },
       nodeAnchors: [
+        { id: 'dealer', label: 'Dealer', nodeId: 'dealer-node', x: 50, y: 16, role: 'dealer' },
         { id: 'ada', label: 'Ada', nodeId: 'ada-node', x: 16, y: 52, role: 'player' },
+        { id: 'bruno', label: 'Bruno', nodeId: 'bruno-node', x: 84, y: 52, role: 'player' },
+        { id: 'gm', label: 'GM', nodeId: 'gm-node', x: 78, y: 18, role: 'approval' },
       ],
     }
 
     render(
       <CanvasSceneLayer
         sceneSpec={sceneSpec}
-        nodes={[node({ id: 'ada-node', title: 'Ada 玩家 Agent' })]}
+        nodes={[
+          node({ id: 'dealer-node', title: 'Dealer / Table State', executorType: 'mock', executionMode: 'human' }),
+          node({ id: 'ada-node', title: 'Ada 玩家 Agent' }),
+          node({ id: 'bruno-node', title: 'Bruno 玩家 Agent' }),
+          node({ id: 'gm-node', title: 'GM / 规则裁判', executorType: 'human', executionMode: 'human' }),
+        ]}
         artifacts={[]}
         onOpenNode={openNode}
         onSceneAction={vi.fn()}
@@ -145,7 +155,56 @@ describe('CanvasSceneLayer', () => {
 
     fireEvent.click(screen.getByTitle('Ada: Ada 玩家 Agent'))
     expect(openNode).toHaveBeenCalledWith('ada-node')
+    expect(screen.getByText('Observer')).toBeInTheDocument()
+    expect(screen.getByText('全桌手牌可见')).toBeInTheDocument()
+    expect(screen.getByText('Rules Orchestrator')).toBeInTheDocument()
+    expect(screen.getByText('game-state.json · action-log.json')).toBeInTheDocument()
+    expect(screen.getByText(/no AI session/)).toBeInTheDocument()
+    expect(screen.getByText('As')).toBeInTheDocument()
+    expect(screen.getByText('Qh')).toBeInTheDocument()
+    expect(screen.getByText('GM / 异常审批')).toBeInTheDocument()
     expect(screen.queryByLabelText('Scene node anchors')).not.toBeInTheDocument()
+  })
+
+  it('only reveals the controlled player hand when the user plays a seat', () => {
+    const sceneSpec: CanvasSceneSpec = {
+      kind: 'poker-table',
+      initialState: {
+        title: 'AI Poker Table',
+        setup: { started: true, userRole: 'player', controlledPlayerId: 'ada', autoRun: true },
+        phase: 'Pre-flop',
+        pot: 150,
+        nextActor: 'bruno',
+        nextAction: 'Bruno',
+        communityCards: ['??', '??', '??', '??', '??'],
+        players: [
+          { id: 'ada', name: 'Ada', style: '紧凶型', stack: 950, status: 'waiting', seat: 'left', holeCards: ['As', 'Ks'] },
+          { id: 'bruno', name: 'Bruno', style: '诈唬型', stack: 870, status: 'to-act', seat: 'right', holeCards: ['Qh', 'Js'] },
+        ],
+      },
+      nodeAnchors: [
+        { id: 'ada', label: 'Ada', nodeId: 'ada-node', x: 16, y: 52, role: 'player' },
+        { id: 'bruno', label: 'Bruno', nodeId: 'bruno-node', x: 84, y: 52, role: 'player' },
+      ],
+    }
+
+    render(
+      <CanvasSceneLayer
+        sceneSpec={sceneSpec}
+        nodes={[
+          node({ id: 'ada-node', title: 'Ada 玩家 Agent' }),
+          node({ id: 'bruno-node', title: 'Bruno 玩家 Agent' }),
+        ]}
+        artifacts={[]}
+        onOpenNode={vi.fn()}
+        onSceneAction={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Play as Ada')).toBeInTheDocument()
+    expect(screen.getByText('只看 Ada 手牌')).toBeInTheDocument()
+    expect(screen.getByText('As')).toBeInTheDocument()
+    expect(screen.queryByText('Qh')).not.toBeInTheDocument()
   })
 
   it('shows poker role setup before the rules orchestrator starts', () => {
@@ -167,7 +226,7 @@ describe('CanvasSceneLayer', () => {
     render(
       <CanvasSceneLayer
         sceneSpec={sceneSpec}
-        nodes={[node({ id: 'dealer-node', title: 'Dealer Agent' })]}
+        nodes={[node({ id: 'dealer-node', title: 'Dealer / Table State', executorType: 'mock', executionMode: 'human' })]}
         artifacts={[]}
         onOpenNode={vi.fn()}
         onSceneAction={sceneAction}
@@ -205,7 +264,7 @@ describe('CanvasSceneLayer', () => {
     render(
       <CanvasSceneLayer
         sceneSpec={sceneSpec}
-        nodes={[node({ id: 'dealer-node', title: 'Dealer Agent' })]}
+        nodes={[node({ id: 'dealer-node', title: 'Dealer / Table State', executorType: 'mock', executionMode: 'human' })]}
         artifacts={[]}
         onOpenNode={vi.fn()}
         onSceneAction={sceneAction}
@@ -259,7 +318,7 @@ describe('CanvasSceneLayer', () => {
           node({ id: 'ada-node', title: 'Ada 玩家 Agent' }),
           node({ id: 'bruno-node', title: 'Bruno 玩家 Agent' }),
           node({ id: 'gm-node', title: 'GM / 规则裁判', executionMode: 'human', executorType: 'human' }),
-          node({ id: 'dealer-node', title: 'Dealer Agent' }),
+          node({ id: 'dealer-node', title: 'Dealer / Table State', executorType: 'mock', executionMode: 'human' }),
         ]}
         artifacts={[]}
         onOpenNode={vi.fn()}

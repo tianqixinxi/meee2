@@ -34,9 +34,90 @@ struct Meee2AgentRuntimeInstallResult: Encodable {
 enum Meee2AgentRuntimeInstaller {
     private static let marketplaceName = "meee2-official"
     private static let pluginName = "meee2"
+    private static let diagnoseCacheTTL: TimeInterval = 30
+    private static let diagnoseLock = NSLock()
+    private static var diagnoseCache: Meee2AgentRuntimeStatus?
+    private static var diagnoseInFlight: DispatchGroup?
     private static var pluginSelector: String { "\(pluginName)@\(marketplaceName)" }
 
-    static func diagnose() -> Meee2AgentRuntimeStatus {
+    static func diagnose(forceRefresh: Bool = false) -> Meee2AgentRuntimeStatus {
+        if !forceRefresh,
+           let cached = cachedDiagnoseStatus() {
+            return cached
+        }
+
+        if let group = beginSharedDiagnose(forceRefresh: forceRefresh) {
+            group.wait()
+            if !forceRefresh,
+               let cached = cachedDiagnoseStatus() {
+                return cached
+            }
+            if !forceRefresh,
+               let cached = currentDiagnoseCache() {
+                return cached
+            }
+        }
+        if !forceRefresh,
+           let cached = cachedDiagnoseStatus() {
+            return cached
+        }
+
+        let status = diagnoseUncached()
+        finishSharedDiagnose(status)
+        return status
+    }
+
+    private static func cachedDiagnoseStatus() -> Meee2AgentRuntimeStatus? {
+        diagnoseLock.lock()
+        defer { diagnoseLock.unlock() }
+        guard let cached = diagnoseCache,
+              Date().timeIntervalSince(cached.checkedAt) < diagnoseCacheTTL else {
+            return nil
+        }
+        return cached
+    }
+
+    private static func currentDiagnoseCache() -> Meee2AgentRuntimeStatus? {
+        diagnoseLock.lock()
+        defer { diagnoseLock.unlock() }
+        return diagnoseCache
+    }
+
+    /// Returns an existing in-flight group to wait on, or nil when this caller
+    /// owns the uncached diagnose run.
+    private static func beginSharedDiagnose(forceRefresh: Bool) -> DispatchGroup? {
+        diagnoseLock.lock()
+        defer { diagnoseLock.unlock() }
+        if !forceRefresh,
+           let cached = diagnoseCache,
+           Date().timeIntervalSince(cached.checkedAt) < diagnoseCacheTTL {
+            return nil
+        }
+        if let group = diagnoseInFlight {
+            return group
+        }
+        let group = DispatchGroup()
+        group.enter()
+        diagnoseInFlight = group
+        return nil
+    }
+
+    private static func finishSharedDiagnose(_ status: Meee2AgentRuntimeStatus) {
+        diagnoseLock.lock()
+        let group = diagnoseInFlight
+        diagnoseCache = status
+        diagnoseInFlight = nil
+        group?.leave()
+        diagnoseLock.unlock()
+    }
+
+    private static func invalidateDiagnoseCache() {
+        diagnoseLock.lock()
+        diagnoseCache = nil
+        diagnoseLock.unlock()
+    }
+
+    private static func diagnoseUncached() -> Meee2AgentRuntimeStatus {
         let marketplacePath = resolveMarketplacePath()
         let pluginPath = marketplacePath.appendingPathComponent(pluginName, isDirectory: true)
         let mcpServerPath = MCPConfigManager.shared.currentServerScriptPath()
@@ -119,6 +200,7 @@ enum Meee2AgentRuntimeInstaller {
     }
 
     static func install(target: String) -> Meee2AgentRuntimeInstallResult {
+        invalidateDiagnoseCache()
         var messages: [String] = []
         var logs: [String] = []
         let normalized = target.lowercased()
@@ -161,7 +243,7 @@ enum Meee2AgentRuntimeInstaller {
             }
         }
 
-        let status = diagnose()
+        let status = diagnose(forceRefresh: true)
         let ok: Bool
         switch normalized {
         case "claude":

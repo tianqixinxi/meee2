@@ -192,6 +192,8 @@ function PokerScene({
   const started = readBoolean(setup.started, false)
   const activeRole = readString(setup.userRole, 'observer') as PokerUserRole
   const controlledPlayerId = readString(setup.controlledPlayerId, '')
+  const roleLabel = pokerRoleLabel(activeRole, controlledPlayerId)
+  const visibilityLabel = pokerVisibilityLabel(activeRole, controlledPlayerId)
   const autoRun = readBoolean(setup.autoRun, true)
   const nextActor = readString(state.nextActor, readString(state.nextAction, 'TBD')).toLowerCase()
   const nextAction = readString(state.nextAction, nextActor || 'TBD')
@@ -224,12 +226,26 @@ function PokerScene({
             const seat = cssToken(readString(item.seat, `seat-${index}`))
             const stack = readString(item.stack, '0')
             const playerStatus = readString(item.status, 'waiting')
+            const isDealer = playerId === 'dealer'
             const canSeeHand = canSeePokerHand(activeRole, controlledPlayerId, playerId)
-            const cards = normalizePokerCards(readArray(item.holeCards), playerId === 'dealer' ? 0 : 2)
+            const cards = normalizePokerCards(readArray(item.holeCards), isDealer ? 0 : 2)
+            if (isDealer) {
+              return (
+                <DealerStateButton
+                  key={playerId}
+                  anchor={anchor}
+                  node={node}
+                  seat={seat}
+                  isNext={playerId === nextActor}
+                  status={playerStatus}
+                  onOpenNode={onOpenNode}
+                />
+              )
+            }
             const contents = (
               <>
                 <strong>{node?.title ?? readString(item.name, `Player ${index + 1}`)}</strong>
-                <span>{playerId === 'dealer' ? playerStatus : `${readString(item.style, playerStatus)} · ${stack}`}</span>
+                <span>{`${readString(item.style, playerStatus)} · ${stack}`}</span>
                 {cards.length > 0 && (
                   <span className="canvas-scene-poker__hole-cards">
                     {cards.map((card, cardIndex) => (
@@ -292,7 +308,13 @@ function PokerScene({
               <span>PHASE <strong>{phase}</strong></span>
               <span>POT <strong>{pot}</strong></span>
               <span>NEXT <strong>{nextAction}</strong></span>
+              <span>ROLE <strong>{roleLabel}</strong><em>{visibilityLabel}</em></span>
             </div>
+            <PokerGmSummary
+              gmAnchor={gmAnchor}
+              nodesById={nodesById}
+              onOpenNode={onOpenNode}
+            />
             <PokerAutomationPanel
               actions={actions}
               nextAction={nextActor}
@@ -311,6 +333,78 @@ function PokerScene({
         </div>
       </div>
     </div>
+  )
+}
+
+function DealerStateButton({
+  anchor,
+  node,
+  seat,
+  isNext,
+  status,
+  onOpenNode,
+}: {
+  anchor: CanvasSceneNodeAnchor | undefined
+  node: PlanningNode | undefined
+  seat: string
+  isNext: boolean
+  status: string
+  onOpenNode: (nodeId: string) => void
+}) {
+  const className = [
+    'canvas-scene-poker__dealer-state',
+    `canvas-scene-poker__dealer-state--${seat}`,
+    node ? `is-${node.status}` : 'is-missing',
+    isNext ? 'is-next' : '',
+  ].filter(Boolean).join(' ')
+  const contents = (
+    <>
+      <span>Rules Orchestrator</span>
+      <strong>{node?.title ?? 'Dealer / Table State'}</strong>
+      <small>game-state.json · action-log.json</small>
+      <em>system state · no AI session · {node?.status ?? status}</em>
+    </>
+  )
+
+  if (!anchor) {
+    return <div className={className}>{contents}</div>
+  }
+
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={() => onOpenNode(anchor.nodeId)}
+      title={node ? `${anchor.label}: ${node.title}` : anchor.label}
+    >
+      {contents}
+    </button>
+  )
+}
+
+function PokerGmSummary({
+  gmAnchor,
+  nodesById,
+  onOpenNode,
+}: {
+  gmAnchor: CanvasSceneNodeAnchor | undefined
+  nodesById: Map<string, PlanningNode>
+  onOpenNode: (nodeId: string) => void
+}) {
+  if (!gmAnchor) return null
+  const node = nodesById.get(gmAnchor.nodeId)
+  return (
+    <button
+      type="button"
+      className={`canvas-scene-poker__gm-summary ${node ? `is-${node.status}` : 'is-missing'}`}
+      onClick={() => onOpenNode(gmAnchor.nodeId)}
+      disabled={!node}
+      title={node ? `${gmAnchor.label}: ${node.title}` : gmAnchor.label}
+    >
+      <span>GM / 异常审批</span>
+      <strong>{node?.status ?? 'missing'}</strong>
+      <em>常规行动由规则调度器推进；GM 处理争议、揭示和下一手确认。</em>
+    </button>
   )
 }
 
@@ -649,8 +743,27 @@ function normalizePokerCards(cards: unknown[], count: number): unknown[] {
 function canSeePokerHand(role: string, controlledPlayerId: string, playerId: string): boolean {
   if (playerId === 'dealer') return true
   if (role === 'gm') return true
+  if (role === 'observer' || role === 'all-ai') return true
   if (role === 'player') return controlledPlayerId.toLowerCase() === playerId.toLowerCase()
   return false
+}
+
+function pokerRoleLabel(role: string, controlledPlayerId: string): string {
+  if (role === 'player') {
+    const player = controlledPlayerId || 'player'
+    return `Play as ${player[0]?.toUpperCase() ?? ''}${player.slice(1)}`
+  }
+  if (role === 'gm') return 'GM'
+  if (role === 'all-ai') return 'All AI'
+  return 'Observer'
+}
+
+function pokerVisibilityLabel(role: string, controlledPlayerId: string): string {
+  if (role === 'player') {
+    const player = controlledPlayerId || 'your player'
+    return `只看 ${player[0]?.toUpperCase() ?? ''}${player.slice(1)} 手牌`
+  }
+  return '全桌手牌可见'
 }
 
 function normalizeRef(value: string): string {

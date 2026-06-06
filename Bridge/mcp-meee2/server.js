@@ -74,10 +74,14 @@ const TOOLS = [
     name: 'submit_node_output',
     description:
       'Submit structured output for your assigned meee2 planner node. Use this ' +
-      'when the node is complete, blocked, or needs owner review. Small payloads ' +
-      'may be inline. Large text/html/json/file content should be written to a ' +
-      'file inside your cwd/canvas workspace and referenced as payload.file.path; ' +
-      'meee2 will copy it into its artifact blob store.',
+      'once when the node is complete, blocked, or needs owner review. If the ' +
+      'contract says output.payload_kind=artifact_ref, submit artifacts[] with ' +
+      'each output slot as artifact.reference; do not wrap output in an ' +
+      'artifact_ref object. Artifact payload must be a typed object, e.g. ' +
+      '{"type":"json","json":"{...}"} or {"type":"text","text":"..."}. ' +
+      'Large text/html/json/file content should be written to a file inside ' +
+      'your cwd/canvas workspace and referenced as payload.file.path; meee2 ' +
+      'will copy it into its artifact blob store.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,12 +104,19 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              kind: { type: 'string' },
-              title: { type: 'string' },
-              reference: { type: 'string' },
-              payload: { type: 'object' },
+              kind: { type: 'string', description: 'Artifact kind, usually generic unless read_node_contract says otherwise.' },
+              title: { type: 'string', description: 'Human-readable artifact title.' },
+              reference: { type: 'string', description: 'Output slot/reference from read_node_contract, e.g. game-state.json.' },
+              payload: {
+                type: 'object',
+                description:
+                  'Typed artifact payload object. Examples: {"type":"json","json":"{\\"ok\\":true}"}, ' +
+                  '{"type":"text","text":"summary"}, {"type":"html","html":"<main>...</main>"}, ' +
+                  '{"type":"file","file":{"path":"report.md","mimeType":"text/markdown","name":"report.md"}}.',
+              },
               routeTo: { type: 'array', items: { type: 'string' } },
             },
+            required: ['kind', 'title', 'reference', 'routeTo'],
           },
         },
         next: { type: 'string', enum: ['complete', 'blocked', 'needs_owner_review'] },
@@ -117,7 +128,9 @@ const TOOLS = [
     name: 'attach_artifact_to_node',
     description:
       'Attach an artifact to your meee2 planner node as evidence without ' +
-      'marking the node complete. Use submit_node_output for final results.',
+      'marking the node complete. This is for interim evidence only; final ' +
+      'node results must use submit_node_output. Payload follows the same ' +
+      'typed object shape as submit_node_output artifacts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,7 +140,12 @@ const TOOLS = [
         title: { type: 'string' },
         reference: { type: 'string' },
         status: { type: 'string' },
-        payload: { type: 'object' },
+        payload: {
+          type: 'object',
+          description:
+            'Typed artifact payload object, e.g. {"type":"json","json":"{...}"} or ' +
+            '{"type":"file","file":{"path":"report.md","mimeType":"text/markdown"}}.',
+        },
       },
       required: ['canvasId', 'nodeId', 'reference'],
     },
@@ -419,8 +437,12 @@ const INSTRUCTIONS = [
   'Core tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
   'read_inbox, list_sessions.',
   'Planner rule: first read_node_contract; final state must be submitted through',
-  'submit_node_output. Large text/html/json/file artifacts should be written to',
-  'a workspace file and submitted as payload.file.path.',
+  'submit_node_output exactly once per completed/blocked attempt. If the contract',
+  'says output.payload_kind=artifact_ref, submit artifacts[] and put the output',
+  'slot name in artifact.reference; do not invent an artifact_ref wrapper.',
+  'Artifact payloads are typed objects such as {"type":"json","json":"{...}"}',
+  'or {"type":"text","text":"..."}. Large text/html/json/file artifacts should',
+  'be written to a workspace file and submitted as payload.file.path.',
 ].join('\n')
 
 async function dispatchToolCall(name, args = {}) {

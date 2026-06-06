@@ -20,6 +20,8 @@ enum BoardSessionSnapshotProvider {
                 BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
             }
         let cliCorrelationCandidates = SessionStore.shared.listAll()
+        let cliCorrelationIndex = InternalSessionIdentity.makeCliCorrelationIndex(candidates: cliCorrelationCandidates)
+        let iso8601 = ISO8601DateFormatter()
         let enrichedInternalSessions = (internalSessions + staleInternalSessions).map { dto -> SessionDTO in
             guard BoardDTOBuilder.isInternalTerminalProgram(dto.termProgram),
                   dto.recentMessages.isEmpty else {
@@ -38,15 +40,15 @@ enum BoardSessionSnapshotProvider {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let cli = InternalSessionIdentity.authoritativeCliSession(
                 forProviderResumeSessionId: resumeId,
-                among: cliCorrelationCandidates
+                in: cliCorrelationIndex
             ) ?? InternalSessionIdentity.correlatedCliSession(
                 forWorkspaceCwd: dto.project,
-                among: cliCorrelationCandidates,
+                in: cliCorrelationIndex,
                 // BUG B: gate out a stale prior-run CLI in a reused workspace.
                 // A freshly-dispatched surface must not adopt a dead/completed
                 // CLI that predates it — that would flip the live node
                 // running→failed. dto.startedAt is ISO8601 (iso8601.string).
-                surfaceStartedAt: dto.startedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+                surfaceStartedAt: dto.startedAt.flatMap { iso8601.date(from: $0) }
             )
             guard let cli, cli.sessionId != dto.id else { return dto }
             let usedAuthoritative = resumeId.map { !$0.isEmpty && cli.sessionId == $0 } ?? false

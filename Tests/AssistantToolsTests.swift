@@ -58,6 +58,30 @@ final class AssistantToolsTests: XCTestCase {
         }
     }
 
+    func testSubmitNodeOutputToolExplainsArtifactPayloadShape() {
+        let tool = AssistantTools.all.first { $0.name == "submit_node_output" }
+        XCTAssertNotNil(tool)
+        XCTAssertTrue(tool?.description.contains("output.payload_kind=artifact_ref") ?? false)
+        XCTAssertTrue(tool?.description.contains("\"type\":\"json\"") ?? false)
+
+        let properties = tool?.inputSchema["properties"] as? [String: Any]
+        let artifacts = properties?["artifacts"] as? [String: Any]
+        let items = artifacts?["items"] as? [String: Any]
+        let itemProperties = items?["properties"] as? [String: Any]
+        let payload = itemProperties?["payload"] as? [String: Any]
+        XCTAssertTrue((payload?["description"] as? String)?.contains("\"type\":\"file\"") ?? false)
+        XCTAssertEqual(items?["required"] as? [String], ["kind", "title", "reference", "routeTo"])
+    }
+
+    func testInvalidNodeOutputHelpIsActionableForAgents() {
+        let help = BoardAPI.plannerNodeOutputPayloadHelp
+        XCTAssertTrue(help.contains("PlannerNodeOutput"))
+        XCTAssertTrue(help.contains("artifacts[].reference"))
+        XCTAssertTrue(help.contains("\"type\":\"json\""))
+        XCTAssertTrue(help.contains("bare string"))
+        XCTAssertTrue(help.contains("\"content\""))
+    }
+
     // MARK: - Filter
 
     func testFilterReturnsAllWhenEnabledIsNil() {

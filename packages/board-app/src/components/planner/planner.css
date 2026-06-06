@@ -251,7 +251,8 @@
 
 .canvas-scene__actions button:hover:not(:disabled),
 .canvas-scene-node:hover:not(:disabled),
-.canvas-scene-poker__seat:hover {
+.canvas-scene-poker__seat:hover,
+.canvas-scene-poker__dealer-state:hover {
   border-color: rgba(94, 234, 212, 0.55);
   background: rgba(20, 36, 42, 0.92);
 }
@@ -286,12 +287,14 @@
 }
 
 .canvas-scene-node.is-blocked,
-.canvas-scene-poker__seat.is-blocked {
+.canvas-scene-poker__seat.is-blocked,
+.canvas-scene-poker__dealer-state.is-blocked {
   border-color: rgba(251, 146, 60, 0.65);
 }
 
 .canvas-scene-node.is-done,
-.canvas-scene-poker__seat.is-done {
+.canvas-scene-poker__seat.is-done,
+.canvas-scene-poker__dealer-state.is-done {
   border-color: rgba(74, 222, 128, 0.55);
 }
 
@@ -521,6 +524,57 @@
   border-color: rgba(251, 191, 36, 0.62);
 }
 
+.canvas-scene-poker__dealer-state {
+  position: absolute;
+  display: grid;
+  min-width: clamp(168px, 17vw, 236px);
+  gap: 3px;
+  padding: 10px 14px;
+  border: 1px solid rgba(125, 211, 252, 0.32);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(8, 47, 73, 0.82), rgba(6, 20, 27, 0.86));
+  color: rgba(244, 250, 247, 0.94);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 0 18px rgba(14, 165, 233, 0.08);
+}
+
+.canvas-scene-poker__dealer-state span {
+  color: rgba(125, 211, 252, 0.72);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__dealer-state strong {
+  font-size: clamp(13px, 1.05vw, 16px);
+}
+
+.canvas-scene-poker__dealer-state small,
+.canvas-scene-poker__dealer-state em {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(235, 238, 242, 0.62);
+  font-size: 10.5px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__dealer-state--top {
+  left: 50%;
+  top: 5%;
+  transform: translateX(-50%);
+}
+
+.canvas-scene-poker__dealer-state.is-next {
+  border-color: rgba(125, 211, 252, 0.78);
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.1), inset 0 0 18px rgba(14, 165, 233, 0.12);
+}
+
 .canvas-scene-poker__gm {
   min-width: 92px;
   justify-content: center;
@@ -530,14 +584,14 @@
   min-width: 0;
   align-self: stretch;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 12px;
   padding-top: 2px;
 }
 
 .canvas-scene-poker__stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -564,6 +618,51 @@
   text-overflow: ellipsis;
   text-transform: none;
   white-space: nowrap;
+}
+
+.canvas-scene-poker__stats em {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(235, 238, 242, 0.54);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 520;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__gm-summary {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 8px;
+  background: rgba(35, 25, 14, 0.48);
+  color: rgba(246, 248, 250, 0.92);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-scene-poker__gm-summary span {
+  color: rgba(251, 191, 36, 0.78);
+  font-size: 10.5px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__gm-summary strong {
+  color: rgba(244, 250, 247, 0.94);
+  font-size: 13px;
+}
+
+.canvas-scene-poker__gm-summary em {
+  color: rgba(235, 238, 242, 0.62);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
 }
 
 .canvas-scene-poker__log {
@@ -782,6 +881,10 @@
 
   .canvas-scene-poker__felt {
     width: 100%;
+  }
+
+  .canvas-scene-poker__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .canvas-scene-poker__log {

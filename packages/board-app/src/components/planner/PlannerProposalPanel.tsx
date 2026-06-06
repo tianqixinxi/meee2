@@ -873,7 +873,7 @@ function recommendTemplate(
       id: scene.templateId,
       title: scene.templateId === 'poker-table' ? 'Poker Table' : 'Travel Squad',
       body: scene.templateId === 'poker-table'
-        ? 'Best fit for table-game simulations with Dealer, player agents, GM rulings, and node-scoped game-state artifacts.'
+        ? 'Best fit for table-game simulations with system-owned table state, player agents, GM rulings, and node-scoped game-state artifacts.'
         : 'Best fit for collaborative travel planning with route, hotel, food, budget, and final confirmation roles.',
       label: 'Use scene',
       templateId: scene.templateId,
@@ -1429,8 +1429,8 @@ function scenePlanCardFromRequest(request: string): PlannerPlanCard | null {
   const chinese = containsCJK(text)
   if (/(德扑|德州|扑克|牌局|玩家|发牌|dealer|poker|texas hold|hold'em|table game|gm|game master)/i.test(text)) {
     const adaptationPrompt = chinese
-      ? `基于用户需求创建 Poker Table scene canvas：${compactRequestForPlan(text)}。只把 Dealer、玩家 Agent、GM/规则裁判作为 nodes；座位、手牌、公共牌、底池和行动日志作为 scene state 或 node artifacts。`
-      : `Create a Poker Table scene canvas from the user request: ${compactRequestForPlan(text)}. Only Dealer, player agents, and GM/rules judge are nodes; seats, hands, community cards, pot, and action log are scene state or node artifacts.`
+      ? `基于用户需求创建 Poker Table scene canvas：${compactRequestForPlan(text)}。玩家 Agent 和 GM/规则裁判是可执行 nodes；Dealer / Table State 是系统状态挂载点；座位、手牌、公共牌、底池和行动日志作为 scene state 或 node artifacts。`
+      : `Create a Poker Table scene canvas from the user request: ${compactRequestForPlan(text)}. Player agents and GM/rules judge are executable nodes; Dealer / Table State is a system state owner; seats, hands, community cards, pot, and action log are scene state or node artifacts.`
     return {
       title: chinese ? '德州扑克 Scene Canvas' : 'Poker Table Scene Canvas',
       intro: chinese
@@ -1440,7 +1440,7 @@ function scenePlanCardFromRequest(request: string): PlannerPlanCard | null {
       templateId: 'poker-table',
       adaptationPrompt,
       steps: [
-        { title: 'Dealer Agent', body: chinese ? '维护 game-state.json、action-log.json、阶段、行动顺序和基础合法动作。' : 'Maintains game-state.json, action-log.json, phase, turn order, and basic legal actions.' },
+        { title: 'Dealer / Table State', body: chinese ? '系统状态挂载点；Rules Orchestrator 在这里写入 game-state.json 和 action-log.json。' : 'System state slot where Rules Orchestrator writes game-state.json and action-log.json.' },
         { title: chinese ? '玩家 Agent' : 'Player Agents', body: chinese ? '每个玩家 node 根据当前 game-state.json 选择行动并输出 player action artifact。' : 'Each player node reads game-state.json and outputs a player action artifact.' },
         { title: 'GM / 规则裁判', body: chinese ? '人工审批揭示、规则争议和牌局推进。' : 'Human review for reveals, rule disputes, and table progression.' },
       ],
@@ -1679,7 +1679,7 @@ function normalizeOfficialSceneTemplateId(value: unknown): OfficialSceneTemplate
 function sceneTemplatePlanSteps(templateId: OfficialSceneTemplateId): PlannerPlanCardStep[] {
   return templateId === 'poker-table'
     ? [
-        { title: 'Dealer Agent', body: '维护 game-state.json、action-log.json、阶段、行动顺序和基础合法动作。' },
+        { title: 'Dealer / Table State', body: '系统状态挂载点；Rules Orchestrator 在这里写入 game-state.json 和 action-log.json。' },
         { title: '玩家 Agent', body: '每个玩家 node 根据当前 game-state.json 选择行动并输出 player action artifact。' },
         { title: 'GM / 规则裁判', body: '人工审批揭示、规则争议和牌局推进。' },
       ]

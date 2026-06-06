@@ -108,7 +108,7 @@ describe('PlannerProposalPanel empty canvas intake', () => {
         templateId: 'poker-table',
         adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
         steps: [
-          { title: 'Dealer Agent', body: '维护 game-state.json 和 action-log.json。' },
+          { title: 'Dealer / Table State', body: '系统状态挂载点，维护 game-state.json 和 action-log.json。' },
           { title: '玩家 Agent', body: '每个玩家根据当前牌局行动。' },
           { title: 'GM / 规则裁判', body: '审批揭示和规则争议。' },
         ],

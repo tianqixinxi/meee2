@@ -459,23 +459,24 @@ enum CanvasTemplateRegistry {
     )
 
     /// 8. poker-table — rules-assisted AI role-play canvas. Cards/pot/seats are
-    /// scene state; only agents / GM are executable nodes.
+    /// scene state; player agents / GM are executable nodes. Dealer is a
+    /// system state owner for node-scoped artifacts, not an AI session.
     static let pokerTable = CanvasTemplate(
         id: "poker-table",
         name: "Poker Table",
-        description: "德州扑克 AI 角色牌桌：Dealer、玩家和 GM 节点驱动牌局 artifact",
+        description: "德州扑克 AI 角色牌桌：规则调度器维护牌桌状态，玩家和 GM 节点驱动行动 artifact",
         icon: "club",
         kind: .board,
         category: "demo",
         defaultNodes: [
             TemplateNodeSpec(
-                title: "Dealer Agent",
-                description: "维护牌局阶段、发牌和基础合法动作，产出 game-state.json",
+                title: "Dealer / Table State",
+                description: "系统状态挂载点：Rules Orchestrator 在这里写入 game-state.json 和 action-log.json",
                 status: "ready",
                 positionHint: ["x": -420, "y": 420],
                 executionMode: "auto",
-                executorType: "claude",
-                goal: "维护德州扑克牌局状态，保证阶段、行动顺序、牌唯一性和基础合法动作，产出 game-state.json",
+                executorType: "mock",
+                goal: "作为德州扑克牌桌的权威状态出口；常规规则推进由 Rules Orchestrator 系统写入，不启动 AI session",
                 outputs: ["game-state.json", "action-log.json"]
             ),
             TemplateNodeSpec(
@@ -545,7 +546,7 @@ enum CanvasTemplateRegistry {
                 "legalActions": [],
                 "handStatus": "setup",
                 "players": [
-                    ["id": "dealer", "name": "Dealer", "stack": 0, "status": "ready", "seat": "top", "holeCards": []],
+                    ["id": "dealer", "name": "Dealer / Table State", "stack": 0, "status": "system", "seat": "top", "holeCards": []],
                     ["id": "ada", "name": "Ada", "style": "紧凶型", "stack": 1000, "status": "ready", "seat": "left", "holeCards": ["??", "??"]],
                     ["id": "bruno", "name": "Bruno", "style": "诈唬型", "stack": 1000, "status": "ready", "seat": "right", "holeCards": ["??", "??"]],
                     ["id": "mina", "name": "Mina", "style": "保守观察", "stack": 1000, "status": "ready", "seat": "bottom", "holeCards": ["??", "??"]]
@@ -563,7 +564,7 @@ enum CanvasTemplateRegistry {
                 CanvasSceneArtifactBinding(id: "mina", nodeId: "node:3", reference: "mina-action.json")
             ],
             nodeAnchors: [
-                CanvasSceneNodeAnchor(id: "dealer", label: "Dealer", nodeId: "node:0", x: 50, y: 16, role: "dealer"),
+                CanvasSceneNodeAnchor(id: "dealer", label: "Table State", nodeId: "node:0", x: 50, y: 16, role: "dealer"),
                 CanvasSceneNodeAnchor(id: "ada", label: "Ada", nodeId: "node:1", x: 16, y: 52, role: "player"),
                 CanvasSceneNodeAnchor(id: "bruno", label: "Bruno", nodeId: "node:2", x: 84, y: 52, role: "player"),
                 CanvasSceneNodeAnchor(id: "mina", label: "Mina", nodeId: "node:3", x: 50, y: 82, role: "player"),

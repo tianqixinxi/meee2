@@ -916,7 +916,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'poker-table',
     name: 'Poker Table',
-    description: '德州扑克 AI 角色牌桌：Dealer、玩家和 GM 节点驱动牌局 artifact',
+    description: '德州扑克 AI 角色牌桌：规则调度器维护牌桌状态，玩家和 GM 节点驱动行动 artifact',
     icon: 'club',
     source: 'official',
     kind: 'board',
@@ -932,7 +932,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     defaultNodesCount: 5,
     updatedAt: null,
     defaultNodes: [
-      { title: 'Dealer Agent', status: 'ready' },
+      { title: 'Dealer / Table State', status: 'ready' },
       { title: 'Ada 玩家 Agent', status: 'ready' },
       { title: 'Bruno 玩家 Agent', status: 'ready' },
       { title: 'Mina 玩家 Agent', status: 'ready' },
@@ -952,7 +952,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
         legalActions: [],
         handStatus: 'setup',
         players: [
-          { id: 'dealer', name: 'Dealer', stack: 0, status: 'ready', seat: 'top', holeCards: [] },
+          { id: 'dealer', name: 'Dealer / Table State', stack: 0, status: 'system', seat: 'top', holeCards: [] },
           { id: 'ada', name: 'Ada', style: '紧凶型', stack: 1000, status: 'ready', seat: 'left', holeCards: ['??', '??'] },
           { id: 'bruno', name: 'Bruno', style: '诈唬型', stack: 1000, status: 'ready', seat: 'right', holeCards: ['??', '??'] },
           { id: 'mina', name: 'Mina', style: '保守观察', stack: 1000, status: 'ready', seat: 'bottom', holeCards: ['??', '??'] },
@@ -964,7 +964,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
         { id: 'action-log', nodeId: 'node:0', reference: 'action-log.json' },
       ],
       nodeAnchors: [
-        { id: 'dealer', label: 'Dealer', nodeId: 'node:0', x: 50, y: 16, role: 'dealer' },
+        { id: 'dealer', label: 'Table State', nodeId: 'node:0', x: 50, y: 16, role: 'dealer' },
         { id: 'ada', label: 'Ada', nodeId: 'node:1', x: 16, y: 52, role: 'player' },
         { id: 'bruno', label: 'Bruno', nodeId: 'node:2', x: 84, y: 52, role: 'player' },
         { id: 'mina', label: 'Mina', nodeId: 'node:3', x: 50, y: 82, role: 'player' },

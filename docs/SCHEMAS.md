@@ -639,6 +639,8 @@ output:
 - Output is **always full** — `submit_node_output` rejects any payload with `replace_strategy`, `output.kind: increment`, or `output_kind: increment`.
 - v1-style per-field mapping (`field_mapping`, `inputs[].source_field`, `inputs[].target_field`) is rejected.
 - Unknown `version` values throw `NodeContractValidationError.unknownContractVersion`. v1 contracts (no `version`) auto-migrate at read time via `NodeContractV2.derive(from:)`.
+- `output.payload_kind = artifact_ref` means the node output should be written as one or more artifact slots/versions. The `submit_node_output` wire payload still uses `artifacts[]`; each artifact names its slot with `artifacts[].reference`. Do not wrap output in an `artifact_ref` object.
+- Inline artifact payloads use typed objects: `{"type":"json","json":"{...}"}`, `{"type":"text","text":"..."}`, `{"type":"html","html":"<main>...</main>"}`. File-backed payloads use `{"type":"file","file":{"path":"report.md","mimeType":"text/markdown"}}`. Bare strings and `{"content":...}` are not canonical node output payloads.
 
 **Auto-migration** from v1 fields on a `PlanningNode`:
 

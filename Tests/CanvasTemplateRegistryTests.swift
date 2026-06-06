@@ -99,6 +99,11 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         XCTAssertEqual(scene.orchestration?.kind, "poker-rules-v1")
         XCTAssertEqual(scene.orchestration?.stateNodeId, record.nodes.first?.id)
         XCTAssertTrue(scene.artifactBindings.contains { $0.reference == "game-state.json" })
+        let dealer = try XCTUnwrap(record.nodes.first { $0.title == "Dealer / Table State" })
+        XCTAssertEqual(dealer.executionMode, .auto)
+        XCTAssertEqual(dealer.executorType, .mock)
+        XCTAssertNil(dealer.gate, "Dealer is a system state slot, not a human approval gate")
+        XCTAssertEqual(dealer.schema.outputs, ["game-state.json", "action-log.json"])
         if case .object(let initial)? = scene.initialState,
            case .object(let setup)? = initial["setup"],
            case .bool(let started)? = setup["started"] {
@@ -158,8 +163,13 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         let ada = try XCTUnwrap(updated.nodes.first { $0.title == "Ada 玩家 Agent" })
         let bruno = try XCTUnwrap(updated.nodes.first { $0.title == "Bruno 玩家 Agent" })
         let gm = try XCTUnwrap(updated.nodes.first { $0.title == "GM / 规则裁判" })
+        let dealer = try XCTUnwrap(updated.nodes.first { $0.title == "Dealer / Table State" })
         XCTAssertEqual(ada.executionMode, .human)
         XCTAssertEqual(bruno.executionMode, .auto)
+        XCTAssertEqual(dealer.executionMode, .auto)
+        XCTAssertEqual(dealer.status, .done)
+        XCTAssertEqual(dealer.workflowRunState, .done)
+        XCTAssertNil(dealer.gate)
         XCTAssertEqual(gm.executionMode, .human)
         XCTAssertTrue(updated.artifacts.contains { $0.nodeId == dealerId && $0.reference == "game-state.json" })
         let version = updated.artifactVersions.last { $0.nodeId == dealerId && $0.payloadRef == "game-state.json" }
