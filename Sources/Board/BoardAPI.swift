@@ -3753,6 +3753,9 @@ enum BoardAPI {
             // UI / agent can suggest the step + dispatch.runner=claude
             // migration rather than treating it as a generic 400.
             return errorResponse("session_kind_no_longer_creatable", err.localizedDescription, status: 400)
+        case .applyRejected:
+            // 方向 A:apply 委托 sidecar 时 governance 校验拒绝(引用完整性 / 事务原子 / footgun)。
+            return errorResponse("apply_rejected", err.localizedDescription, status: 422)
         }
     }
 
@@ -6091,8 +6094,10 @@ enum BoardAPI {
             .compactMap { canvas -> CanvasTemplateDTO? in
                 customTemplateDTO(canvas, actor: actor)
             }
+        // canvas-script(Part F)模板 —— 从 meee2-online sidecar 拉(env 配了才有,失败静默)。
+        let canvasScript = fetchSidecarTemplates()
         return jsonResponse(CanvasTemplatesEnvelope(
-            templates: official + custom,
+            templates: official + custom + canvasScript,
             tags: canvasTemplateTags
         ))
     }
@@ -6327,6 +6332,10 @@ enum BoardAPI {
         }
 
         let adaptationPrompt = body.adaptationPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // canvas-script 模板(id 前缀 cs:)走 sidecar instantiate → governance apply。
+        if templateId.hasPrefix("cs:") {
+            return applyCanvasScriptTemplate(String(templateId.dropFirst(3)), name: name, scope: scope)
+        }
         if let template = CanvasTemplateRegistry.get(templateId) {
             return applyOfficialCanvasTemplate(
                 template,
@@ -6428,6 +6437,147 @@ enum BoardAPI {
             return "template:\(templateRef)"
         }
         return "template:\(templateRef)\nadaptation:\(prompt)"
+    }
+
+    // MARK: - canvas-script 模板(Part F,经 meee2-online sidecar)
+
+    private struct SidecarTemplateItem: Decodable {
+        let id: String
+        let title: String
+        let nodeCount: Int
+        let edgeCount: Int
+        let cardCount: Int
+    }
+    private struct SidecarTemplatesEnvelope: Decodable {
+        let templates: [SidecarTemplateItem]
+    }
+    private struct SidecarInstantiateResponse: Decodable {
+        struct Proposal: Decodable {
+            let canvasId: String
+            let summary: String
+            let changes: [PlanChange]
+        }
+        let proposal: Proposal
+    }
+
+    private static func sidecarBaseURL() -> URL? {
+        let env = ProcessInfo.processInfo.environment
+        let configured = env[HTTPPlannerAgentRuntime.runtimeUrlEnvVar]?.trimmingCharacters(in: .whitespaces)
+        // env 未设 → 默认本地 dev sidecar(`pnpm runtime:sidecar` 的 :18890)。没 sidecar 时
+        // 本地连接秒拒、上层静默 [],省去用户每次手动配 env 才能看到 canvas-script 模板。
+        let raw = (configured?.isEmpty == false) ? configured! : "http://127.0.0.1:18890"
+        return URL(string: raw)
+    }
+
+    /// 同步打 sidecar(BoardAPI handler 都是同步的);失败返回 (nil, 0)。
+    private static func sidecarSyncRequest(_ request: URLRequest) -> (Data?, Int) {
+        var out: (Data?, Int) = (nil, 0)
+        let sema = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { sema.signal() }
+            out = (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }.resume()
+        _ = sema.wait(timeout: .now() + 12)
+        return out
+    }
+
+    /// 从 sidecar 拉 canvas-script 模板,映射成 CanvasTemplateDTO(id 前缀 cs: 避免与
+    /// builtin 撞名)。env 未配 / 不可达 → 静默返回 [](不拖垮模板库)。
+    private static func fetchSidecarTemplates() -> [CanvasTemplateDTO] {
+        guard let base = sidecarBaseURL() else { return [] }
+        var req = URLRequest(url: base.appendingPathComponent("api/planner/runtime/templates"), timeoutInterval: 5)
+        req.httpMethod = "GET"
+        let (data, status) = sidecarSyncRequest(req)
+        guard let data, (200..<300).contains(status),
+              let env = try? JSONDecoder().decode(SidecarTemplatesEnvelope.self, from: data) else { return [] }
+        return env.templates.map { item in
+            CanvasTemplateDTO(
+                id: "cs:" + item.id,
+                name: item.title,
+                description: "canvas-script 模板 · \(item.nodeCount) 节点 / \(item.edgeCount) 边",
+                icon: "sparkles",
+                source: "canvas-script",
+                kind: "board",
+                defaultCanvasKind: "board",
+                category: "canvas-script",
+                tags: ["canvas-script"],
+                ownerUserId: nil,
+                ownerName: "meee2 · canvas-script",
+                version: 1,
+                readOnly: true,
+                canEdit: false,
+                canReplace: false,
+                defaultNodesCount: item.nodeCount,
+                updatedAt: nil,
+                defaultNodes: [],
+                sceneSpec: nil
+            )
+        }
+    }
+
+    /// canvas-script 模板实例化:建空 canvas → sidecar instantiate 拿 remap 好的 proposal
+    /// → graph-change + approve + apply(走 governance,复用 PlannerStore.applyProposal)。
+    private static func applyCanvasScriptTemplate(
+        _ templateId: String,
+        name: String,
+        scope: BoardLayoutStore.CanvasScope
+    ) -> HttpResponse {
+        guard let base = sidecarBaseURL() else {
+            return errorResponse("unavailable", "canvas-script sidecar 未配置(MEEE2_PLANNER_RUNTIME_URL)", status: 503)
+        }
+        // 先建空 canvas;createCanvas 之后任一步失败都回滚删除,避免 sidecar 瞬时故障 /
+        // decode / apply 失败留下一张空 canvas(codex P2)。
+        let snapshot: BoardLayoutStore.Snapshot
+        do {
+            snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: .board)
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+        let canvasId = snapshot.activeCanvasId
+        func rollback(_ response: HttpResponse) -> HttpResponse {
+            _ = try? BoardLayoutStore.shared.deleteCanvas(id: canvasId)
+            return response
+        }
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return rollback(errorResponse("internal", "freshly created canvas missing from snapshot", status: 500))
+        }
+        do {
+            // planningCanvas(for:) 按 scope 设 visibility(team → .public);手动 init 会漏掉,
+            // 导致 team 模板存成 .private、其他成员 canViewCanvas 看不到这张图(codex P2)。
+            let planning = planningCanvas(for: boardCanvas, context: "canvas-script:\(templateId)")
+            _ = try PlannerBoardBridge.store.record(for: planning, seedNodes: [])
+
+            var req = URLRequest(
+                url: base.appendingPathComponent("api/planner/runtime/templates/\(templateId)/instantiate"),
+                timeoutInterval: 12
+            )
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["canvasId": canvasId])
+            let (data, status) = sidecarSyncRequest(req)
+            guard let data, (200..<300).contains(status) else {
+                return rollback(errorResponse("sidecar_error", "instantiate 失败(status \(status))", status: 502))
+            }
+            let decoded = try JSONDecoder().decode(SidecarInstantiateResponse.self, from: data)
+
+            let proposal = try PlannerBoardBridge.graphChangeProposal(
+                summary: decoded.proposal.summary,
+                changes: decoded.proposal.changes,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: planning.ownerId
+            )
+            _ = try PlannerBoardBridge.approveProposal(
+                proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: planning.ownerId
+            )
+            _ = try PlannerBoardBridge.applyProposal(
+                proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: planning.ownerId
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch {
+            return rollback(errorResponse("bad_request", error.localizedDescription, status: 400))
+        }
     }
 
     static func createTemplateFromCanvas(_ req: HttpRequest) -> HttpResponse {

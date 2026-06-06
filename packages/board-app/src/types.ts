@@ -495,24 +495,47 @@ export interface DataSourceRecord {
   partitionRule?: DataSourcePartitionRule | string
   partitionTimezone?: string
   currentVersion: number
+  // Canvas runtime addendum (Part A/G) —— 已随 `canvas.dataSources` 一起发到前端,
+  // 这里把类型补齐让 UI 能读真实身份/选择器/语义,而不是只靠旧的 title/kind。
+  identity?: { connectorKind: string; realm: string }
+  selector?: {
+    mode: 'declarative' | 'curated'
+    dialect?: string
+    expr?: string
+    /** curated:AI 梳理的聚合意图。 */
+    intent?: string
+  }
+  semantics?: { label: string; purpose?: string }
 }
 
 /**
- * Twin of Zod contract/edge.ts `Edge` — only the fields edge-mode badging needs
- * are mirrored. `edgeMode.mode` is the discriminator: `"queue-claim"`,
- * `"document-snapshot"`, the synthetic `"dependency"`, or a forward-compat
- * string. */
+ * Twin of Zod contract/edge.ts `Edge`. Earlier this only mirrored the
+ * edge-mode-badging subset; the step-IO inspector needs the named slot keys
+ * (`sourceKey → inputKey`), the optional `dataSourceId` (when the source is a
+ * DataSource rather than a node), and the EdgeMode strategy (to label timing).
+ */
 export interface CanvasEdge {
   id: string
-  sourceRef: { nodeId: string }
-  targetRef: { nodeId: string }
-  edgeMode: { mode: 'queue-claim' | 'document-snapshot' | 'dependency' | string }
+  sourceRef: { nodeId: string; sourceKey?: string; dataSourceId?: string }
+  targetRef: { nodeId: string; inputKey?: string; dataSourceId?: string }
+  edgeMode: {
+    mode: 'queue-claim' | 'document-snapshot' | 'dependency' | string
+    /** document-snapshot: `follow-latest` | `pin-at-attempt-start`. */
+    strategy?: { kind?: string; resolveAt?: string }
+    /** queue-claim: `fifo` | `lifo` | `priority`. */
+    ordering?: string
+  }
 }
 
 export interface NodeSchema {
   inputs: string[]
   outputs: string[]
   goal: string
+  /**
+   * Part C —— 每个输入/输出槽对数据源的子视图(投影 + 语义)。key = 槽名。
+   * `project` = 投影出的字段子集;`semantics` = 这个槽给人/agent 看的语义。
+   */
+  subViews?: Record<string, { semantics: { label: string; purpose?: string }; project?: string[] }>
 }
 
 export type ContextSourceKind =

@@ -154,7 +154,7 @@ extension PlannerBoardBridge {
                 }
                 return CanvasRuntimeDataSource(
                     id: source.id,
-                    title: source.title,
+                    title: source.label,
                     partitionRule: source.partitionRule,
                     currentVersion: source.currentVersion,
                     queueReadyDepth: depth

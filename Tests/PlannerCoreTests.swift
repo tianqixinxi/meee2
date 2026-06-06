@@ -1777,6 +1777,59 @@ final class PlannerCoreTests: XCTestCase {
     /// E2E keystone: a single proposal that creates a DataSource + a first-class
     /// queue-claim Edge + a MonitorSpec must, once applied, surface those atoms
     /// on the persisted canvas (and round-trip through the graph-state API).
+    func testDelegatedApplyStillRequiresApprovedProposal() throws {
+        // P1(codex)回归:开启 sidecar 委托后,未 approved 的「可委托」proposal 仍必须被
+        // proposalNotApproved 挡住 —— 委托路不能绕过 applyNodeChange 的 approved 门。
+        setenv("MEEE2_APPLY_VIA_SIDECAR", "1", 1)
+        setenv("MEEE2_PLANNER_RUNTIME_URL", "http://127.0.0.1:1", 1) // 不可达:确保不真发委托请求
+        defer {
+            unsetenv("MEEE2_APPLY_VIA_SIDECAR")
+            unsetenv("MEEE2_PLANNER_RUNTIME_URL")
+        }
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeA = try XCTUnwrap(record.nodes.first)
+        let proposal = PlanProposal(
+            id: "proposal-unapproved-delegate",
+            canvasId: "canvas-a",
+            summary: "Pending update (delegatable kind)",
+            changes: [.updateNode(id: nodeA.id, title: "Should not apply")],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        // 故意不 approve —— 委托路应在 store.applyProposal 的 approved guard 处抛错。
+        XCTAssertThrowsError(try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
+        }
+    }
+
+    func testCanvasScriptProposalDecodesToPlanChanges() throws {
+        // R3 回归:sidecar instantiate 返回的 canvas-script proposal(真实形状)能被 Swift
+        // [PlanChange] 正确 decode —— 命名槽 schema / document-snapshot edgeMode / kanban
+        // widget。BoardAPI.applyCanvasScriptTemplate 的接入就依赖这条 decode 不丢字段。
+        let json = """
+        {"changes":[
+          {"kind":"addNode","node":{"id":"n1","canvasId":"cx","title":"主 Agent","schema":{"inputs":[],"outputs":["frontend_spec","backend_spec","refactor_spec"],"goal":"拆分"},"contextSources":[],"executionMode":"auto","executorType":"claude","doerId":"","reviewerIds":[],"approverIds":[],"handoffPolicy":"none","status":"ready","nodeKind":"step"}},
+          {"kind":"addNode","node":{"id":"n2","canvasId":"cx","title":"PR 看板","schema":{"inputs":["pull_requests"],"outputs":[],"goal":"看板"},"contextSources":[],"executionMode":"auto","executorType":"claude","doerId":"","reviewerIds":[],"approverIds":[],"handoffPolicy":"none","status":"ready","nodeKind":"step","widget":{"kind":"kanban","source":{"inputKind":"external","inputIndex":0},"mapping":{"statusField":"state","titleField":"title"}}}},
+          {"kind":"addEdge","edge":{"id":"e1","canvasId":"cx","sourceRef":{"nodeId":"n1","sourceKey":"frontend_spec"},"targetRef":{"nodeId":"n2","inputKey":"frontend_spec"},"edgeMode":{"mode":"document-snapshot","strategy":{"kind":"follow-latest"}},"createdAt":"1970-01-01T00:00:00.000Z","modeRevision":0}}
+        ]}
+        """
+        struct Wrap: Decodable { let changes: [PlanChange] }
+        let wrap = try JSONDecoder().decode(Wrap.self, from: Data(json.utf8))
+        XCTAssertEqual(wrap.changes.count, 3)
+        XCTAssertEqual(wrap.changes[0].kind, .addNode)
+        XCTAssertEqual(wrap.changes[0].node?.schema.outputs, ["frontend_spec", "backend_spec", "refactor_spec"])
+        XCTAssertEqual(wrap.changes[1].node?.widget?.kind, .kanban)
+        XCTAssertEqual(wrap.changes[2].kind, .addEdge)
+        XCTAssertEqual(wrap.changes[2].edge?.sourceRef.sourceKey, "frontend_spec")
+        XCTAssertEqual(wrap.changes[2].edge?.edgeMode.mode, "document-snapshot")
+    }
+
     func testApplyProposalPopulatesDataSourceEdgeAndMonitorSpec() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
@@ -1786,9 +1839,9 @@ final class PlannerCoreTests: XCTestCase {
         let dataSource = DataSourceRecord(
             id: "src-queue-1",
             canvasId: "canvas-a",
-            kind: "managed",
-            title: "Work Queue",
-            pathPattern: "queue/*",
+            identity: SourceIdentity(connectorKind: "managed", realm: "managed:canvas-a"),
+            selector: Selector.declarative(dialect: "path", expr: "queue/*"),
+            semantics: Semantics(label: "Work Queue"),
             capabilities: DataSourceCapabilities(queueClaimable: true, appendOnly: true)
         )
         let edge = Edge(
@@ -1852,6 +1905,11 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(applied.canvas.dataSources.count, 1)
         XCTAssertEqual(applied.canvas.dataSources.first?.id, "src-queue-1")
         XCTAssertTrue(applied.canvas.dataSources.first?.capabilities.queueClaimable == true)
+        // addendum Part A/G:新形状(identity/selector/semantics)穿过 apply 不丢。
+        XCTAssertEqual(applied.canvas.dataSources.first?.identity.connectorKind, "managed")
+        XCTAssertEqual(applied.canvas.dataSources.first?.semantics.label, "Work Queue")
+        XCTAssertEqual(applied.canvas.dataSources.first?.selector.mode, "declarative")
+        XCTAssertEqual(applied.canvas.dataSources.first?.selector.expr, "queue/*")
         // Phase 1 edge unification: `edges` now also carries the dependency
         // edges promoted from the seeded nodes' dependsOnNodeIds, so assert the
         // explicit queue-claim edge by id rather than a brittle total count.
@@ -1866,8 +1924,83 @@ final class PlannerCoreTests: XCTestCase {
         PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
         let reloaded = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
         XCTAssertEqual(reloaded.canvas.dataSources.first?.id, "src-queue-1")
+        XCTAssertEqual(reloaded.canvas.dataSources.first?.identity.connectorKind, "managed")
+        XCTAssertEqual(reloaded.canvas.dataSources.first?.semantics.label, "Work Queue")
         XCTAssertEqual(reloaded.canvas.edges.first?.id, "edge-1")
         XCTAssertEqual(reloaded.canvas.monitorSpec?.cards.first?.id, "card-1")
+    }
+
+    /// addendum Part A/G migration — on-disk 旧形状(kind/title/pathPattern)必须
+    /// decode 成新 identity/selector/semantics,让历史 canvas 平滑升级。
+    func testDataSourceLegacyJSONDecodesToNewShape() throws {
+        let legacy = """
+        {
+          "id": "src-legacy-1",
+          "canvasId": "canvas-legacy",
+          "kind": "fs",
+          "title": "PRD 草稿",
+          "pathPattern": "prd-draft/**",
+          "partitionRule": "iso-week",
+          "currentVersion": 3
+        }
+        """
+        let ds = try JSONDecoder().decode(DataSourceRecord.self, from: Data(legacy.utf8))
+        XCTAssertEqual(ds.identity.connectorKind, "fs")
+        XCTAssertEqual(ds.identity.realm, "fs:canvas-legacy")
+        XCTAssertEqual(ds.selector.mode, "declarative")
+        XCTAssertEqual(ds.selector.dialect, "glob") // fs ⇒ glob
+        XCTAssertEqual(ds.selector.expr, "prd-draft/**")
+        XCTAssertEqual(ds.semantics.label, "PRD 草稿")
+        XCTAssertEqual(ds.partitionRule, "iso-week")
+        XCTAssertEqual(ds.currentVersion, 3)
+        // compat accessors collapse back to the legacy vocabulary.
+        XCTAssertEqual(ds.connectorKind, "fs")
+        XCTAssertEqual(ds.label, "PRD 草稿")
+        XCTAssertEqual(ds.pathHint, "prd-draft/**")
+    }
+
+    /// New-shape DataSource(declarative + curated)round-trips,且 encode 只出新
+    /// 形状(绝不再写 legacy kind/title/pathPattern key)。
+    func testDataSourceNewShapeRoundTrips() throws {
+        let declarative = DataSourceRecord(
+            id: "src-new-1",
+            canvasId: "canvas-new",
+            identity: SourceIdentity(connectorKind: "notion", realm: "notion:ws_42"),
+            selector: Selector.declarative(dialect: "notion-db", expr: "<database_id>"),
+            semantics: Semantics(label: "竞品库", purpose: "竞品调研落点"),
+            partitionRule: "month",
+            currentVersion: 1
+        )
+        let encoded = try JSONEncoder().encode(declarative)
+        XCTAssertEqual(try JSONDecoder().decode(DataSourceRecord.self, from: encoded), declarative)
+        // encode 不得再写 legacy keys。
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(obj["kind"])
+        XCTAssertNil(obj["title"])
+        XCTAssertNil(obj["pathPattern"])
+        XCTAssertNotNil(obj["identity"])
+        XCTAssertNotNil(obj["selector"])
+        XCTAssertNotNil(obj["semantics"])
+
+        // curated selector(物化成员集 + opaque shapeSchema)也 round-trip。
+        let curated = DataSourceRecord(
+            id: "src-curated-1",
+            canvasId: "canvas-new",
+            identity: SourceIdentity(connectorKind: "curated", realm: "curated:art-7"),
+            selector: Selector(
+                mode: "curated",
+                curatorSessionId: "sess-9",
+                members: [MemberRef(identity: SourceIdentity(connectorKind: "fs", realm: "fs:/w"), ref: "a.md")],
+                intent: "所有竞品材料",
+                shapeSchema: .object(["kind": .string("doc")])
+            ),
+            semantics: Semantics(label: "竞品材料")
+        )
+        let curatedDecoded = try JSONDecoder().decode(
+            DataSourceRecord.self, from: try JSONEncoder().encode(curated)
+        )
+        XCTAssertEqual(curatedDecoded, curated)
+        XCTAssertEqual(curatedDecoded.selector.members?.first?.ref, "a.md")
     }
 
     /// Phase 1 edge unification — `canvas.edges` is authoritative and the legacy
@@ -1968,9 +2101,9 @@ final class PlannerCoreTests: XCTestCase {
         let issuesSource = DataSourceRecord(
             id: "src-issues",
             canvasId: canvasId,
-            kind: "github",
-            title: "GitHub issues",
-            pathPattern: "gh://repo/issues/",
+            identity: SourceIdentity(connectorKind: "github", realm: "github:repo"),
+            selector: Selector.declarative(dialect: "gh", expr: "gh://repo/issues/"),
+            semantics: Semantics(label: "GitHub issues"),
             capabilities: DataSourceCapabilities(
                 documentReadable: true, listEnumerable: true,
                 queueClaimable: true, appendOnly: true
@@ -2092,8 +2225,8 @@ final class PlannerCoreTests: XCTestCase {
         let source = DataSourceRecord(
             id: "src-managed-1",
             canvasId: "canvas-a",
-            kind: "managed",
-            title: "Queue",
+            identity: SourceIdentity(connectorKind: "managed", realm: "managed:canvas-a"),
+            semantics: Semantics(label: "Queue"),
             capabilities: DataSourceCapabilities(queueClaimable: true)
         )
         let adapter = ManagedAdapter(source: source, seedItems: [
@@ -2145,9 +2278,9 @@ final class PlannerCoreTests: XCTestCase {
         let issuesSource = DataSourceRecord(
             id: "src-issues-p3",
             canvasId: canvasId,
-            kind: "managed",
-            title: "issues",
-            pathPattern: "gh://repo/issues/",
+            identity: SourceIdentity(connectorKind: "managed", realm: "managed:\(canvasId)"),
+            selector: Selector.declarative(dialect: "path", expr: "gh://repo/issues/"),
+            semantics: Semantics(label: "issues"),
             capabilities: DataSourceCapabilities(
                 documentReadable: true, listEnumerable: true,
                 queueClaimable: true, appendOnly: true

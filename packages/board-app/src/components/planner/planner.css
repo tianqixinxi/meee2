@@ -8169,6 +8169,85 @@
   white-space: nowrap;
 }
 
+/* canvas runtime 对齐:多上游命名槽 + 子视图(Part C) */
+.planner-input-card__upstream-list,
+.planner-input-card__subview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planner-input-card__slot-wire {
+  color: rgba(168, 165, 155, 0.72);
+  font-size: 9px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+
+/* 中介 artifact pill —— Part C:上游连接经过的 artifact DataSource */
+.planner-input-card__artifact-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border: 1px solid rgba(166, 142, 196, 0.30);
+  border-radius: 999px;
+  background: rgba(166, 142, 196, 0.10);
+  color: rgba(166, 142, 196, 0.95);
+  font-size: 9px;
+  white-space: nowrap;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planner-input-card__badge--subview {
+  border-color: rgba(166, 142, 196, 0.32);
+  background: rgba(166, 142, 196, 0.12);
+  color: rgba(166, 142, 196, 0.94);
+}
+
+.planner-input-card__subview-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid rgba(166, 142, 196, 0.20);
+  border-radius: 5px;
+  background: rgba(166, 142, 196, 0.07);
+  min-width: 0;
+}
+
+.planner-input-card__subview-row svg {
+  flex: none;
+  color: rgba(166, 142, 196, 0.9);
+}
+
+.planner-input-card__subview-ref {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.planner-input-card__subview-ref strong {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.planner-input-card__subview-ref em {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-style: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .planner-input-card__refresh {
   display: inline-flex;
   align-items: center;

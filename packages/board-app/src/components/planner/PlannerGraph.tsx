@@ -2257,6 +2257,9 @@ function PlannerGraphInner({
         <NodeInspectorModal
           node={selectedNode}
           canvasId={canvasId}
+          canvasEdges={plannerState?.canvas.edges ?? []}
+          canvasDataSources={plannerState?.canvas.dataSources ?? []}
+          nodeTitleById={Object.fromEntries((plannerState?.nodes ?? []).map((n) => [n.id, n.title]))}
           variant={variant}
           state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
           artifacts={plannerState?.artifacts ?? []}
