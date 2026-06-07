@@ -130,6 +130,41 @@ export interface SessionIntakeDiagnostics {
   checkedAt: string
 }
 
+export interface BoardPerfMetric {
+  id: string
+  title: string
+  category: string
+  count: number
+  totalMs: number
+  averageMs: number | null
+  p50Ms: number | null
+  p95Ms: number | null
+  maxMs: number | null
+  totalBytes: number
+  lastDetail: string | null
+  lastAt: string | null
+}
+
+export interface BoardPerfEvent {
+  id: string
+  metricId: string
+  title: string
+  category: string
+  durationMs: number | null
+  bytes: number | null
+  detail: string | null
+  at: string
+}
+
+export interface BoardPerfSnapshot {
+  enabled: boolean
+  pid: number
+  startedAt: string
+  capturedAt: string
+  metrics: BoardPerfMetric[]
+  recentEvents: BoardPerfEvent[]
+}
+
 export interface Session {
   id: string
   title: string

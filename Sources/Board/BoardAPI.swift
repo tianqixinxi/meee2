@@ -182,6 +182,15 @@ enum BoardAPI {
         }
     }
 
+    static func getDevPerf(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(BoardPerfProbe.shared.snapshot())
+    }
+
+    static func resetDevPerf(_ req: HttpRequest) -> HttpResponse {
+        BoardPerfProbe.shared.reset()
+        return jsonResponse(BoardPerfProbe.shared.snapshot())
+    }
+
     // MARK: - Privacy: storage stats + delete local data
 
     static func getStorageStats(_ req: HttpRequest) -> HttpResponse {
@@ -337,39 +346,38 @@ enum BoardAPI {
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
-        let started = Date()
-        defer {
-            if ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1" {
-                let ms = Date().timeIntervalSince(started) * 1_000
-                MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
+        BoardPerfProbe.shared.measure(
+            "api.state",
+            title: "GET /api/state",
+            category: "api"
+        ) {
+            // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
+            // SessionStore 供 history / diagnostic / recovery 使用。
+            // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
+            // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
+            let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
+            var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
+            for session in sessions where !session.project.isEmpty {
+                spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
+                    sessionId: session.id,
+                    cwd: session.project,
+                    provider: spawnProvider(from: session),
+                    startedAt: parseISODate(session.startedAt)
+                ))
             }
+            let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
+            deliverMatchedSpawnPrompts(matchedSpawnIntents)
+            feedPlannerSessionRunStates(sessions)
+            // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
+            // 不在 UI 里显示，保持 channel 列表干净
+            let channels = ChannelRegistry.shared.list()
+                .filter { !$0.name.hasPrefix("__") }
+                .map { BoardDTOBuilder.channelDTO($0) }
+            _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
+            let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
+            let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
+            return jsonResponse(state)
         }
-        // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
-        // SessionStore 供 history / diagnostic / recovery 使用。
-        // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
-        // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
-        let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
-        var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
-        for session in sessions where !session.project.isEmpty {
-            spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
-                sessionId: session.id,
-                cwd: session.project,
-                provider: spawnProvider(from: session),
-                startedAt: parseISODate(session.startedAt)
-            ))
-        }
-        let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
-        deliverMatchedSpawnPrompts(matchedSpawnIntents)
-        feedPlannerSessionRunStates(sessions)
-        // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
-        // 不在 UI 里显示，保持 channel 列表干净
-        let channels = ChannelRegistry.shared.list()
-            .filter { !$0.name.hasPrefix("__") }
-            .map { BoardDTOBuilder.channelDTO($0) }
-        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
-        let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
-        let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
-        return jsonResponse(state)
     }
 
     private static func spawnProvider(from session: SessionDTO) -> String? {
@@ -1192,19 +1200,26 @@ enum BoardAPI {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
-        do {
-            reconcilePlannerRunState(canvasId: canvasId)
-            syncPlannerSessionOutputArtifacts(canvasId: canvasId)
-            let state = try PlannerBoardBridge.graphState(
-                for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
-            )
-            return jsonResponse(graphEnvelope(state))
-        } catch let err as PlannerCoreError {
-            return mapPlannerCoreError(err)
-        } catch {
-            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        return BoardPerfProbe.shared.measure(
+            "api.planner.graph",
+            title: "GET /planner/:id/graph",
+            category: "api",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        ) {
+            do {
+                reconcilePlannerRunState(canvasId: canvasId)
+                syncPlannerSessionOutputArtifacts(canvasId: canvasId)
+                let state = try PlannerBoardBridge.graphState(
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                )
+                return jsonResponse(graphEnvelope(state))
+            } catch let err as PlannerCoreError {
+                return mapPlannerCoreError(err)
+            } catch {
+                return errorResponse("planner_error", error.localizedDescription, status: 400)
+            }
         }
     }
 

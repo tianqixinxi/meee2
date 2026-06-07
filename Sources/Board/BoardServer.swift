@@ -561,6 +561,8 @@ public final class BoardServer {
         server.POST["/api/version/check"] = BoardServer.cors(BoardAPI.checkVersion)
         server.POST["/api/update/install"] = BoardServer.cors(BoardAPI.installUpdate)
         server.POST["/api/update/check-in-background"] = BoardServer.cors(BoardAPI.checkUpdateInBackground)
+        server.GET["/api/_dev/perf"] = BoardServer.cors(BoardAPI.getDevPerf)
+        server.POST["/api/_dev/perf/reset"] = BoardServer.cors(BoardAPI.resetDevPerf)
         server.POST["/api/_dev/override-latest"] = BoardServer.cors(BoardAPI.devOverrideLatest)
         server.GET["/api/_dev/pill-click-plan"] = BoardServer.cors(BoardAPI.devPillClickPlan)
         server.POST["/api/_e2e/team-sync"] = BoardServer.cors(BoardAPI.e2eSyncTeamCanvases)
@@ -843,10 +845,54 @@ public final class BoardServer {
     /// 打爆 WS 客户端。与 BoardAPI.* 里直接触发的 broadcastStateChanged() 天然合并。
     private func subscribeToEventBus() {
         busSubscription = SessionEventBus.shared.publisher
+            .handleEvents(receiveOutput: { event in
+                BoardPerfProbe.shared.recordEvent(
+                    "eventbus.\(event.perfProbeName)",
+                    title: event.perfProbeName,
+                    category: "eventbus",
+                    detail: event.perfProbeDetail
+                )
+            })
             .debounce(for: .milliseconds(200), scheduler: DispatchQueue.global(qos: .utility))
             .sink { [weak self] _ in
                 self?.broadcastStateChanged()
             }
+    }
+}
+
+private extension SessionEvent {
+    var perfProbeName: String {
+        switch self {
+        case .sessionAdded: return "sessionAdded"
+        case .sessionRemoved: return "sessionRemoved"
+        case .sessionMetadataChanged: return "sessionMetadataChanged"
+        case .transcriptAppended: return "transcriptAppended"
+        case .channelMutated: return "channelMutated"
+        case .messageMutated: return "messageMutated"
+        case .cardTemplateChanged: return "cardTemplateChanged"
+        case .boardLayoutChanged: return "boardLayoutChanged"
+        case .plannerCanvasChanged: return "plannerCanvasChanged"
+        }
+    }
+
+    var perfProbeDetail: String? {
+        switch self {
+        case .sessionAdded(let sessionId),
+             .sessionRemoved(let sessionId),
+             .sessionMetadataChanged(let sessionId),
+             .transcriptAppended(let sessionId):
+            return "session=\(String(sessionId.prefix(8)))"
+        case .channelMutated(let name):
+            return "channel=\(name)"
+        case .messageMutated(let id, let channel):
+            return "message=\(String(id.prefix(8))) channel=\(channel)"
+        case .cardTemplateChanged(let id):
+            return "template=\(id)"
+        case .plannerCanvasChanged(let canvasId):
+            return "canvas=\(String(canvasId.prefix(24)))"
+        case .boardLayoutChanged:
+            return nil
+        }
     }
 }
 

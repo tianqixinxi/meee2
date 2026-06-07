@@ -4015,6 +4015,13 @@ final class PlannerStore {
     private var unreadableCanvasPathComponents: Set<String>
     private var lastValidRenderProfiles: [String: CanvasRenderProfile]
     private var renderProfileWatchers: [String: DispatchSourceFileSystemObject]
+    private var eventLogSignatures: [String: EventLogSignature]
+
+    private struct EventLogSignature: Equatable {
+        var count: Int
+        var lastId: String?
+        var lastCreatedAt: Date?
+    }
 
     init(fileURL: URL, fileManager: FileManager = .default) {
         self.rootURL = fileURL.pathExtension == "json"
@@ -4034,6 +4041,7 @@ final class PlannerStore {
         self.unreadableCanvasPathComponents = loaded.unreadableCanvasPathComponents
         self.lastValidRenderProfiles = [:]
         self.renderProfileWatchers = [:]
+        self.eventLogSignatures = loaded.document.canvases.mapValues { Self.eventLogSignature(for: $0.events) }
     }
 
     func canvasParentRefs() -> [String: CanvasParentRef] {
@@ -5315,6 +5323,12 @@ final class PlannerStore {
         objects: [CanvasObject],
         relations: [CanvasRelation]
     ) {
+        try BoardPerfProbe.shared.measure(
+            "planner.renderProfile.state",
+            title: "render profile state",
+            category: "planner",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        ) {
         try withLock {
             let record = try requireRecord(canvasId: canvasId)
             let url = renderProfileURL(canvasId: canvasId)
@@ -5372,6 +5386,7 @@ final class PlannerStore {
                 resolved.objects,
                 resolved.relations
             )
+        }
         }
     }
 
@@ -5442,7 +5457,15 @@ final class PlannerStore {
         let url = renderProfileURL(canvasId: canvasId)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try encoder.encode(profile)
-        try data.write(to: url, options: .atomic)
+        try BoardPerfProbe.shared.measure(
+            "planner.renderProfile.write",
+            title: "write render-profile.json",
+            category: "io",
+            detail: "canvas=\(String(canvasId.prefix(24)))",
+            bytes: data.count
+        ) {
+            try data.write(to: url, options: .atomic)
+        }
         ensureRenderProfileWatcherLocked(canvasId: canvasId, url: url)
     }
 
@@ -5471,6 +5494,12 @@ final class PlannerStore {
     }
 
     private func handleRenderProfileFileChanged(canvasId: String) {
+        BoardPerfProbe.shared.recordEvent(
+            "planner.renderProfile.fileChanged",
+            title: "render profile file changed",
+            category: "watcher",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        )
         withLock {
             if let watcher = renderProfileWatchers.removeValue(forKey: canvasId) {
                 watcher.cancel()
@@ -5798,17 +5827,32 @@ final class PlannerStore {
     }
 
     private func save(canvasId: String, emitChange: Bool = true) throws {
-        guard let record = document.canvases[canvasId] else {
-            throw PlannerCoreError.canvasNotFound(canvasId)
-        }
-        let directory = canvasDirectory(canvasId: canvasId)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let data = try encoder.encode(record)
-        try data.write(to: directory.appendingPathComponent("state.json"), options: .atomic)
-        try writeEvents(record.events, to: directory.appendingPathComponent("events.jsonl"))
-        try saveIndex()
-        if emitChange {
-            SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+        try BoardPerfProbe.shared.measure(
+            "planner.store.save",
+            title: "PlannerStore.save(canvas)",
+            category: "planner",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        ) {
+            guard let record = document.canvases[canvasId] else {
+                throw PlannerCoreError.canvasNotFound(canvasId)
+            }
+            let directory = canvasDirectory(canvasId: canvasId)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = try encoder.encode(record)
+            try BoardPerfProbe.shared.measure(
+                "planner.store.writeState",
+                title: "write state.json",
+                category: "io",
+                detail: "canvas=\(String(canvasId.prefix(24)))",
+                bytes: data.count
+            ) {
+                try data.write(to: directory.appendingPathComponent("state.json"), options: .atomic)
+            }
+            try saveEventsIfNeeded(record.events, canvasId: canvasId, directory: directory)
+            try saveIndex()
+            if emitChange {
+                SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+            }
         }
     }
 
@@ -5828,6 +5872,23 @@ final class PlannerStore {
             .appendingPathComponent(Self.safePathComponent(canvasId), isDirectory: true)
     }
 
+    private func saveEventsIfNeeded(_ events: [PlannerEvent], canvasId: String, directory: URL) throws {
+        let signature = Self.eventLogSignature(for: events)
+        let url = directory.appendingPathComponent("events.jsonl")
+        if eventLogSignatures[canvasId] == signature,
+           fileManager.fileExists(atPath: url.path) {
+            BoardPerfProbe.shared.recordEvent(
+                "planner.store.eventsSkipped",
+                title: "skip events.jsonl write",
+                category: "io",
+                detail: "canvas=\(String(canvasId.prefix(24))) count=\(events.count)"
+            )
+            return
+        }
+        try writeEvents(events, to: url)
+        eventLogSignatures[canvasId] = signature
+    }
+
     private func writeEvents(_ events: [PlannerEvent], to url: URL) throws {
         let lines = try events.map { event -> Data in
             try eventEncoder.encode(event)
@@ -5842,7 +5903,14 @@ final class PlannerStore {
         if !lines.isEmpty {
             data.append(0x0A)
         }
-        try data.write(to: url, options: .atomic)
+        try BoardPerfProbe.shared.measure(
+            "planner.store.writeEvents",
+            title: "write events.jsonl",
+            category: "io",
+            bytes: data.count
+        ) {
+            try data.write(to: url, options: .atomic)
+        }
     }
 
     private func events(
@@ -7768,6 +7836,14 @@ final class PlannerStore {
         try data.write(to: url, options: .atomic)
     }
 
+    private static func eventLogSignature(for events: [PlannerEvent]) -> EventLogSignature {
+        EventLogSignature(
+            count: events.count,
+            lastId: events.last?.id,
+            lastCreatedAt: events.last?.createdAt
+        )
+    }
+
     private static func safePathComponent(_ raw: String) -> String {
         let mapped = raw.map { char in
             char.isLetter || char.isNumber || char == "." || char == "-" || char == "_" ? char : "-"
@@ -7900,31 +7976,38 @@ enum PlannerBoardBridge {
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
     ) throws -> PlannerGraphState {
-        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        let render = try store.renderProfileState(canvasId: canvasId)
-        return PlannerGraphState(
-            canvas: state.canvas,
-            nodes: state.nodes,
-            states: state.states,
-            proposals: state.proposals,
-            access: state.access,
-            activities: state.activities,
-            events: state.events,
-            artifacts: state.artifacts,
-            edges: state.edges,
-            renderProfile: render.profile,
-            renderProfileStatus: render.status,
-            renderObjects: render.objects,
-            renderRelations: render.relations,
-            canvasRuntime: canvasRuntimeView(
-                canvasId: canvasId,
+        try BoardPerfProbe.shared.measure(
+            "planner.graphState",
+            title: "PlannerBoardBridge.graphState",
+            category: "planner",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        ) {
+            let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+            let render = try store.renderProfileState(canvasId: canvasId)
+            return PlannerGraphState(
                 canvas: state.canvas,
                 nodes: state.nodes,
                 states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                renderProfile: render.profile,
+                renderProfileStatus: render.status,
+                renderObjects: render.objects,
+                renderRelations: render.relations,
+                canvasRuntime: canvasRuntimeView(
+                    canvasId: canvasId,
+                    canvas: state.canvas,
+                    nodes: state.nodes,
+                    states: state.states,
+                    artifacts: state.artifacts,
+                    edges: state.edges
+                )
             )
-        )
+        }
     }
 
     static func teamSyncGraphPayload(

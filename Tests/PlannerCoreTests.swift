@@ -2632,6 +2632,28 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(record.events.contains { $0.type == .proposalCreated && $0.proposalId == proposal.id })
     }
 
+    func testPlannerStoreDoesNotRewriteEventsWhenOnlySnapshotChanges() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try PlannerBoardBridge.generateProposal(
+            goal: "Stable event log",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let eventsURL = plannerStoreURL.deletingPathExtension()
+            .appendingPathComponent("canvases", isDirectory: true)
+            .appendingPathComponent("canvas-a", isDirectory: true)
+            .appendingPathComponent("events.jsonl")
+        let before = try FileManager.default.attributesOfItem(atPath: eventsURL.path)[.modificationDate] as? Date
+        Thread.sleep(forTimeInterval: 0.02)
+
+        _ = try PlannerBoardBridge.store.setCanvasContext("updated context", canvasId: "canvas-a")
+
+        let after = try FileManager.default.attributesOfItem(atPath: eventsURL.path)[.modificationDate] as? Date
+        XCTAssertEqual(before, after, "snapshot-only saves should not rewrite events.jsonl")
+    }
+
     func testPlannerStoreMigratesLegacyInlineEventsToJsonl() throws {
         let canvasDirectory = plannerStoreURL.deletingPathExtension()
             .appendingPathComponent("canvases", isDirectory: true)

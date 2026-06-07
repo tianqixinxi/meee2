@@ -7,6 +7,7 @@ import type {
   Meee2MCPStatus,
   Meee2AgentRuntimeInstallResult,
   Meee2AgentRuntimeStatus,
+  BoardPerfSnapshot,
   ReadinessRepairResult,
   ReadinessReport,
   SessionIntakeDiagnostics,
@@ -516,6 +517,17 @@ export function repairReadiness(actionId: string): Promise<ReadinessRepairResult
   return jsonRequest<ReadinessRepairResult>('/api/system/readiness/repair', {
     method: 'POST',
     body: JSON.stringify({ actionId }),
+  })
+}
+
+export function fetchDevPerf(): Promise<BoardPerfSnapshot> {
+  return jsonRequest<BoardPerfSnapshot>('/api/_dev/perf')
+}
+
+export function resetDevPerf(): Promise<BoardPerfSnapshot> {
+  return jsonRequest<BoardPerfSnapshot>('/api/_dev/perf/reset', {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
 }
 
