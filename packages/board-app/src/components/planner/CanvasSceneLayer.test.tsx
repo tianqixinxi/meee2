@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { CanvasSceneSpec, PlannerArtifact, PlanningNode } from '../../types'
+import type { CanvasOrchestrationProfile, CanvasSceneSpec, PlannerArtifact, PlanningNode } from '../../types'
 import { CanvasSceneLayer, resolveCanvasSceneState } from './CanvasSceneLayer'
 
 function artifact(overrides: Partial<PlannerArtifact> = {}): PlannerArtifact {
@@ -156,12 +156,12 @@ describe('CanvasSceneLayer', () => {
     fireEvent.click(screen.getByTitle('Ada: Ada 玩家 Agent'))
     expect(openNode).toHaveBeenCalledWith('ada-node')
     expect(screen.getByText('Observer')).toBeInTheDocument()
-    expect(screen.getByText('全桌手牌可见')).toBeInTheDocument()
+    expect(screen.getByText('只看公共信息')).toBeInTheDocument()
     expect(screen.getByText('Rules Orchestrator')).toBeInTheDocument()
     expect(screen.getByText('game-state.json · action-log.json')).toBeInTheDocument()
     expect(screen.getByText(/no AI session/)).toBeInTheDocument()
-    expect(screen.getByText('As')).toBeInTheDocument()
-    expect(screen.getByText('Qh')).toBeInTheDocument()
+    expect(screen.queryByText('As')).not.toBeInTheDocument()
+    expect(screen.queryByText('Qh')).not.toBeInTheDocument()
     expect(screen.getByText('GM / 异常审批')).toBeInTheDocument()
     expect(screen.queryByLabelText('Scene node anchors')).not.toBeInTheDocument()
   })
@@ -205,6 +205,63 @@ describe('CanvasSceneLayer', () => {
     expect(screen.getByText('只看 Ada 手牌')).toBeInTheDocument()
     expect(screen.getByText('As')).toBeInTheDocument()
     expect(screen.queryByText('Qh')).not.toBeInTheDocument()
+  })
+
+  it('derives poker hand visibility from orchestration role slots and node doer assignments', () => {
+    const sceneSpec: CanvasSceneSpec = {
+      kind: 'poker-table',
+      initialState: {
+        title: 'AI Poker Table',
+        setup: { started: true, userRole: 'observer', controlledPlayerId: null, autoRun: true },
+        phase: 'Pre-flop',
+        pot: 150,
+        nextActor: 'bruno',
+        nextAction: 'Bruno',
+        communityCards: ['??', '??', '??', '??', '??'],
+        players: [
+          { id: 'ada', name: 'Ada', style: '紧凶型', stack: 950, status: 'waiting', seat: 'left', holeCards: ['As', 'Ks'] },
+          { id: 'bruno', name: 'Bruno', style: '诈唬型', stack: 870, status: 'to-act', seat: 'right', holeCards: ['Qh', 'Js'] },
+        ],
+      },
+      nodeAnchors: [
+        { id: 'ada', label: 'Ada', nodeId: 'ada-node', x: 16, y: 52, role: 'player' },
+        { id: 'bruno', label: 'Bruno', nodeId: 'bruno-node', x: 84, y: 52, role: 'player' },
+      ],
+      actions: [
+        { id: 'ask-bruno', label: '要求 Bruno 行动', nodeId: 'bruno-node' },
+      ],
+    }
+    const orchestrationProfile: CanvasOrchestrationProfile = {
+      version: 1,
+      kind: 'poker-rules-v1',
+      policy: {},
+      bindings: {
+        roleSlots: { ada: 'ada-node', bruno: 'bruno-node' },
+        stateSlots: {},
+        actions: [
+          { id: 'ask-bruno', capability: 'request-player-action', targetRoleSlot: 'bruno' },
+        ],
+      },
+    }
+
+    render(
+      <CanvasSceneLayer
+        sceneSpec={sceneSpec}
+        nodes={[
+          node({ id: 'ada-node', title: 'Ada 玩家 Agent', doerId: 'user-ada' }),
+          node({ id: 'bruno-node', title: 'Bruno 玩家 Agent', doerId: 'user-bruno' }),
+        ]}
+        artifacts={[]}
+        orchestrationProfile={orchestrationProfile}
+        viewerId="user-bruno"
+        onOpenNode={vi.fn()}
+        onSceneAction={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Play as Bruno')).toBeInTheDocument()
+    expect(screen.queryByText('As')).not.toBeInTheDocument()
+    expect(screen.getByText('Qh')).toBeInTheDocument()
   })
 
   it('shows poker role setup before the rules orchestrator starts', () => {

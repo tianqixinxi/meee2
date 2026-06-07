@@ -773,6 +773,8 @@ struct PlannerGraphState: Codable, Equatable {
     var edges: [PlannerGraphEdge]
     var renderProfile: CanvasRenderProfile?
     var renderProfileStatus: CanvasRenderProfileStatus?
+    var orchestrationProfile: CanvasOrchestrationProfile?
+    var orchestrationProfileStatus: CanvasOrchestrationProfileStatus?
     var renderObjects: [CanvasObject]
     var renderRelations: [CanvasRelation]
     /// canvas-spec §7.2 — read-only whole-canvas runtime snapshot a Monitor
@@ -783,7 +785,9 @@ struct PlannerGraphState: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case canvas, nodes, states, proposals, access, activities, events
-        case artifacts, edges, renderProfile, renderProfileStatus, renderObjects, renderRelations, canvasRuntime
+        case artifacts, edges, renderProfile, renderProfileStatus
+        case orchestrationProfile, orchestrationProfileStatus
+        case renderObjects, renderRelations, canvasRuntime
     }
 
     init(
@@ -798,6 +802,8 @@ struct PlannerGraphState: Codable, Equatable {
         edges: [PlannerGraphEdge],
         renderProfile: CanvasRenderProfile? = nil,
         renderProfileStatus: CanvasRenderProfileStatus? = nil,
+        orchestrationProfile: CanvasOrchestrationProfile? = nil,
+        orchestrationProfileStatus: CanvasOrchestrationProfileStatus? = nil,
         renderObjects: [CanvasObject] = [],
         renderRelations: [CanvasRelation] = [],
         canvasRuntime: CanvasRuntimeView? = nil
@@ -813,6 +819,8 @@ struct PlannerGraphState: Codable, Equatable {
         self.edges = edges
         self.renderProfile = renderProfile
         self.renderProfileStatus = renderProfileStatus
+        self.orchestrationProfile = orchestrationProfile
+        self.orchestrationProfileStatus = orchestrationProfileStatus
         self.renderObjects = renderObjects
         self.renderRelations = renderRelations
         self.canvasRuntime = canvasRuntime
@@ -831,6 +839,8 @@ struct PlannerGraphState: Codable, Equatable {
         edges = try c.decode([PlannerGraphEdge].self, forKey: .edges)
         renderProfile = try c.decodeIfPresent(CanvasRenderProfile.self, forKey: .renderProfile)
         renderProfileStatus = try c.decodeIfPresent(CanvasRenderProfileStatus.self, forKey: .renderProfileStatus)
+        orchestrationProfile = try c.decodeIfPresent(CanvasOrchestrationProfile.self, forKey: .orchestrationProfile)
+        orchestrationProfileStatus = try c.decodeIfPresent(CanvasOrchestrationProfileStatus.self, forKey: .orchestrationProfileStatus)
         renderObjects = try c.decodeIfPresent([CanvasObject].self, forKey: .renderObjects) ?? []
         renderRelations = try c.decodeIfPresent([CanvasRelation].self, forKey: .renderRelations) ?? []
         canvasRuntime = try c.decodeIfPresent(CanvasRuntimeView.self, forKey: .canvasRuntime)
@@ -1361,6 +1371,8 @@ struct PlanChange: Codable, Equatable {
         case moveMonitorCard
         // Canvas Render Protocol · logic replacement goes through owner-approved proposals.
         case replaceRenderLogic
+        // Canvas Orchestration Profile · runtime model replacement goes through owner-approved proposals.
+        case replaceOrchestrationProfile
         // Artifact write (split from legacy attachArtifact)
         case writeSourceVersion
         case attachExternalArtifact
@@ -1454,6 +1466,8 @@ struct PlanChange: Codable, Equatable {
     var cardLayout: MonitorCardLayout?
     /// replaceRenderLogic → full CanvasRenderLogic replacement.
     var renderLogic: CanvasRenderLogic?
+    /// replaceOrchestrationProfile → full CanvasOrchestrationProfile replacement.
+    var orchestrationProfile: CanvasOrchestrationProfile?
     /// updateMonitorCard partial patch (opaque — applied permissively). Shares
     /// wire key `patch` with `dataSourcePatch`; decode disambiguates by `kind`.
     var cardPatch: BoardJSONValue?
@@ -1483,7 +1497,7 @@ struct PlanChange: Codable, Equatable {
         case sourceId, partitionRule, partitionTimezone, cascade
         case edge, edgeId, edgeMode
         case spec, intent, card, cardId
-        case renderLogic
+        case renderLogic, orchestrationProfile
         case slotKey, payload, payloadRef, parentVersionId, submittedBy, submittedByKind
         case patch
         case rationale
@@ -1537,6 +1551,7 @@ struct PlanChange: Codable, Equatable {
         cardId: String? = nil,
         cardLayout: MonitorCardLayout? = nil,
         renderLogic: CanvasRenderLogic? = nil,
+        orchestrationProfile: CanvasOrchestrationProfile? = nil,
         cardPatch: BoardJSONValue? = nil,
         slotKey: String? = nil,
         payload: BoardJSONValue? = nil,
@@ -1566,6 +1581,7 @@ struct PlanChange: Codable, Equatable {
         self.cardId = cardId
         self.cardLayout = cardLayout
         self.renderLogic = renderLogic
+        self.orchestrationProfile = orchestrationProfile
         self.cardPatch = cardPatch
         self.slotKey = slotKey
         self.payload = payload
@@ -1678,6 +1694,7 @@ struct PlanChange: Codable, Equatable {
         card = try container.decodeIfPresent(MonitorCard.self, forKey: .card)
         cardId = try container.decodeIfPresent(String.self, forKey: .cardId)
         renderLogic = try container.decodeIfPresent(CanvasRenderLogic.self, forKey: .renderLogic)
+        orchestrationProfile = try container.decodeIfPresent(CanvasOrchestrationProfile.self, forKey: .orchestrationProfile)
         slotKey = try container.decodeIfPresent(String.self, forKey: .slotKey)
         payload = try container.decodeIfPresent(BoardJSONValue.self, forKey: .payload)
         payloadRef = try container.decodeIfPresent(String.self, forKey: .payloadRef)
@@ -1757,6 +1774,7 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(card, forKey: .card)
         try container.encodeIfPresent(cardId, forKey: .cardId)
         try container.encodeIfPresent(renderLogic, forKey: .renderLogic)
+        try container.encodeIfPresent(orchestrationProfile, forKey: .orchestrationProfile)
         try container.encodeIfPresent(slotKey, forKey: .slotKey)
         try container.encodeIfPresent(payload, forKey: .payload)
         try container.encodeIfPresent(payloadRef, forKey: .payloadRef)
@@ -3238,6 +3256,11 @@ enum PlannerProposalValidator {
                 guard change.renderLogic != nil else {
                     throw PlannerCoreError.invalidNodeOutput("replaceRenderLogic requires renderLogic")
                 }
+            case .replaceOrchestrationProfile:
+                guard let profile = change.orchestrationProfile else {
+                    throw PlannerCoreError.invalidNodeOutput("replaceOrchestrationProfile requires orchestrationProfile")
+                }
+                try PlannerStore.validateOrchestrationProfile(profile)
             case .attachExternalArtifact:
                 guard let nodeId = change.nodeId, canvasNodeIds.contains(nodeId) else {
                     throw PlannerCoreError.missingNodeId
@@ -3545,7 +3568,7 @@ final class PlannerCoreService {
             case .addDataSource, .updateDataSource, .setPartitionRule, .archiveDataSource,
                  .addEdge, .updateEdgeMode, .removeEdge,
                  .setMonitorSpec, .addMonitorCard, .updateMonitorCard, .removeMonitorCard, .moveMonitorCard,
-                 .replaceRenderLogic,
+                 .replaceRenderLogic, .replaceOrchestrationProfile,
                  .writeSourceVersion, .attachExternalArtifact:
                 continue
             }
@@ -4014,7 +4037,9 @@ final class PlannerStore {
     private var document: StoreDocument
     private var unreadableCanvasPathComponents: Set<String>
     private var lastValidRenderProfiles: [String: CanvasRenderProfile]
+    private var lastValidOrchestrationProfiles: [String: CanvasOrchestrationProfile]
     private var renderProfileWatchers: [String: DispatchSourceFileSystemObject]
+    private var orchestrationProfileWatchers: [String: DispatchSourceFileSystemObject]
     private var eventLogSignatures: [String: EventLogSignature]
 
     private struct EventLogSignature: Equatable {
@@ -4040,7 +4065,9 @@ final class PlannerStore {
         self.document = loaded.document
         self.unreadableCanvasPathComponents = loaded.unreadableCanvasPathComponents
         self.lastValidRenderProfiles = [:]
+        self.lastValidOrchestrationProfiles = [:]
         self.renderProfileWatchers = [:]
+        self.orchestrationProfileWatchers = [:]
         self.eventLogSignatures = loaded.document.canvases.mapValues { Self.eventLogSignature(for: $0.events) }
     }
 
@@ -4200,6 +4227,7 @@ final class PlannerStore {
             document.canvases[targetCanvas.id] = record
             try save(canvasId: targetCanvas.id)
             try copyRenderProfile(from: sourceCanvasId, to: targetCanvas.id)
+            try copyOrchestrationProfile(from: sourceCanvasId, to: targetCanvas.id)
             return record
         }
     }
@@ -4215,6 +4243,7 @@ final class PlannerStore {
             document.canvases[templateCanvasId] = record
             try save(canvasId: templateCanvasId)
             try copyRenderProfile(from: sourceCanvasId, to: templateCanvasId)
+            try copyOrchestrationProfile(from: sourceCanvasId, to: templateCanvasId)
             return record
         }
     }
@@ -4486,6 +4515,9 @@ final class PlannerStore {
             case .replaceRenderLogic:
                 guard let logic = change.renderLogic else { continue }
                 _ = try replaceRenderLogic(canvasId: canvasId, logic: logic)
+            case .replaceOrchestrationProfile:
+                guard let profile = change.orchestrationProfile else { continue }
+                _ = try replaceOrchestrationProfile(canvasId: canvasId, profile: profile)
 
             // MARK: artifact write (split from legacy attachArtifact)
             case .writeSourceVersion:
@@ -5453,6 +5485,117 @@ final class PlannerStore {
         }
     }
 
+    func orchestrationProfileState(
+        canvasId: String,
+        canvasKind: BoardLayoutStore.CanvasKind? = nil
+    ) throws -> (
+        profile: CanvasOrchestrationProfile,
+        status: CanvasOrchestrationProfileStatus
+    ) {
+        try BoardPerfProbe.shared.measure(
+            "planner.orchestrationProfile.state",
+            title: "orchestration profile state",
+            category: "planner",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        ) {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            let url = orchestrationProfileURL(canvasId: canvasId)
+            let path = url.path
+            if fileManager.fileExists(atPath: path) {
+                do {
+                    let data = try Data(contentsOf: url)
+                    let profile = try decoder.decode(CanvasOrchestrationProfile.self, from: data)
+                    try Self.validateOrchestrationProfile(profile)
+                    lastValidOrchestrationProfiles[canvasId] = profile
+                    ensureOrchestrationProfileWatcherLocked(canvasId: canvasId, url: url)
+                    return (
+                        profile,
+                        CanvasOrchestrationProfileStatus(
+                            state: .valid,
+                            path: path,
+                            error: nil,
+                            updatedAt: fileUpdatedAt(url)
+                        )
+                    )
+                } catch {
+                    let fallback = lastValidOrchestrationProfiles[canvasId]
+                        ?? Self.migratedOrchestrationProfile(from: record, canvasKind: canvasKind)
+                    ensureOrchestrationProfileWatcherLocked(canvasId: canvasId, url: url)
+                    return (
+                        fallback,
+                        CanvasOrchestrationProfileStatus(
+                            state: .invalidUsingLastValid,
+                            path: path,
+                            error: error.localizedDescription,
+                            updatedAt: fileUpdatedAt(url)
+                        )
+                    )
+                }
+            }
+
+            let profile = Self.migratedOrchestrationProfile(from: record, canvasKind: canvasKind)
+            try writeOrchestrationProfile(profile, canvasId: canvasId)
+            lastValidOrchestrationProfiles[canvasId] = profile
+            ensureOrchestrationProfileWatcherLocked(canvasId: canvasId, url: url)
+            return (
+                profile,
+                CanvasOrchestrationProfileStatus(
+                    state: .missingMigrated,
+                    path: path,
+                    error: nil,
+                    updatedAt: fileUpdatedAt(url)
+                )
+            )
+        }
+        }
+    }
+
+    func orchestrationProfilePath(canvasId: String) -> String {
+        orchestrationProfileURL(canvasId: canvasId).path
+    }
+
+    func replaceOrchestrationProfile(
+        canvasId: String,
+        profile: CanvasOrchestrationProfile
+    ) throws -> CanvasOrchestrationProfile {
+        try withLock {
+            _ = try requireRecord(canvasId: canvasId)
+            try Self.validateOrchestrationProfile(profile)
+            try writeOrchestrationProfile(profile, canvasId: canvasId)
+            lastValidOrchestrationProfiles[canvasId] = profile
+            SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+            return profile
+        }
+    }
+
+    func copyOrchestrationProfile(from sourceCanvasId: String, to targetCanvasId: String) throws {
+        try withLock {
+            let source = try requireRecord(canvasId: sourceCanvasId)
+            let target = try requireRecord(canvasId: targetCanvasId)
+            let profile = try orchestrationProfileState(canvasId: source.canvas.id).profile
+            let remapped = Self.remapOrchestrationProfile(profile, from: source.canvas.id, to: target.canvas.id)
+            try writeOrchestrationProfile(remapped, canvasId: target.canvas.id)
+            lastValidOrchestrationProfiles[target.canvas.id] = remapped
+        }
+    }
+
+    func writeOrchestrationProfile(_ profile: CanvasOrchestrationProfile, canvasId: String) throws {
+        let url = orchestrationProfileURL(canvasId: canvasId)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try encoder.encode(profile)
+        try BoardPerfProbe.shared.measure(
+            "planner.orchestrationProfile.write",
+            title: "write orchestration-profile.json",
+            category: "io",
+            detail: "canvas=\(String(canvasId.prefix(24)))",
+            bytes: data.count
+        ) {
+            try data.write(to: url, options: .atomic)
+        }
+        ensureOrchestrationProfileWatcherLocked(canvasId: canvasId, url: url)
+    }
+
     func writeRenderProfile(_ profile: CanvasRenderProfile, canvasId: String) throws {
         let url = renderProfileURL(canvasId: canvasId)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -5473,6 +5616,10 @@ final class PlannerStore {
         canvasDirectory(canvasId: canvasId).appendingPathComponent("render-profile.json")
     }
 
+    private func orchestrationProfileURL(canvasId: String) -> URL {
+        canvasDirectory(canvasId: canvasId).appendingPathComponent("orchestration-profile.json")
+    }
+
     private func ensureRenderProfileWatcherLocked(canvasId: String, url: URL) {
         guard renderProfileWatchers[canvasId] == nil,
               fileManager.fileExists(atPath: url.path) else { return }
@@ -5490,6 +5637,26 @@ final class PlannerStore {
             close(fd)
         }
         renderProfileWatchers[canvasId] = source
+        source.resume()
+    }
+
+    private func ensureOrchestrationProfileWatcherLocked(canvasId: String, url: URL) {
+        guard orchestrationProfileWatchers[canvasId] == nil,
+              fileManager.fileExists(atPath: url.path) else { return }
+        let fd = open(url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .delete, .rename, .attrib, .extend],
+            queue: DispatchQueue.global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            self?.handleOrchestrationProfileFileChanged(canvasId: canvasId)
+        }
+        source.setCancelHandler {
+            close(fd)
+        }
+        orchestrationProfileWatchers[canvasId] = source
         source.resume()
     }
 
@@ -5513,6 +5680,26 @@ final class PlannerStore {
         SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
     }
 
+    private func handleOrchestrationProfileFileChanged(canvasId: String) {
+        BoardPerfProbe.shared.recordEvent(
+            "planner.orchestrationProfile.fileChanged",
+            title: "orchestration profile file changed",
+            category: "watcher",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        )
+        withLock {
+            if let watcher = orchestrationProfileWatchers.removeValue(forKey: canvasId) {
+                watcher.cancel()
+            }
+        }
+        do {
+            _ = try orchestrationProfileState(canvasId: canvasId)
+        } catch {
+            MWarn("[PlannerStore] orchestration profile reload failed for \(canvasId): \(error)")
+        }
+        SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+    }
+
     private func fileUpdatedAt(_ url: URL) -> Date? {
         (try? fileManager.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
     }
@@ -5524,6 +5711,102 @@ final class PlannerStore {
         guard CanvasRenderLayoutKind.allCases.contains(profile.logic.layout) else {
             throw PlannerCoreError.invalidNodeOutput("unsupported render layout")
         }
+    }
+
+    static func validateOrchestrationProfile(_ profile: CanvasOrchestrationProfile) throws {
+        guard profile.version == CanvasOrchestrationProfile.defaultVersion else {
+            throw PlannerCoreError.invalidNodeOutput("unsupported orchestration profile version: \(profile.version)")
+        }
+        guard CanvasOrchestrationKind.allCases.contains(profile.kind) else {
+            throw PlannerCoreError.invalidNodeOutput("unsupported orchestration kind")
+        }
+    }
+
+    private static func migratedOrchestrationProfile(
+        from record: CanvasRecord,
+        canvasKind: BoardLayoutStore.CanvasKind?
+    ) -> CanvasOrchestrationProfile {
+        if let scene = record.canvas.sceneSpec, scene.kind == "poker-table" {
+            return pokerOrchestrationProfile(from: scene)
+        }
+        if canvasKind == .monitor || record.canvas.monitorSpec != nil {
+            var profile = CanvasOrchestrationProfile.default(kind: .monitorObserverV1)
+            profile.policy = [
+                "statusStrategy": .string("monitor"),
+                "autoRun": .bool(false)
+            ]
+            return profile
+        }
+        var profile = CanvasOrchestrationProfile.default(kind: .workflowGraphV1)
+        profile.policy = ["statusStrategy": .string("workflow")]
+        return profile
+    }
+
+    private static func pokerOrchestrationProfile(
+        from scene: CanvasSceneSpec
+    ) -> CanvasOrchestrationProfile {
+        let anchorsById = Dictionary(uniqueKeysWithValues: scene.nodeAnchors.map { ($0.id, $0.nodeId) })
+        let dealerNodeId = scene.orchestration?.stateNodeId
+            ?? scene.artifactBindings.first(where: { $0.id == "game-state" })?.nodeId
+            ?? anchorsById["dealer"]
+            ?? ""
+        var roleSlots: [String: String] = [:]
+        for slot in ["dealer", "ada", "bruno", "mina", "gm"] {
+            if let nodeId = anchorsById[slot] {
+                roleSlots[slot] = nodeId
+            }
+        }
+        if !dealerNodeId.isEmpty {
+            roleSlots["dealer"] = dealerNodeId
+        }
+
+        let stateReference = scene.orchestration?.stateReference ?? "game-state.json"
+        let logReference = scene.orchestration?.logReference ?? "action-log.json"
+        var stateSlots: [String: CanvasOrchestrationStateSlot] = [:]
+        if !dealerNodeId.isEmpty {
+            stateSlots["tableState"] = CanvasOrchestrationStateSlot(
+                nodeId: dealerNodeId,
+                reference: stateReference
+            )
+            stateSlots["actionLog"] = CanvasOrchestrationStateSlot(
+                nodeId: dealerNodeId,
+                reference: logReference
+            )
+        }
+
+        let actions = scene.actions.map { action in
+            CanvasOrchestrationActionBinding(
+                id: action.id,
+                capability: pokerCapability(for: action.id),
+                targetSlot: action.nodeId == dealerNodeId ? "tableState" : nil,
+                targetRoleSlot: roleSlots.first(where: { $0.value == action.nodeId })?.key,
+                payloadSchema: nil
+            )
+        }
+
+        return CanvasOrchestrationProfile(
+            version: CanvasOrchestrationProfile.defaultVersion,
+            kind: .pokerRulesV1,
+            policy: [
+                "engine": .string("builtin"),
+                "stateAuthority": .string("dealer-artifacts")
+            ],
+            bindings: CanvasOrchestrationBindings(
+                roleSlots: roleSlots,
+                stateSlots: stateSlots,
+                actions: actions
+            )
+        )
+    }
+
+    private static func pokerCapability(for actionId: String) -> String {
+        if actionId == "start-game" { return "start" }
+        if actionId == "step" { return "step" }
+        if actionId == "pause-auto" { return "pause-auto" }
+        if actionId == "resume-auto" { return "resume-auto" }
+        if actionId.hasPrefix("ask-") { return "request-player-action" }
+        if actionId == "gm-review" { return "request-gm-review" }
+        return "run-scene-action"
     }
 
     private static func migratedRenderProfile(from record: CanvasRecord) -> CanvasRenderProfile {
@@ -5614,6 +5897,35 @@ final class PlannerStore {
             return copy
         }
         return next
+    }
+
+    private static func remapOrchestrationProfile(
+        _ profile: CanvasOrchestrationProfile,
+        from sourceCanvasId: String,
+        to targetCanvasId: String
+    ) -> CanvasOrchestrationProfile {
+        guard sourceCanvasId != targetCanvasId else { return profile }
+        var next = profile
+        next.bindings.roleSlots = profile.bindings.roleSlots.mapValues {
+            remapCanvasScopedId($0, from: sourceCanvasId, to: targetCanvasId)
+        }
+        next.bindings.stateSlots = profile.bindings.stateSlots.mapValues { slot in
+            CanvasOrchestrationStateSlot(
+                nodeId: remapCanvasScopedId(slot.nodeId, from: sourceCanvasId, to: targetCanvasId),
+                reference: slot.reference
+            )
+        }
+        next.bindings.actions = profile.bindings.actions
+        return next
+    }
+
+    private static func remapCanvasScopedId(
+        _ value: String,
+        from sourceCanvasId: String,
+        to targetCanvasId: String
+    ) -> String {
+        guard value.hasPrefix(sourceCanvasId) else { return value }
+        return targetCanvasId + value.dropFirst(sourceCanvasId.count)
     }
 
     func importGraphState(_ graph: PlannerGraphState, localCanvasId: String) throws {
@@ -5994,7 +6306,7 @@ final class PlannerStore {
             case .addDataSource, .updateDataSource, .setPartitionRule, .archiveDataSource,
                  .addEdge, .updateEdgeMode, .removeEdge,
                  .setMonitorSpec, .addMonitorCard, .updateMonitorCard, .removeMonitorCard, .moveMonitorCard,
-                 .replaceRenderLogic,
+                 .replaceRenderLogic, .replaceOrchestrationProfile,
                  .writeSourceVersion, .attachExternalArtifact:
                 events.append(event(
                     canvasId: proposal.canvasId,
@@ -7984,6 +8296,11 @@ enum PlannerBoardBridge {
         ) {
             let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
             let render = try store.renderProfileState(canvasId: canvasId)
+            let canvasKind = snapshot.canvases.first(where: { $0.id == canvasId })?.kind
+            let orchestration = try store.orchestrationProfileState(
+                canvasId: canvasId,
+                canvasKind: canvasKind
+            )
             return PlannerGraphState(
                 canvas: state.canvas,
                 nodes: state.nodes,
@@ -7996,6 +8313,8 @@ enum PlannerBoardBridge {
                 edges: state.edges,
                 renderProfile: render.profile,
                 renderProfileStatus: render.status,
+                orchestrationProfile: orchestration.profile,
+                orchestrationProfileStatus: orchestration.status,
                 renderObjects: render.objects,
                 renderRelations: render.relations,
                 canvasRuntime: canvasRuntimeView(

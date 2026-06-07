@@ -207,6 +207,12 @@ enum AssistantTools {
             }
 
             let notes = summarizeCanvasNotes(context.layout.userElements)
+            let orchestration = try? PlannerBoardBridge.store.orchestrationProfileState(
+                canvasId: context.canvas.id,
+                canvasKind: context.canvas.kind
+            )
+            let orchestrationProfile = try orchestration.map { try jsonPayload($0.profile) } ?? NSNull()
+            let orchestrationProfileStatus = try orchestration.map { try jsonPayload($0.status) } ?? NSNull()
 
             return .success([
                 "canvas": [
@@ -220,6 +226,8 @@ enum AssistantTools {
                 "sessions": sessions,
                 "channels": channels,
                 "notes": notes,
+                "orchestrationProfile": orchestrationProfile,
+                "orchestrationProfileStatus": orchestrationProfileStatus,
                 "counts": [
                     "sessions": sessions.count,
                     "channels": channels.count,

@@ -3,6 +3,7 @@ import type {
   CanvasSceneAction,
   CanvasSceneNodeAnchor,
   CanvasSceneSpec,
+  CanvasOrchestrationProfile,
   PlannerArtifact,
   PlanningNode,
 } from '../../types'
@@ -11,6 +12,8 @@ interface CanvasSceneLayerProps {
   sceneSpec: CanvasSceneSpec | null | undefined
   nodes: PlanningNode[]
   artifacts: PlannerArtifact[]
+  orchestrationProfile?: CanvasOrchestrationProfile | null
+  viewerId?: string | null
   onOpenNode: (nodeId: string) => void
   onSceneAction: (nodeId: string, actionId: string, payload?: CanvasSceneActionPayload) => void
 }
@@ -27,6 +30,8 @@ export function CanvasSceneLayer({
   sceneSpec,
   nodes,
   artifacts,
+  orchestrationProfile,
+  viewerId,
   onOpenNode,
   onSceneAction,
 }: CanvasSceneLayerProps) {
@@ -47,6 +52,8 @@ export function CanvasSceneLayer({
                 anchors={anchors}
                 actions={actions}
                 nodesById={nodesById}
+                orchestrationProfile={orchestrationProfile}
+                viewerId={viewerId}
                 onOpenNode={onOpenNode}
                 onSceneAction={onSceneAction}
               />
@@ -171,6 +178,8 @@ function PokerScene({
   anchors,
   actions,
   nodesById,
+  orchestrationProfile,
+  viewerId,
   onOpenNode,
   onSceneAction,
 }: {
@@ -178,27 +187,32 @@ function PokerScene({
   anchors: CanvasSceneNodeAnchor[]
   actions: CanvasSceneAction[]
   nodesById: Map<string, PlanningNode>
+  orchestrationProfile?: CanvasOrchestrationProfile | null
+  viewerId?: string | null
   onOpenNode: (nodeId: string) => void
   onSceneAction: (nodeId: string, actionId: string, payload?: CanvasSceneActionPayload) => void
 }) {
+  const orchestration = orchestrationProfile?.kind === 'poker-rules-v1' ? orchestrationProfile : null
   const players = readArray(state.players)
   const actionLog = readArray(state.actionLog)
   const communityCards = normalizePokerCards(readArray(state.communityCards), 5)
   const anchorsById = new Map(anchors.map((anchor) => [anchor.id, anchor]))
   const gmAnchor = anchorsById.get('gm')
+  const roleSlotIds = pokerPlayerRoleIds(orchestration, anchors)
   const phase = readString(state.phase, 'Pre-flop')
   const pot = readString(state.pot, '0')
   const setup = asRecord(state.setup) ?? {}
   const started = readBoolean(setup.started, false)
-  const activeRole = readString(setup.userRole, 'observer') as PokerUserRole
-  const controlledPlayerId = readString(setup.controlledPlayerId, '')
+  const viewerRole = resolvePokerViewerRole(orchestration, nodesById, viewerId)
+  const activeRole = viewerRole.role ?? readString(setup.userRole, 'observer') as PokerUserRole
+  const controlledPlayerId = viewerRole.controlledPlayerId ?? readString(setup.controlledPlayerId, '')
   const roleLabel = pokerRoleLabel(activeRole, controlledPlayerId)
   const visibilityLabel = pokerVisibilityLabel(activeRole, controlledPlayerId)
   const autoRun = readBoolean(setup.autoRun, true)
   const nextActor = readString(state.nextActor, readString(state.nextAction, 'TBD')).toLowerCase()
   const nextAction = readString(state.nextAction, nextActor || 'TBD')
   const [selectedRole, setSelectedRole] = useState<PokerUserRole>(activeRole || 'observer')
-  const [selectedPlayer, setSelectedPlayer] = useState(controlledPlayerId || 'ada')
+  const [selectedPlayer, setSelectedPlayer] = useState(controlledPlayerId || roleSlotIds[0] || 'ada')
   const dealerAnchor = anchorsById.get('dealer')
   const startNodeId = actions.find((action) => action.id === 'start-game')?.nodeId
     ?? dealerAnchor?.nodeId
@@ -291,6 +305,7 @@ function PokerScene({
             canStart={Boolean(startNodeId)}
             selectedRole={selectedRole}
             selectedPlayer={selectedPlayer}
+            playerIds={roleSlotIds}
             onRoleChange={setSelectedRole}
             onPlayerChange={setSelectedPlayer}
             onStart={() => {
@@ -317,6 +332,7 @@ function PokerScene({
             />
             <PokerAutomationPanel
               actions={actions}
+              orchestrationProfile={orchestration}
               nextAction={nextActor}
               anchors={anchors}
               nodesById={nodesById}
@@ -412,6 +428,7 @@ function PokerRoleSetup({
   canStart,
   selectedRole,
   selectedPlayer,
+  playerIds,
   onRoleChange,
   onPlayerChange,
   onStart,
@@ -419,6 +436,7 @@ function PokerRoleSetup({
   canStart: boolean
   selectedRole: PokerUserRole
   selectedPlayer: string
+  playerIds: string[]
   onRoleChange: (role: PokerUserRole) => void
   onPlayerChange: (playerId: string) => void
   onStart: () => void
@@ -451,7 +469,7 @@ function PokerRoleSetup({
       </div>
       {selectedRole === 'player' && (
         <div className="canvas-scene-poker__player-select" aria-label="Choose player">
-          {['ada', 'bruno', 'mina'].map((playerId) => (
+          {playerIds.map((playerId) => (
             <button
               key={playerId}
               type="button"
@@ -477,6 +495,7 @@ function PokerRoleSetup({
 
 function PokerAutomationPanel({
   actions,
+  orchestrationProfile,
   nextAction,
   anchors,
   nodesById,
@@ -484,15 +503,18 @@ function PokerAutomationPanel({
   onSceneAction,
 }: {
   actions: CanvasSceneAction[]
+  orchestrationProfile?: CanvasOrchestrationProfile | null
   nextAction: string
   anchors: CanvasSceneNodeAnchor[]
   nodesById: Map<string, PlanningNode>
   autoRun: boolean
   onSceneAction: (nodeId: string, actionId: string, payload?: CanvasSceneActionPayload) => void
 }) {
-  const current = pokerActionForNext(actions, nextAction, anchors, nodesById)
+  const current = pokerActionForNext(actions, nextAction, anchors, nodesById, orchestrationProfile)
   const humanActions = actions.filter((action) => {
     if (current?.action.id === action.id) return false
+    const capability = orchestrationProfile?.bindings.actions.find((item) => item.id === action.id)?.capability
+    if (['start', 'step', 'resume-auto', 'pause-auto'].includes(capability ?? '')) return false
     if (['start-game', 'step', 'resume-auto', 'pause-auto', 'next-street'].includes(action.id)) return false
     const node = nodesById.get(action.nodeId)
     return node?.executorType === 'human' || node?.executionMode === 'human'
@@ -563,8 +585,16 @@ function pokerActionForNext(
   nextAction: string,
   anchors: CanvasSceneNodeAnchor[],
   nodesById: Map<string, PlanningNode>,
+  orchestrationProfile?: CanvasOrchestrationProfile | null,
 ): { action: CanvasSceneAction; node: PlanningNode | undefined } | null {
   const normalized = cssToken(nextAction || '').replace(/^-+|-+$/g, '')
+  const orchestrationAction = orchestrationProfile?.bindings.actions.find((item) =>
+    item.targetRoleSlot === normalized && item.capability === 'request-player-action'
+  )
+  if (orchestrationAction) {
+    const action = actions.find((item) => item.id === orchestrationAction.id)
+    if (action) return { action, node: nodesById.get(action.nodeId) }
+  }
   const anchor = anchors.find((item) => cssToken(item.id) === normalized || cssToken(item.label) === normalized)
   const candidates = [
     `ask-${normalized}`,
@@ -574,6 +604,35 @@ function pokerActionForNext(
     ?? (anchor ? actions.find((item) => item.nodeId === anchor.nodeId && item.id !== 'gm-review') : undefined)
     ?? actions.find((item) => item.id === 'next-street')
   return action ? { action, node: nodesById.get(action.nodeId) } : null
+}
+
+function pokerPlayerRoleIds(
+  orchestrationProfile: CanvasOrchestrationProfile | null,
+  anchors: CanvasSceneNodeAnchor[],
+): string[] {
+  const fromProfile = Object.keys(orchestrationProfile?.bindings.roleSlots ?? {})
+    .filter((slot) => !['dealer', 'gm'].includes(slot))
+  if (fromProfile.length > 0) return fromProfile
+  const fromAnchors = anchors
+    .filter((anchor) => anchor.role === 'player' && !['dealer', 'gm'].includes(anchor.id))
+    .map((anchor) => anchor.id)
+  return fromAnchors.length > 0 ? fromAnchors : ['ada', 'bruno', 'mina']
+}
+
+function resolvePokerViewerRole(
+  orchestrationProfile: CanvasOrchestrationProfile | null,
+  nodesById: Map<string, PlanningNode>,
+  viewerId?: string | null,
+): { role: PokerUserRole; controlledPlayerId: string | null } | { role: null; controlledPlayerId: null } {
+  const normalizedViewer = viewerId?.trim()
+  if (!normalizedViewer || !orchestrationProfile) return { role: null, controlledPlayerId: null }
+  for (const [slot, nodeId] of Object.entries(orchestrationProfile.bindings.roleSlots ?? {})) {
+    const node = nodesById.get(nodeId)
+    if (node?.doerId?.trim() !== normalizedViewer) continue
+    if (slot === 'gm') return { role: 'gm', controlledPlayerId: null }
+    if (slot !== 'dealer') return { role: 'player', controlledPlayerId: slot }
+  }
+  return { role: 'observer', controlledPlayerId: null }
 }
 
 function SceneNodeButton({
@@ -743,7 +802,6 @@ function normalizePokerCards(cards: unknown[], count: number): unknown[] {
 function canSeePokerHand(role: string, controlledPlayerId: string, playerId: string): boolean {
   if (playerId === 'dealer') return true
   if (role === 'gm') return true
-  if (role === 'observer' || role === 'all-ai') return true
   if (role === 'player') return controlledPlayerId.toLowerCase() === playerId.toLowerCase()
   return false
 }
@@ -763,7 +821,8 @@ function pokerVisibilityLabel(role: string, controlledPlayerId: string): string 
     const player = controlledPlayerId || 'your player'
     return `只看 ${player[0]?.toUpperCase() ?? ''}${player.slice(1)} 手牌`
   }
-  return '全桌手牌可见'
+  if (role === 'gm') return '全桌手牌可见'
+  return '只看公共信息'
 }
 
 function normalizeRef(value: string): string {

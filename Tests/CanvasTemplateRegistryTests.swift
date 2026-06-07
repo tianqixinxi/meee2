@@ -49,6 +49,10 @@ final class CanvasTemplateRegistryTests: XCTestCase {
             CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
             canvasId: canvasId
         )
+        try PlannerBoardBridge.store.writeOrchestrationProfile(
+            CanvasTemplateRegistry.materializeOrchestrationProfile(template: template, canvasId: canvasId),
+            canvasId: canvasId
+        )
         return record
     }
 
@@ -110,6 +114,8 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         let render = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId)
         XCTAssertEqual(render.status.state, .valid)
         XCTAssertEqual(render.profile.logic.layout, .spatial)
+        let orchestration = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: canvasId)
+        XCTAssertEqual(orchestration.profile.kind, .workflowGraphV1)
     }
 
     func testPokerTableMaterializesSceneAnchorsAndInitialState() throws {
@@ -127,6 +133,13 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         XCTAssertEqual(scene.orchestration?.kind, "poker-rules-v1")
         XCTAssertEqual(scene.orchestration?.stateNodeId, record.nodes.first?.id)
         XCTAssertTrue(scene.artifactBindings.contains { $0.reference == "game-state.json" })
+        let orchestration = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: canvasId)
+        XCTAssertEqual(orchestration.profile.kind, .pokerRulesV1)
+        XCTAssertEqual(orchestration.profile.bindings.roleSlots["ada"], "\(canvasId)-poker-table-1")
+        XCTAssertEqual(orchestration.profile.bindings.stateSlots["tableState"]?.reference, "game-state.json")
+        XCTAssertTrue(orchestration.profile.bindings.actions.contains {
+            $0.id == "ask-ada" && $0.capability == "request-player-action" && $0.targetRoleSlot == "ada"
+        })
         let dealer = try XCTUnwrap(record.nodes.first { $0.title == "Dealer / Table State" })
         XCTAssertEqual(dealer.executionMode, .auto)
         XCTAssertEqual(dealer.executorType, .mock)
@@ -227,6 +240,78 @@ final class CanvasTemplateRegistryTests: XCTestCase {
         XCTAssertEqual(scene.kind, "poker-table")
         XCTAssertEqual(record.nodes.count, 5)
         XCTAssertTrue(scene.nodeAnchors.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-poker-table-") })
+    }
+
+    func testMissingOrchestrationProfileMigratesForWorkflowMonitorAndPoker() throws {
+        let workflowCanvas = PlanningCanvas(id: "canvas-workflow-\(UUID().uuidString)", ownerId: "owner-a", title: "Workflow", plannerContext: "")
+        _ = try PlannerBoardBridge.store.record(for: workflowCanvas, seedNodes: [])
+        let workflow = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: workflowCanvas.id)
+        XCTAssertEqual(workflow.status.state, .missingMigrated)
+        XCTAssertEqual(workflow.profile.kind, .workflowGraphV1)
+
+        let monitorCanvas = PlanningCanvas(id: "canvas-monitor-\(UUID().uuidString)", ownerId: "owner-a", title: "Monitor", plannerContext: "")
+        _ = try PlannerBoardBridge.store.record(for: monitorCanvas, seedNodes: [])
+        let monitor = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: monitorCanvas.id, canvasKind: .monitor)
+        XCTAssertEqual(monitor.status.state, .missingMigrated)
+        XCTAssertEqual(monitor.profile.kind, .monitorObserverV1)
+        XCTAssertEqual(monitor.profile.policy["autoRun"], .bool(false))
+
+        let template = try XCTUnwrap(CanvasTemplateRegistry.get("poker-table"))
+        let pokerCanvasId = "canvas-poker-migrate-\(UUID().uuidString)"
+        let poker = PlanningCanvas(
+            id: pokerCanvasId,
+            ownerId: "owner-a",
+            title: "Poker",
+            plannerContext: "",
+            sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(template: template, canvasId: pokerCanvasId)
+        )
+        _ = try PlannerBoardBridge.store.record(for: poker, seedNodes: CanvasTemplateRegistry.materializeNodes(template: template, canvasId: pokerCanvasId, ownerId: "owner-a"))
+        let pokerProfile = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: pokerCanvasId)
+        XCTAssertEqual(pokerProfile.status.state, .missingMigrated)
+        XCTAssertEqual(pokerProfile.profile.kind, .pokerRulesV1)
+        XCTAssertEqual(pokerProfile.profile.bindings.roleSlots["gm"], "\(pokerCanvasId)-poker-table-4")
+    }
+
+    func testReplaceOrchestrationProfileRequiresApprovedProposal() throws {
+        let canvasId = "canvas-orchestration-replace-\(UUID().uuidString)"
+        let canvas = PlanningCanvas(id: canvasId, ownerId: "owner-a", title: "Workflow", plannerContext: "")
+        let record = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [])
+        let original = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: canvasId).profile
+        XCTAssertEqual(original.kind, .workflowGraphV1)
+
+        var replacement = CanvasOrchestrationProfile.default(kind: .monitorObserverV1)
+        replacement.policy = ["autoRun": .bool(false)]
+        let proposal = PlanProposal(
+            id: "replace-orchestration-profile",
+            canvasId: canvasId,
+            summary: "Replace orchestration profile",
+            changes: [
+                PlanChange(
+                    kind: .replaceOrchestrationProfile,
+                    node: nil,
+                    nodeId: nil,
+                    title: nil,
+                    status: nil,
+                    orchestrationProfile: replacement
+                )
+            ],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        XCTAssertThrowsError(try PlannerBoardBridge.store.applyProposal(
+            proposalId: proposal.id,
+            canvasId: canvasId,
+            service: PlannerCoreService()
+        ))
+        XCTAssertEqual(try PlannerBoardBridge.store.orchestrationProfileState(canvasId: canvasId).profile.kind, .workflowGraphV1)
+
+        _ = try PlannerBoardBridge.store.approveProposal(proposalId: proposal.id, canvasId: canvasId)
+        _ = try PlannerBoardBridge.store.applyProposal(
+            proposalId: proposal.id,
+            canvasId: canvasId,
+            service: PlannerCoreService()
+        )
+        XCTAssertEqual(try PlannerBoardBridge.store.orchestrationProfileState(canvasId: canvasId).profile.kind, .monitorObserverV1)
     }
 
     func testCodingOrchestrationSeedsFiveAutoClaudeNodes() throws {

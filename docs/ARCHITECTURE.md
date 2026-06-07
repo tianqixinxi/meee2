@@ -89,6 +89,20 @@ Three interlocking pipelines run on top of this plumbing:
 - **State resolution** — `SessionData` + transcript → `TranscriptStatusResolver` → canonical `SessionStatus`.
 - **A2A messaging** — CLI/Web send → `MessageRouter` + `ChannelRegistry` → target session's inbox count.
 
+### 3.1 Canvas Runtime Glossary
+
+The Planner canvas keeps presentation, orchestration, and live state separate:
+
+| Term | Meaning |
+|---|---|
+| **Canvas Render Profile** | Canvas-owned presentation truth in `render-profile.json`. It defines what objects/relations/actions are visible and how they are rendered. |
+| **Canvas Orchestration Profile** | Canvas-owned runtime model truth in `orchestration-profile.json`. It defines which built-in orchestration kind runs the canvas and how semantic slots bind to nodes/artifact slots. |
+| **Orchestration Policy** | Global orchestration settings for the built-in kind. It must not duplicate graph truth such as nodes, edges, status, or gates. |
+| **Orchestration Bindings** | Semantic bindings from orchestration concepts to existing canvas truth, for example Poker role slots to node ids and table-state slots to node artifact references. |
+| **Template Intake Policy** | Template metadata that helps natural-language template creation match and adapt official/user templates. It is not a per-canvas assistant behavior profile. |
+
+Rule of thumb: Render Profile controls what the user sees, Orchestration Profile controls how the canvas runs, and Artifacts plus `canvasRuntime` describe what is happening right now.
+
 ---
 
 ## 4. Module Map

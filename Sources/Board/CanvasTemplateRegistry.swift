@@ -18,6 +18,7 @@ struct CanvasTemplate: Equatable {
     let category: String   // 'engineering' / 'team' / 'demo'
     let defaultNodes: [TemplateNodeSpec]
     let sceneSpec: CanvasSceneSpec?
+    let templateIntakePolicy: TemplateIntakePolicy?
 
     init(
         id: String,
@@ -27,7 +28,8 @@ struct CanvasTemplate: Equatable {
         kind: BoardLayoutStore.CanvasKind,
         category: String,
         defaultNodes: [TemplateNodeSpec],
-        sceneSpec: CanvasSceneSpec? = nil
+        sceneSpec: CanvasSceneSpec? = nil,
+        templateIntakePolicy: TemplateIntakePolicy? = nil
     ) {
         self.id = id
         self.name = name
@@ -37,6 +39,7 @@ struct CanvasTemplate: Equatable {
         self.category = category
         self.defaultNodes = defaultNodes
         self.sceneSpec = sceneSpec
+        self.templateIntakePolicy = templateIntakePolicy
     }
 }
 
@@ -133,6 +136,21 @@ enum CanvasTemplateRegistry {
     private static func boardJSONValue<T: Encodable>(_ value: T) -> BoardJSONValue? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return try? JSONDecoder().decode(BoardJSONValue.self, from: data)
+    }
+
+    private static func intake(
+        phrases: [String],
+        adaptationTargets: [String],
+        initialStateRefs: [String] = [],
+        outputRefs: [String] = []
+    ) -> TemplateIntakePolicy {
+        TemplateIntakePolicy(
+            version: TemplateIntakePolicy.defaultVersion,
+            matchPhrases: phrases,
+            adaptationTargets: adaptationTargets,
+            initialStateRefs: initialStateRefs,
+            outputRefs: outputRefs
+        )
     }
 
     // MARK: - Templates
@@ -460,6 +478,12 @@ enum CanvasTemplateRegistry {
                 CanvasSceneAction(id: "compare-hotels", label: "比较酒店", nodeId: "node:1", prompt: "更新酒店候选和利弊。"),
                 CanvasSceneAction(id: "review-budget", label: "确认预算", nodeId: "node:3", prompt: "请确认预算约束并产出 budget.json。")
             ]
+        ),
+        templateIntakePolicy: intake(
+            phrases: ["旅行", "travel", "行程", "路线", "酒店", "预算"],
+            adaptationTargets: ["route", "hotel", "food", "budget", "final-brief"],
+            initialStateRefs: ["title", "summary", "route", "timeline", "budget", "hotels"],
+            outputRefs: ["itinerary.json", "booking-candidates.json", "places.json", "budget.json", "travel-brief.md"]
         )
     )
 
@@ -592,6 +616,12 @@ enum CanvasTemplateRegistry {
                 stateReference: "game-state.json",
                 logReference: "action-log.json"
             )
+        ),
+        templateIntakePolicy: intake(
+            phrases: ["德扑", "德州扑克", "poker", "texas hold'em", "牌桌", "游戏"],
+            adaptationTargets: ["dealer", "players", "gm", "rules"],
+            initialStateRefs: ["setup", "players", "phase", "pot", "legalActions"],
+            outputRefs: ["game-state.json", "action-log.json", "ada-action.json", "bruno-action.json", "mina-action.json"]
         )
     )
 
@@ -675,7 +705,12 @@ enum CanvasTemplateRegistry {
                 inputs: ["frontend_pr", "backend_pr", "refactor_pr"],
                 outputs: ["integration_report"]
             )
-        ]
+        ],
+        templateIntakePolicy: intake(
+            phrases: ["写代码", "coding", "主从派发", "workflow", "工程 workflow"],
+            adaptationTargets: ["main-agent", "frontend", "backend", "refactor", "integration"],
+            outputRefs: ["frontend_spec", "backend_spec", "refactor_spec", "frontend_pr", "backend_pr", "refactor_pr", "integration_report"]
+        )
     )
 
     // MARK: - Materialization
@@ -779,6 +814,83 @@ enum CanvasTemplateRegistry {
             scene.orchestration = orchestration
         }
         return scene
+    }
+
+    static func materializeOrchestrationProfile(
+        template: CanvasTemplate,
+        canvasId: String
+    ) -> CanvasOrchestrationProfile {
+        if let scene = materializeSceneSpec(template: template, canvasId: canvasId),
+           scene.kind == "poker-table" {
+            return pokerOrchestrationProfile(scene)
+        }
+        if template.kind == .monitor {
+            var profile = CanvasOrchestrationProfile.default(kind: .monitorObserverV1)
+            profile.policy = [
+                "statusStrategy": .string("monitor"),
+                "autoRun": .bool(false)
+            ]
+            return profile
+        }
+        var profile = CanvasOrchestrationProfile.default(kind: .workflowGraphV1)
+        profile.policy = ["statusStrategy": .string("workflow")]
+        return profile
+    }
+
+    private static func pokerOrchestrationProfile(_ scene: CanvasSceneSpec) -> CanvasOrchestrationProfile {
+        let anchorsById = Dictionary(uniqueKeysWithValues: scene.nodeAnchors.map { ($0.id, $0.nodeId) })
+        let dealerNodeId = scene.orchestration?.stateNodeId
+            ?? scene.artifactBindings.first(where: { $0.id == "game-state" })?.nodeId
+            ?? anchorsById["dealer"]
+            ?? ""
+        var roleSlots: [String: String] = [:]
+        for slot in ["dealer", "ada", "bruno", "mina", "gm"] {
+            if let nodeId = anchorsById[slot] {
+                roleSlots[slot] = nodeId
+            }
+        }
+        if !dealerNodeId.isEmpty {
+            roleSlots["dealer"] = dealerNodeId
+        }
+        let stateReference = scene.orchestration?.stateReference ?? "game-state.json"
+        let logReference = scene.orchestration?.logReference ?? "action-log.json"
+        var stateSlots: [String: CanvasOrchestrationStateSlot] = [:]
+        if !dealerNodeId.isEmpty {
+            stateSlots["tableState"] = CanvasOrchestrationStateSlot(nodeId: dealerNodeId, reference: stateReference)
+            stateSlots["actionLog"] = CanvasOrchestrationStateSlot(nodeId: dealerNodeId, reference: logReference)
+        }
+        let actions = scene.actions.map { action in
+            CanvasOrchestrationActionBinding(
+                id: action.id,
+                capability: pokerCapability(for: action.id),
+                targetSlot: action.nodeId == dealerNodeId ? "tableState" : nil,
+                targetRoleSlot: roleSlots.first(where: { $0.value == action.nodeId })?.key,
+                payloadSchema: nil
+            )
+        }
+        return CanvasOrchestrationProfile(
+            version: CanvasOrchestrationProfile.defaultVersion,
+            kind: .pokerRulesV1,
+            policy: [
+                "engine": .string("builtin"),
+                "stateAuthority": .string("dealer-artifacts")
+            ],
+            bindings: CanvasOrchestrationBindings(
+                roleSlots: roleSlots,
+                stateSlots: stateSlots,
+                actions: actions
+            )
+        )
+    }
+
+    private static func pokerCapability(for actionId: String) -> String {
+        if actionId == "start-game" { return "start" }
+        if actionId == "step" { return "step" }
+        if actionId == "pause-auto" { return "pause-auto" }
+        if actionId == "resume-auto" { return "resume-auto" }
+        if actionId.hasPrefix("ask-") { return "request-player-action" }
+        if actionId == "gm-review" { return "request-gm-review" }
+        return "run-scene-action"
     }
 
     static func materializeRenderProfile(

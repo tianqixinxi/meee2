@@ -153,6 +153,7 @@ public final class BoardLayoutStore {
         public var updatedBy: String?
         public var updatedAt: Date
         public var revisions: [TemplateRevision]
+        public var templateIntakePolicy: TemplateIntakePolicy?
 
         public init(
             description: String = "",
@@ -164,7 +165,8 @@ public final class BoardLayoutStore {
             replacedFromCanvasId: String? = nil,
             updatedBy: String? = nil,
             updatedAt: Date = Date(),
-            revisions: [TemplateRevision] = []
+            revisions: [TemplateRevision] = [],
+            templateIntakePolicy: TemplateIntakePolicy? = nil
         ) {
             self.description = description
             self.icon = icon
@@ -176,6 +178,7 @@ public final class BoardLayoutStore {
             self.updatedBy = updatedBy
             self.updatedAt = updatedAt
             self.revisions = revisions
+            self.templateIntakePolicy = templateIntakePolicy
         }
     }
 

@@ -541,6 +541,8 @@ enum BoardAPI {
             edges: state.edges,
             renderProfile: state.renderProfile,
             renderProfileStatus: state.renderProfileStatus,
+            orchestrationProfile: state.orchestrationProfile,
+            orchestrationProfileStatus: state.orchestrationProfileStatus,
             renderObjects: state.renderObjects,
             renderRelations: state.renderRelations,
             nodeAssignments: nodeAssignments(for: state),
@@ -1264,6 +1266,22 @@ enum BoardAPI {
         do {
             _ = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId)
             let path = PlannerBoardBridge.store.renderProfilePath(canvasId: canvasId)
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            return jsonResponse(["path": path])
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func revealCanvasOrchestrationProfile(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            _ = try PlannerBoardBridge.store.orchestrationProfileState(canvasId: canvasId)
+            let path = PlannerBoardBridge.store.orchestrationProfilePath(canvasId: canvasId)
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
             return jsonResponse(["path": path])
         } catch let err as PlannerCoreError {
@@ -6048,6 +6066,11 @@ enum BoardAPI {
             defaultNodes: template.defaultNodes.map(templateNodeDTO(_:)),
             sceneSpec: template.sceneSpec,
             renderProfile: preview.profile,
+            orchestrationProfile: CanvasTemplateRegistry.materializeOrchestrationProfile(
+                template: template,
+                canvasId: template.id
+            ),
+            templateIntakePolicy: template.templateIntakePolicy,
             renderObjects: preview.objects,
             renderRelations: preview.relations
         )
@@ -6071,6 +6094,10 @@ enum BoardAPI {
         let canEdit = ownerId == actor.userId
         let count = PlannerBoardBridge.store.reusableNodeCount(canvasId: canvas.id)
         let renderProfile = try? PlannerBoardBridge.store.renderProfileState(canvasId: canvas.id).profile
+        let orchestrationProfile = try? PlannerBoardBridge.store.orchestrationProfileState(
+            canvasId: canvas.id,
+            canvasKind: metadata.defaultCanvasKind
+        ).profile
         let renderPreview = customTemplateRenderPreview(canvasId: canvas.id)
         return CanvasTemplateDTO(
             id: canvas.id,
@@ -6093,6 +6120,8 @@ enum BoardAPI {
             defaultNodes: [],
             sceneSpec: PlannerBoardBridge.store.reusableSceneSpec(canvasId: canvas.id),
             renderProfile: renderProfile,
+            orchestrationProfile: orchestrationProfile,
+            templateIntakePolicy: metadata.templateIntakePolicy,
             renderObjects: renderPreview.objects,
             renderRelations: renderPreview.relations
         )
@@ -6360,6 +6389,10 @@ enum BoardAPI {
                 CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
                 canvasId: canvasId
             )
+            try PlannerBoardBridge.store.writeOrchestrationProfile(
+                CanvasTemplateRegistry.materializeOrchestrationProfile(template: template, canvasId: canvasId),
+                canvasId: canvasId
+            )
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -6486,6 +6519,8 @@ enum BoardAPI {
                 defaultNodes: [],
                 sceneSpec: nil,
                 renderProfile: nil,
+                orchestrationProfile: nil,
+                templateIntakePolicy: nil,
                 renderObjects: [],
                 renderRelations: []
             )

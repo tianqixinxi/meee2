@@ -62,6 +62,7 @@ import type {
   CanvasScope,
   CanvasSceneAction,
   CanvasSceneSpec,
+  CanvasOrchestrationProfile,
   CanvasObject,
   CanvasRelation,
   CanvasRenderObjectValues,
@@ -2309,6 +2310,8 @@ function PlannerGraphInner({
               sceneSpec={renderSceneSpec}
               nodes={plannerState?.nodes ?? []}
               artifacts={plannerState?.artifacts ?? []}
+              orchestrationProfile={plannerState?.orchestrationProfile}
+              viewerId={userProfile?.userId}
               onOpenNode={handleOpenNodeDetails}
               onSceneAction={handleSceneAction}
             />
@@ -3543,6 +3546,7 @@ function dispatchNextPokerAutoNode(
 ) {
   const scene = graph.canvas.sceneSpec
   if (!scene || scene.kind !== 'poker-table') return
+  const orchestration = pokerOrchestrationProfile(graph)
   const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
   const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
     ? state.setup as Record<string, unknown>
@@ -3550,7 +3554,7 @@ function dispatchNextPokerAutoNode(
   if (setup.autoRun === false && !options.force) return
   const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
   if (!nextActor || nextActor === 'setup') return
-  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
+  const action = pokerActionForRole(scene, orchestration, nextActor)
   if (!action) return
   const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
   if (!node || node.executionMode === 'human' || node.executorType === 'human') return
@@ -3561,21 +3565,20 @@ function dispatchNextPokerAutoNode(
 function pokerAutoDispatchRequest(graph: PlannerGraphState): { key: string } | null {
   const scene = graph.canvas.sceneSpec
   if (!scene || scene.kind !== 'poker-table') return null
+  const orchestration = pokerOrchestrationProfile(graph)
   const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
   const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
     ? state.setup as Record<string, unknown>
     : {}
   if (setup.autoRun === false) return null
   const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
-  if (!['ada', 'bruno', 'mina'].includes(nextActor)) return null
-  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
+  if (!pokerPlayerRoleIds(scene, orchestration).includes(nextActor)) return null
+  const action = pokerActionForRole(scene, orchestration, nextActor)
   if (!action) return null
   const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
   if (!node || node.executionMode === 'human' || node.executorType === 'human' || node.status !== 'ready') return null
-  const dealerNodeId = scene.orchestration?.stateNodeId
-    ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
-    ?? ''
-  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], dealerNodeId, scene.orchestration?.stateReference ?? 'game-state.json')
+  const tableState = pokerTableStateSlot(scene, orchestration)
+  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], tableState.nodeId, tableState.reference)
   return {
     key: [
       graph.canvas.id,
@@ -3589,23 +3592,22 @@ function pokerAutoDispatchRequest(graph: PlannerGraphState): { key: string } | n
 function pokerAutoStepRequest(graph: PlannerGraphState): { key: string } | null {
   const scene = graph.canvas.sceneSpec
   if (!scene || scene.kind !== 'poker-table') return null
+  const orchestration = pokerOrchestrationProfile(graph)
   const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
   const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
     ? state.setup as Record<string, unknown>
     : {}
   if (setup.autoRun === false) return null
   const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
-  if (!['ada', 'bruno', 'mina'].includes(nextActor)) return null
-  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
+  if (!pokerPlayerRoleIds(scene, orchestration).includes(nextActor)) return null
+  const action = pokerActionForRole(scene, orchestration, nextActor)
   if (!action) return null
   const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
   if (!node || node.status !== 'done') return null
   const actionArtifact = latestArtifactForSlot(graph.artifacts ?? [], node.id, `${nextActor}-action.json`)
   if (!actionArtifact) return null
-  const dealerNodeId = scene.orchestration?.stateNodeId
-    ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
-    ?? ''
-  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], dealerNodeId, scene.orchestration?.stateReference ?? 'game-state.json')
+  const tableState = pokerTableStateSlot(scene, orchestration)
+  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], tableState.nodeId, tableState.reference)
   return {
     key: [
       graph.canvas.id,
@@ -3614,6 +3616,50 @@ function pokerAutoStepRequest(graph: PlannerGraphState): { key: string } | null 
       actionArtifact.id,
       gameStateArtifact?.id ?? 'no-game-state',
     ].join(':'),
+  }
+}
+
+function pokerOrchestrationProfile(graph: PlannerGraphState): CanvasOrchestrationProfile | null {
+  return graph.orchestrationProfile?.kind === 'poker-rules-v1'
+    ? graph.orchestrationProfile
+    : null
+}
+
+function pokerPlayerRoleIds(
+  scene: CanvasSceneSpec,
+  orchestration: CanvasOrchestrationProfile | null,
+): string[] {
+  const fromProfile = Object.keys(orchestration?.bindings.roleSlots ?? {})
+    .filter((slot) => !['dealer', 'gm'].includes(slot))
+  if (fromProfile.length > 0) return fromProfile
+  return (scene.nodeAnchors ?? [])
+    .filter((anchor) => anchor.role === 'player' && !['dealer', 'gm'].includes(anchor.id))
+    .map((anchor) => anchor.id)
+}
+
+function pokerActionForRole(
+  scene: CanvasSceneSpec,
+  orchestration: CanvasOrchestrationProfile | null,
+  roleSlot: string,
+): CanvasSceneAction | undefined {
+  const actionId = orchestration?.bindings.actions.find((item) =>
+    item.targetRoleSlot === roleSlot && item.capability === 'request-player-action'
+  )?.id
+  if (actionId) return (scene.actions ?? []).find((item) => item.id === actionId)
+  return (scene.actions ?? []).find((item) => item.id === `ask-${roleSlot}`)
+}
+
+function pokerTableStateSlot(
+  scene: CanvasSceneSpec,
+  orchestration: CanvasOrchestrationProfile | null,
+): { nodeId: string; reference: string } {
+  const slot = orchestration?.bindings.stateSlots.tableState
+  if (slot) return slot
+  return {
+    nodeId: scene.orchestration?.stateNodeId
+      ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
+      ?? '',
+    reference: scene.orchestration?.stateReference ?? 'game-state.json',
   }
 }
 

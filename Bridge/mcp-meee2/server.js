@@ -54,6 +54,22 @@ const TOOLS = [
     },
   },
   {
+    name: 'read_canvas_context',
+    description:
+      'Read the current meee2 planner canvas context, including graph nodes, ' +
+      'artifacts, render profile status, and the canvas orchestration profile. ' +
+      'Use this when you need the canvas runtime model, semantic role slots, ' +
+      'state slots, or action capabilities. This is read-only; propose changes ' +
+      'through meee2 instead of editing profile files directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+      },
+      required: ['canvasId'],
+    },
+  },
+  {
     name: 'read_node_contract',
     description:
       'Read the execution contract for a meee2 planner node. Use this first ' +
@@ -365,6 +381,26 @@ async function handleReadInbox(args) {
   return out
 }
 
+async function handleReadCanvasContext(args) {
+  const { canvasId } = args
+  if (!canvasId) throw new Error('canvasId is required')
+  const graph = await callApi(
+    'GET',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`,
+  )
+  return {
+    canvas: graph.canvas || null,
+    orchestrationProfile: graph.orchestrationProfile || null,
+    orchestrationProfileStatus: graph.orchestrationProfileStatus || null,
+    renderProfileStatus: graph.renderProfileStatus || null,
+    nodes: graph.nodes || [],
+    edges: graph.edges || [],
+    artifacts: graph.artifacts || [],
+    proposals: graph.proposals || [],
+    mcpWorkingDirectory: process.cwd(),
+  }
+}
+
 async function handleReadNodeContract(args) {
   const { canvasId, nodeId } = args
   if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
@@ -435,7 +471,10 @@ const INSTRUCTIONS = [
   'interface for reading node contracts and submitting structured canvas output.',
   '',
   'Core tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
-  'read_inbox, list_sessions.',
+  'read_canvas_context, read_inbox, list_sessions.',
+  'Canvas orchestration profiles are owned by meee2. Use read_canvas_context',
+  'when you need the runtime model, role slots, state slots, or action',
+  'capabilities. Do not read or edit orchestration-profile.json from cwd.',
   'Planner rule: first read_node_contract; final state must be submitted through',
   'submit_node_output exactly once per completed/blocked attempt. If the contract',
   'says output.payload_kind=artifact_ref, submit artifacts[] and put the output',
@@ -454,6 +493,9 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'read_inbox':
         result = await handleReadInbox(args)
+        break
+      case 'read_canvas_context':
+        result = await handleReadCanvasContext(args)
         break
       case 'read_node_contract':
         result = await handleReadNodeContract(args)
