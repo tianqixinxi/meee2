@@ -1256,7 +1256,7 @@ export function CanvasToolbar({
                       </div>
                       <div className="canvas-info-modal__row">
                         <span>Profile file</span>
-                        <button type="button" className="ghost" onClick={revealRenderProfile}>Reveal</button>
+                        <button type="button" className="ghost canvas-info-modal__inline-action" onClick={revealRenderProfile}>Reveal</button>
                       </div>
                       {renderProfileStatus.error && (
                         <div className="canvas-info-modal__row">

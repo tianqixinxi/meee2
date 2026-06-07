@@ -104,6 +104,10 @@ _Avoid_: Graph-only canvas, scene-specific bypass
 The canvas-owned description of how a Canvas Workspace should be presented. A Canvas Render Profile combines Render Logic with Render Values.
 _Avoid_: Node layout as truth, hidden renderer state
 
+**Canvas Event Log**:
+The append-oriented record of what changed on a Canvas Workspace. Canvas Event Log history supports activity timelines, recaps, and debugging, but it is not the current canvas snapshot and should not define presentation.
+_Avoid_: Current state, render profile, artifact truth
+
 **Canvas Object**:
 An item that can be rendered on a canvas, either backed by a real entity such as a node, Artifact, session, or subcanvas, or render-only such as a label, region, asset, or background.
 _Avoid_: Fake node, visual-only workflow node

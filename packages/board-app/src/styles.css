@@ -7406,6 +7406,23 @@ html.board-empty-omni .canvas-toolbar__panel {
   font-size: 11px;
 }
 
+.canvas-info-modal__inline-action {
+  justify-self: start;
+  min-width: 0;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.canvas-info-modal__inline-action:hover {
+  color: var(--accent);
+  background: transparent;
+}
+
 .canvas-info-modal__advanced {
   margin-top: 12px;
   color: var(--text-muted);

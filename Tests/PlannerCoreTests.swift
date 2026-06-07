@@ -2592,6 +2592,105 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(record.events.contains { $0.type == .nodeCreated && $0.proposalId == proposal.id })
     }
 
+    func testPlannerStoreWritesEventsOutsideStateJson() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Event log split",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let canvasDirectory = plannerStoreURL.deletingPathExtension()
+            .appendingPathComponent("canvases", isDirectory: true)
+            .appendingPathComponent("canvas-a", isDirectory: true)
+        let stateURL = canvasDirectory.appendingPathComponent("state.json")
+        let eventsURL = canvasDirectory.appendingPathComponent("events.jsonl")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: eventsURL.path))
+
+        let stateData = try Data(contentsOf: stateURL)
+        let stateObject = try XCTUnwrap(JSONSerialization.jsonObject(with: stateData) as? [String: Any])
+        XCTAssertNil(stateObject["events"], "state.json should carry the current snapshot, not the event log")
+
+        let eventLines = try String(contentsOf: eventsURL, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+        XCTAssertFalse(eventLines.isEmpty)
+        XCTAssertTrue(eventLines.contains { $0.contains(proposal.id) })
+
+        PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
+        let record = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(
+                id: "canvas-a",
+                ownerId: "owner-a",
+                title: "Planning Canvas",
+                plannerContext: "canvas:canvas-a"
+            ),
+            seedNodes: []
+        )
+        XCTAssertTrue(record.events.contains { $0.type == .proposalCreated && $0.proposalId == proposal.id })
+    }
+
+    func testPlannerStoreMigratesLegacyInlineEventsToJsonl() throws {
+        let canvasDirectory = plannerStoreURL.deletingPathExtension()
+            .appendingPathComponent("canvases", isDirectory: true)
+            .appendingPathComponent("legacy-canvas", isDirectory: true)
+        try FileManager.default.createDirectory(at: canvasDirectory, withIntermediateDirectories: true)
+        let stateURL = canvasDirectory.appendingPathComponent("state.json")
+        let eventsURL = canvasDirectory.appendingPathComponent("events.jsonl")
+        let legacyState = """
+        {
+          "canvas": {
+            "id": "legacy-canvas",
+            "ownerId": "owner-a",
+            "title": "Legacy Canvas",
+            "plannerContext": "canvas:legacy-canvas",
+            "visibility": "private"
+          },
+          "nodes": [],
+          "proposals": [],
+          "events": [
+            {
+              "id": "event-legacy-1",
+              "canvasId": "legacy-canvas",
+              "type": "proposal.created",
+              "nodeId": null,
+              "proposalId": "proposal-legacy-1",
+              "summary": "Legacy event",
+              "artifactRefs": [],
+              "createdAt": 802208664.372613
+            }
+          ],
+          "artifacts": [],
+          "artifactVersions": [],
+          "runs": [],
+          "nodeVersions": []
+        }
+        """
+        try legacyState.write(to: stateURL, atomically: true, encoding: .utf8)
+
+        let store = PlannerStore(fileURL: plannerStoreURL)
+        let record = try store.record(
+            for: PlanningCanvas(
+                id: "legacy-canvas",
+                ownerId: "owner-a",
+                title: "Legacy Canvas",
+                plannerContext: "canvas:legacy-canvas"
+            ),
+            seedNodes: []
+        )
+
+        XCTAssertEqual(record.events.map(\.id), ["event-legacy-1"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: eventsURL.path))
+        let migratedState = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any])
+        XCTAssertNil(migratedState["events"])
+        let eventLines = try String(contentsOf: eventsURL, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+        XCTAssertEqual(eventLines.count, 1)
+        XCTAssertTrue(eventLines[0].contains("event-legacy-1"))
+    }
+
     func testPlannerProposalCanBeRejected() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(

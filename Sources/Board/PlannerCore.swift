@@ -3962,6 +3962,18 @@ final class PlannerStore {
             case canvas, nodes, proposals, events, artifacts, artifactVersions, runs, activeRunId, nodeVersions
         }
 
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(canvas, forKey: .canvas)
+            try container.encode(nodes, forKey: .nodes)
+            try container.encode(proposals, forKey: .proposals)
+            try container.encode(artifacts, forKey: .artifacts)
+            try container.encode(artifactVersions, forKey: .artifactVersions)
+            try container.encode(runs, forKey: .runs)
+            try container.encodeIfPresent(activeRunId, forKey: .activeRunId)
+            try container.encode(nodeVersions, forKey: .nodeVersions)
+        }
+
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.canvas = try container.decode(PlanningCanvas.self, forKey: .canvas)
@@ -3996,6 +4008,7 @@ final class PlannerStore {
     private let rootURL: URL
     private let fileManager: FileManager
     private let encoder: JSONEncoder
+    private let eventEncoder: JSONEncoder
     private let decoder = JSONDecoder()
     private let lock = NSRecursiveLock()
     private var document: StoreDocument
@@ -4008,9 +4021,15 @@ final class PlannerStore {
             ? fileURL.deletingPathExtension()
             : fileURL
         self.fileManager = fileManager
-        self.encoder = JSONEncoder()
-        self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let loaded = Self.loadDocument(rootURL: rootURL, fileManager: fileManager, decoder: decoder)
+        self.encoder = Self.makeStateEncoder()
+        self.eventEncoder = Self.makeEventEncoder()
+        let loaded = Self.loadDocument(
+            rootURL: rootURL,
+            fileManager: fileManager,
+            stateEncoder: encoder,
+            eventEncoder: eventEncoder,
+            decoder: decoder
+        )
         self.document = loaded.document
         self.unreadableCanvasPathComponents = loaded.unreadableCanvasPathComponents
         self.lastValidRenderProfiles = [:]
@@ -5786,6 +5805,7 @@ final class PlannerStore {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try encoder.encode(record)
         try data.write(to: directory.appendingPathComponent("state.json"), options: .atomic)
+        try writeEvents(record.events, to: directory.appendingPathComponent("events.jsonl"))
         try saveIndex()
         if emitChange {
             SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
@@ -5806,6 +5826,23 @@ final class PlannerStore {
         rootURL
             .appendingPathComponent("canvases", isDirectory: true)
             .appendingPathComponent(Self.safePathComponent(canvasId), isDirectory: true)
+    }
+
+    private func writeEvents(_ events: [PlannerEvent], to url: URL) throws {
+        let lines = try events.map { event -> Data in
+            try eventEncoder.encode(event)
+        }
+        var data = Data()
+        for (index, line) in lines.enumerated() {
+            if index > 0 {
+                data.append(0x0A)
+            }
+            data.append(line)
+        }
+        if !lines.isEmpty {
+            data.append(0x0A)
+        }
+        try data.write(to: url, options: .atomic)
     }
 
     private func events(
@@ -7645,6 +7682,8 @@ final class PlannerStore {
     private static func loadDocument(
         rootURL: URL,
         fileManager: FileManager,
+        stateEncoder: JSONEncoder,
+        eventEncoder: JSONEncoder,
         decoder: JSONDecoder
     ) -> (document: StoreDocument, unreadableCanvasPathComponents: Set<String>) {
         let canvasesURL = rootURL.appendingPathComponent("canvases", isDirectory: true)
@@ -7666,7 +7705,20 @@ final class PlannerStore {
             }
             do {
                 let data = try Data(contentsOf: stateURL)
-                let record = try decoder.decode(CanvasRecord.self, from: data)
+                var record = try decoder.decode(CanvasRecord.self, from: data)
+                let inlineEvents = record.events
+                let eventsURL = directory.appendingPathComponent("events.jsonl")
+                if fileManager.fileExists(atPath: eventsURL.path) {
+                    record.events = try readEvents(from: eventsURL, decoder: decoder)
+                    if !inlineEvents.isEmpty {
+                        let migratedData = try stateEncoder.encode(record)
+                        try migratedData.write(to: stateURL, options: .atomic)
+                    }
+                } else if !record.events.isEmpty {
+                    try writeEvents(record.events, to: eventsURL, encoder: eventEncoder)
+                    let migratedData = try stateEncoder.encode(record)
+                    try migratedData.write(to: stateURL, options: .atomic)
+                }
                 canvases[record.canvas.id] = record
             } catch {
                 unreadableCanvasPathComponents.insert(directory.lastPathComponent)
@@ -7674,6 +7726,46 @@ final class PlannerStore {
             }
         }
         return (StoreDocument(canvases: canvases), unreadableCanvasPathComponents)
+    }
+
+    private static func makeStateEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+
+    private static func makeEventEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+
+    private static func readEvents(from url: URL, decoder: JSONDecoder) throws -> [PlannerEvent] {
+        let data = try Data(contentsOf: url)
+        guard !data.isEmpty else { return [] }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw PlannerCoreError.invalidNodeOutput("events.jsonl is not UTF-8")
+        }
+        var events: [PlannerEvent] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let eventData = Data(line.utf8)
+            events.append(try decoder.decode(PlannerEvent.self, from: eventData))
+        }
+        return events
+    }
+
+    private static func writeEvents(_ events: [PlannerEvent], to url: URL, encoder: JSONEncoder) throws {
+        var data = Data()
+        for (index, event) in events.enumerated() {
+            if index > 0 {
+                data.append(0x0A)
+            }
+            data.append(try encoder.encode(event))
+        }
+        if !events.isEmpty {
+            data.append(0x0A)
+        }
+        try data.write(to: url, options: .atomic)
     }
 
     private static func safePathComponent(_ raw: String) -> String {
