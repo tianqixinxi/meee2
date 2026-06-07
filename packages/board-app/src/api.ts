@@ -7,11 +7,18 @@ import type {
   Meee2MCPStatus,
   Meee2AgentRuntimeInstallResult,
   Meee2AgentRuntimeStatus,
+  BoardPerfSnapshot,
   ReadinessRepairResult,
   ReadinessReport,
   SessionIntakeDiagnostics,
   CanvasList,
   CanvasKind,
+  CanvasObject,
+  CanvasRelation,
+  CanvasRenderProfile,
+  CanvasRenderObjectValues,
+  CanvasRenderRelationValues,
+  CanvasSceneSpec,
   CanvasScope,
   SelectedCanvasElementContext,
   SpawnProvider,
@@ -513,6 +520,17 @@ export function repairReadiness(actionId: string): Promise<ReadinessRepairResult
   })
 }
 
+export function fetchDevPerf(): Promise<BoardPerfSnapshot> {
+  return jsonRequest<BoardPerfSnapshot>('/api/_dev/perf')
+}
+
+export function resetDevPerf(): Promise<BoardPerfSnapshot> {
+  return jsonRequest<BoardPerfSnapshot>('/api/_dev/perf/reset', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 // -- coordination groups ---------------------------------------------------
 
 export function fetchCoordinationGroups(): Promise<{ groups: CoordinationGroup[] }> {
@@ -664,6 +682,7 @@ export interface CanvasTemplateNodeSpec {
   status: string
   doerId?: string | null
   positionHint?: Record<string, number> | null
+  widget?: unknown
 }
 
 export type CanvasTemplateSource = 'official' | 'team' | 'private' | 'canvas-script'
@@ -680,7 +699,7 @@ export interface CanvasTemplate {
    * canvases), so we declare it non-optional here.
    */
   kind: NonNullable<CanvasList['canvases'][number]['kind']>
-  defaultCanvasKind: Exclude<NonNullable<CanvasList['canvases'][number]['kind']>, 'template'>
+  defaultCanvasKind: NonNullable<CanvasList['canvases'][number]['kind']>
   /** Legacy bucket retained for older callers; source is the catalog grouping. */
   category: string
   tags: string[]
@@ -693,6 +712,10 @@ export interface CanvasTemplate {
   defaultNodesCount: number
   updatedAt?: string | null
   defaultNodes: CanvasTemplateNodeSpec[]
+  sceneSpec?: CanvasSceneSpec | null
+  renderProfile?: CanvasRenderProfile | null
+  renderObjects?: CanvasObject[]
+  renderRelations?: CanvasRelation[]
 }
 
 export interface CanvasTemplateCatalog {
@@ -857,13 +880,142 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
       { title: 'Lore NPC: ancient librarian', status: 'ready' },
     ],
   },
+  {
+    id: 'travel-squad',
+    name: 'Travel Squad',
+    description: '旅行规划小队：路线、酒店、美食、预算和最终确认由多个 AI/人工节点推进',
+    icon: 'map',
+    source: 'official',
+    kind: 'board',
+    defaultCanvasKind: 'board',
+    category: 'demo',
+    tags: ['demo', 'scene', 'travel'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 5,
+    updatedAt: null,
+    defaultNodes: [
+      { title: '路线规划 Agent', status: 'ready' },
+      { title: '酒店 Agent', status: 'ready' },
+      { title: '美食 Agent', status: 'ready' },
+      { title: '预算审批', status: 'blocked' },
+      { title: '最终行程确认', status: 'ready' },
+    ],
+    sceneSpec: {
+      kind: 'travel-squad',
+      assets: { background: 'template:travel-squad/map-paper', accent: 'teal' },
+      initialState: {
+        title: '日本十日旅行',
+        summary: '东京 → 京都 → 大阪，本地结构化示意，不接外部地图 API。',
+        route: [
+          { id: 'tokyo', label: '东京', days: 'D1-D3', x: 18, y: 36 },
+          { id: 'kyoto', label: '京都', days: 'D4-D7', x: 52, y: 55 },
+          { id: 'osaka', label: '大阪', days: 'D8-D10', x: 78, y: 68 },
+        ],
+        timeline: [
+          { day: 'D1', title: '抵达东京', owner: '路线规划 Agent' },
+          { day: 'D4', title: '新干线到京都', owner: '路线规划 Agent' },
+          { day: 'D8', title: '大阪美食与返程准备', owner: '美食 Agent' },
+        ],
+        budget: { status: 'awaiting', label: '等待预算审批' },
+      },
+      artifactBindings: [
+        { id: 'itinerary', nodeId: 'node:0', reference: 'itinerary.json' },
+        { id: 'hotels', nodeId: 'node:1', reference: 'booking-candidates.json' },
+        { id: 'places', nodeId: 'node:2', reference: 'places.json' },
+        { id: 'budget', nodeId: 'node:3', reference: 'budget.json' },
+      ],
+      nodeAnchors: [],
+      actions: [],
+    },
+  },
+  {
+    id: 'poker-table',
+    name: 'Poker Table',
+    description: '德州扑克 AI 角色牌桌：规则调度器维护牌桌状态，玩家和 GM 节点驱动行动 artifact',
+    icon: 'club',
+    source: 'official',
+    kind: 'board',
+    defaultCanvasKind: 'board',
+    category: 'demo',
+    tags: ['demo', 'scene', 'game'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 5,
+    updatedAt: null,
+    defaultNodes: [
+      { title: 'Dealer / Table State', status: 'ready' },
+      { title: 'Ada 玩家 Agent', status: 'ready' },
+      { title: 'Bruno 玩家 Agent', status: 'ready' },
+      { title: 'Mina 玩家 Agent', status: 'ready' },
+      { title: 'GM / 规则裁判', status: 'ready' },
+    ],
+    sceneSpec: {
+      kind: 'poker-table',
+      assets: { background: 'template:poker-table/felt', felt: 'emerald' },
+      initialState: {
+        title: 'AI Poker Table',
+        setup: { started: false, userRole: 'observer', controlledPlayerId: null, autoRun: true },
+        phase: 'Pre-flop',
+        pot: 0,
+        nextActor: 'setup',
+        nextAction: 'Setup',
+        communityCards: ['??', '??', '??', '??', '??'],
+        legalActions: [],
+        handStatus: 'setup',
+        players: [
+          { id: 'dealer', name: 'Dealer / Table State', stack: 0, status: 'system', seat: 'top', holeCards: [] },
+          { id: 'ada', name: 'Ada', style: '紧凶型', stack: 1000, status: 'ready', seat: 'left', holeCards: ['??', '??'] },
+          { id: 'bruno', name: 'Bruno', style: '诈唬型', stack: 1000, status: 'ready', seat: 'right', holeCards: ['??', '??'] },
+          { id: 'mina', name: 'Mina', style: '保守观察', stack: 1000, status: 'ready', seat: 'bottom', holeCards: ['??', '??'] },
+        ],
+        actionLog: ['请选择你在牌桌里的角色，然后开始游戏。'],
+      },
+      artifactBindings: [
+        { id: 'game-state', nodeId: 'node:0', reference: 'game-state.json' },
+        { id: 'action-log', nodeId: 'node:0', reference: 'action-log.json' },
+      ],
+      nodeAnchors: [
+        { id: 'dealer', label: 'Table State', nodeId: 'node:0', x: 50, y: 16, role: 'dealer' },
+        { id: 'ada', label: 'Ada', nodeId: 'node:1', x: 16, y: 52, role: 'player' },
+        { id: 'bruno', label: 'Bruno', nodeId: 'node:2', x: 84, y: 52, role: 'player' },
+        { id: 'mina', label: 'Mina', nodeId: 'node:3', x: 50, y: 82, role: 'player' },
+        { id: 'gm', label: 'GM', nodeId: 'node:4', x: 78, y: 18, role: 'approval' },
+      ],
+      actions: [
+        { id: 'next-street', label: '发下一轮牌', nodeId: 'node:0', prompt: '推进到下一阶段并更新 game-state.json。' },
+        { id: 'ask-ada', label: '要求 Ada 行动', nodeId: 'node:1', prompt: '根据当前 game-state.json 给出 Ada 的下一步行动。' },
+        { id: 'ask-bruno', label: '要求 Bruno 行动', nodeId: 'node:2', prompt: '根据当前 game-state.json 给出 Bruno 的下一步行动。' },
+        { id: 'ask-mina', label: '要求 Mina 行动', nodeId: 'node:3', prompt: '根据当前 game-state.json 给出 Mina 的下一步行动。' },
+        { id: 'gm-review', label: 'GM 审批', nodeId: 'node:4', prompt: '检查牌局状态和行动是否合法。' },
+        { id: 'start-game', label: '开始游戏', nodeId: 'node:0', prompt: '由规则调度器初始化 game-state.json 与 action-log.json。' },
+        { id: 'step', label: '执行下一步', nodeId: 'node:0', prompt: '由规则调度器推进一个可确定的牌局动作。' },
+        { id: 'resume-auto', label: '继续自动', nodeId: 'node:0', prompt: '由规则调度器继续自动流转直到暂停点。' },
+        { id: 'pause-auto', label: '暂停', nodeId: 'node:0', prompt: '暂停规则调度器自动流转。' },
+      ],
+      orchestration: {
+        kind: 'poker-rules-v1',
+        stateNodeId: 'node:0',
+        stateReference: 'game-state.json',
+        logReference: 'action-log.json',
+      },
+    },
+  },
 ]
 
 export function fetchTemplateCatalog(): Promise<CanvasTemplateCatalog> {
   if (PLANNER_DEMO_MODE) {
     return Promise.resolve({
       templates: DEMO_CANVAS_TEMPLATES,
-      tags: ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo'],
+      tags: ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo', 'scene', 'travel', 'game'],
     })
   }
   return jsonRequest<CanvasTemplateCatalog>('/api/templates')
@@ -875,7 +1027,7 @@ export function fetchCanvasTemplates(): Promise<CanvasTemplate[]> {
 
 export function applyCanvasTemplate(
   id: string,
-  input: { name: string; scope: CanvasScope },
+  input: { name: string; scope: CanvasScope; adaptationPrompt?: string },
 ): Promise<CanvasList> {
   return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(id)}/apply`, {
     method: 'POST',
@@ -889,7 +1041,7 @@ export interface TemplateMetadataInput {
   scope?: CanvasScope
   tags?: string[]
   icon?: string
-  defaultCanvasKind?: Exclude<CanvasKind, 'template'>
+  defaultCanvasKind?: CanvasKind
 }
 
 export function createTemplateFromCanvas(input: TemplateMetadataInput & { canvasId: string }): Promise<CanvasList> {
@@ -1428,12 +1580,13 @@ export function dispatchPlannerNodeSession(
   nodeId: string,
   runner: PlannerDispatchRunner = 'claude',
   cwd?: string,
+  initialPrompt?: string,
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/dispatch`,
     {
       method: 'POST',
-      body: JSON.stringify({ runner, cwd }),
+      body: JSON.stringify({ runner, cwd, initialPrompt }),
     },
   )
 }
@@ -1616,6 +1769,24 @@ export function submitPlannerNodeOutput(
     {
       method: 'POST',
       body: JSON.stringify(output),
+    },
+  )
+}
+
+export function runCanvasSceneAction(
+  canvasId: string,
+  input: {
+    actionId: string
+    userRole?: 'observer' | 'gm' | 'player' | 'all-ai' | string
+    controlledPlayerId?: string | null
+    autoRun?: boolean
+  },
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/scene/actions`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
     },
   )
 }
@@ -2057,6 +2228,30 @@ export function updatePlannerNodeLayout(
       method: 'PATCH',
       body: JSON.stringify(layout),
     },
+  )
+}
+
+export function patchCanvasRenderValues(
+  canvasId: string,
+  input: {
+    objects?: Record<string, CanvasRenderObjectValues>
+    relations?: Record<string, CanvasRenderRelationValues>
+    renderOnlyObjects?: CanvasObject[]
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/render-profile/values`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function revealCanvasRenderProfile(canvasId: string): Promise<{ path: string }> {
+  return jsonRequest<{ path: string }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/render-profile/reveal`,
+    { method: 'POST' },
   )
 }
 

@@ -3,6 +3,7 @@ import {
   CONFIRMED_PLAN_DRAFT_PREFIX,
   buildConfirmedPlanGraphChanges,
   parseConfirmedPlanDraft,
+  isScenePlanDraft,
   serializeConfirmedPlanDraft,
 } from './plannerPlanDraft'
 
@@ -60,5 +61,25 @@ describe('planner confirmed plan drafts', () => {
       dependsOnNodeIds: [],
     })
     expect(changes[1].node?.dependsOnNodeIds).toEqual(['node-test-seed-1-collect-sources'])
+  })
+
+  it('round-trips a confirmed scene template plan', () => {
+    const draft = parseConfirmedPlanDraft(serializeConfirmedPlanDraft({
+      title: 'AI Poker Table',
+      intro: '创建一个德州扑克 scene canvas。',
+      steps: [],
+      canvasPresentation: 'scene',
+      templateId: 'poker-table',
+      adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
+    }))
+
+    expect(draft).toMatchObject({
+      title: 'AI Poker Table',
+      canvasPresentation: 'scene',
+      templateId: 'poker-table',
+      adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
+    })
+    expect(draft?.steps.length).toBeGreaterThan(0)
+    expect(draft && isScenePlanDraft(draft)).toBe(true)
   })
 })

@@ -1,5 +1,8 @@
 import type { PlanChange, PlanningNode } from '../types'
 
+export type PlannerCanvasPresentation = 'workflow' | 'scene'
+export type OfficialSceneTemplateId = 'travel-squad' | 'poker-table'
+
 export interface PlannerConfirmedPlanStep {
   title: string
   body: string
@@ -10,6 +13,9 @@ export interface PlannerConfirmedPlanDraft {
   intro: string
   steps: PlannerConfirmedPlanStep[]
   prompt?: string
+  canvasPresentation?: PlannerCanvasPresentation
+  templateId?: OfficialSceneTemplateId
+  adaptationPrompt?: string
 }
 
 export const CONFIRMED_PLAN_DRAFT_PREFIX = 'meee2:confirmed-plan:v1'
@@ -22,6 +28,9 @@ export function serializeConfirmedPlanDraft(draft: PlannerConfirmedPlanDraft): s
       intro: draft.intro,
       steps: draft.steps,
       prompt: draft.prompt,
+      canvasPresentation: draft.canvasPresentation,
+      templateId: draft.templateId,
+      adaptationPrompt: draft.adaptationPrompt,
     }, null, 2),
   ].join('\n')
 }
@@ -49,16 +58,30 @@ export function parseConfirmedPlanDraft(value: string): PlannerConfirmedPlanDraf
         })
         .filter((step): step is PlannerConfirmedPlanStep => Boolean(step))
       : []
-    if (!title || steps.length === 0) return null
+    const canvasPresentation = normalizeCanvasPresentation(item.canvasPresentation)
+    const templateId = normalizeOfficialSceneTemplateId(item.templateId)
+    const sceneDraft = canvasPresentation === 'scene'
+    if (!title || (!sceneDraft && steps.length === 0)) return null
+    if (sceneDraft && !templateId) return null
     return {
       title,
       intro: intro || 'Confirmed plan',
-      steps,
+      steps: sceneDraft && steps.length === 0 ? sceneTemplateSteps(templateId) : steps,
       prompt: cleanText(item.prompt) || undefined,
+      canvasPresentation,
+      templateId,
+      adaptationPrompt: cleanText(item.adaptationPrompt) || undefined,
     }
   } catch {
     return null
   }
+}
+
+export function isScenePlanDraft(draft: PlannerConfirmedPlanDraft): draft is PlannerConfirmedPlanDraft & {
+  canvasPresentation: 'scene'
+  templateId: OfficialSceneTemplateId
+} {
+  return draft.canvasPresentation === 'scene' && Boolean(normalizeOfficialSceneTemplateId(draft.templateId))
 }
 
 export function buildConfirmedPlanGraphChanges(input: {
@@ -104,6 +127,32 @@ export function buildConfirmedPlanGraphChanges(input: {
 
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+}
+
+function normalizeCanvasPresentation(value: unknown): PlannerCanvasPresentation | undefined {
+  return value === 'scene' || value === 'workflow' ? value : undefined
+}
+
+function normalizeOfficialSceneTemplateId(value: unknown): OfficialSceneTemplateId | undefined {
+  return value === 'travel-squad' || value === 'poker-table' ? value : undefined
+}
+
+function sceneTemplateSteps(templateId: OfficialSceneTemplateId | undefined): PlannerConfirmedPlanStep[] {
+  if (templateId === 'poker-table') {
+    return [
+      { title: 'Dealer / Table State', body: 'System-owned state slot for game-state.json and action-log.json.' },
+      { title: 'Player Agents', body: 'Each player node decides legal actions from the current game state.' },
+      { title: 'GM / 规则裁判', body: 'Human review node for reveals, legality, and rulings.' },
+    ]
+  }
+  if (templateId === 'travel-squad') {
+    return [
+      { title: '路线规划 Agent', body: 'Produces itinerary.json for the route and timeline.' },
+      { title: '酒店 / 美食 Agent', body: 'Produces booking-candidates.json and places.json.' },
+      { title: '预算与最终确认', body: 'Human approval nodes finalize budget.json and the travel brief.' },
+    ]
+  }
+  return []
 }
 
 function compactDescription(value: string): string {

@@ -21,7 +21,7 @@ if [[ ! -x "$BINARY" ]]; then
 fi
 
 # pkill 在没有匹配进程时返回 1，set -e 会炸；显式吞掉。
-pkill -f '\.build/.*meee2$' 2>/dev/null || true
+pkill -f '\.build/.*meee2( board)?$' 2>/dev/null || true
 sleep 1
 
 BACKEND="${MEEE2_ONLINE_APP_BASE_URL:-https://meee2-online-meee1.vercel.app}"
@@ -33,8 +33,8 @@ MEEE2_ONLINE_APP_BASE_URL="$BACKEND" \
 
 # 简单确认进程起来（pgrep 在 nohup detach 后约 0.5s 内可见）
 sleep 1
-if pgrep -f '\.build/.*meee2$' >/dev/null; then
-  echo "meee2 PID: $(pgrep -f '\.build/.*meee2$')"
+if pgrep -f '\.build/.*meee2( board)?$' >/dev/null; then
+  echo "meee2 PID: $(pgrep -f '\.build/.*meee2( board)?$')"
 else
   echo "meee2 failed to start; check /tmp/meee2.log" >&2
   exit 1

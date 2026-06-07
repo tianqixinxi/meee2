@@ -9,6 +9,21 @@ import Meee2CommKit
 public struct SessionData: Codable, Identifiable {
     public var id: String { sessionId }
 
+    private static let dateFormatterLock = NSLock()
+    private static let dateFormatter = ISO8601DateFormatter()
+
+    private static func parseDate(_ string: String) -> Date? {
+        dateFormatterLock.lock()
+        defer { dateFormatterLock.unlock() }
+        return dateFormatter.date(from: string)
+    }
+
+    private static func dateString(from date: Date) -> String {
+        dateFormatterLock.lock()
+        defer { dateFormatterLock.unlock() }
+        return dateFormatter.string(from: date)
+    }
+
     // MARK: - Schema 版本
 
     /// 当前磁盘格式版本。新增迁移时 +1，永不回退。
@@ -159,10 +174,10 @@ public struct SessionData: Codable, Identifiable {
 
         // 时间解析
         let startedAtStr = try container.decodeIfPresent(String.self, forKey: .startedAt) ?? ""
-        startedAt = ISO8601DateFormatter().date(from: startedAtStr) ?? Date()
+        startedAt = Self.parseDate(startedAtStr) ?? Date()
 
         let lastActivityStr = try container.decodeIfPresent(String.self, forKey: .lastActivity) ?? ""
-        lastActivity = ISO8601DateFormatter().date(from: lastActivityStr) ?? Date()
+        lastActivity = Self.parseDate(lastActivityStr) ?? Date()
 
         // 兼容旧文件：优先读 detailed_status，缺失回退到 status（并把旧 case 名迁移到新枚举）
         if let ds = try container.decodeIfPresent(String.self, forKey: .detailedStatus) {
@@ -198,9 +213,8 @@ public struct SessionData: Codable, Identifiable {
         try container.encodeIfPresent(appleTerminalSessionId, forKey: .appleTerminalSessionId)
         try container.encodeIfPresent(transcriptPath, forKey: .transcriptPath)
 
-        let formatter = ISO8601DateFormatter()
-        try container.encode(formatter.string(from: startedAt), forKey: .startedAt)
-        try container.encode(formatter.string(from: lastActivity), forKey: .lastActivity)
+        try container.encode(Self.dateString(from: startedAt), forKey: .startedAt)
+        try container.encode(Self.dateString(from: lastActivity), forKey: .lastActivity)
 
         try container.encode(status.rawValue, forKey: .status)
         try container.encodeIfPresent(currentTool, forKey: .currentTool)

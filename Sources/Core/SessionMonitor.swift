@@ -162,6 +162,9 @@ class SessionMonitor: ObservableObject {
             // 进程已结束，标记为完成状态
             session.status = .completed
         }
+        if let modifiedAt = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            session.lastUpdated = modifiedAt
+        }
 
         return session
     }

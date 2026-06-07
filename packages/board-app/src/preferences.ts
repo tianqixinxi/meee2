@@ -17,6 +17,7 @@ const KEY_LOCK_VIEWPORT_ON_SWITCH = 'meee2.canvas.lockViewportOnSwitch.v1'
 // the local-only summarizer (no Anthropic / OpenAI fetch).
 const KEY_ALLOW_CLOUD = 'meee2.privacy.allowCloud.v1'
 export const KEY_PLANNER_VIEWPORT_PREFIX = 'meee2.planner.viewport.'
+export const KEY_CANVAS_RECAP_POSITION_PREFIX = 'meee2.canvas.recapPosition.'
 export const BOARD_PREFERENCES_CHANGED = 'meee2:board-preferences-changed'
 export const CANVAS_RECAP_PREFERENCES_CHANGED = 'meee2:canvas-recap-preferences-changed'
 export const LOCK_VIEWPORT_PREFERENCES_CHANGED = 'meee2:lock-viewport-preferences-changed'
@@ -167,6 +168,11 @@ export interface PlannerViewportPose {
   zoom: number
 }
 
+export interface CanvasRecapPosition {
+  x: number
+  y: number
+}
+
 export function loadPlannerViewport(canvasId: string): PlannerViewportPose | null {
   if (!canvasId) return null
   try {
@@ -193,6 +199,37 @@ export function savePlannerViewport(canvasId: string, pose: PlannerViewportPose)
     localStorage.setItem(
       KEY_PLANNER_VIEWPORT_PREFIX + canvasId,
       JSON.stringify({ x: pose.x, y: pose.y, zoom: pose.zoom }),
+    )
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadCanvasRecapPosition(canvasId: string): CanvasRecapPosition | null {
+  if (!canvasId) return null
+  try {
+    const raw = localStorage.getItem(KEY_CANVAS_RECAP_POSITION_PREFIX + canvasId)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (
+      parsed &&
+      typeof parsed.x === 'number' && Number.isFinite(parsed.x) &&
+      typeof parsed.y === 'number' && Number.isFinite(parsed.y)
+    ) {
+      return { x: parsed.x, y: parsed.y }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+export function saveCanvasRecapPosition(canvasId: string, position: CanvasRecapPosition): void {
+  if (!canvasId) return
+  try {
+    localStorage.setItem(
+      KEY_CANVAS_RECAP_POSITION_PREFIX + canvasId,
+      JSON.stringify({ x: Math.round(position.x), y: Math.round(position.y) }),
     )
   } catch {
     /* ignore */

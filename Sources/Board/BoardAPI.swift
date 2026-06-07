@@ -60,6 +60,14 @@ enum BoardAPI {
         return jsonResponse(ErrorDTO(code: code, message: message), status: status, reason: reason)
     }
 
+    static let plannerNodeOutputPayloadHelp = [
+        "body must be a valid PlannerNodeOutput:",
+        "{\"nodeId\":\"...\",\"status\":\"done|blocked|needs_review\",\"message\":{\"summary\":\"...\",\"routeTo\":[\"owner\"]},\"artifacts\":[],\"next\":\"complete|blocked|needs_owner_review\"}.",
+        "For artifact outputs, use artifacts[].reference for the output slot from read_node_contract.",
+        "artifacts[].payload must be a typed object such as {\"type\":\"json\",\"json\":\"{...}\"}, {\"type\":\"text\",\"text\":\"...\"}, or {\"type\":\"file\",\"file\":{\"path\":\"report.md\",\"mimeType\":\"text/markdown\"}}.",
+        "Do not submit a bare string payload, {\"content\":...}, or an artifact_ref wrapper."
+    ].joined(separator: " ")
+
     /// 解析请求 body 为 JSON 字典
     static func parseJSONBody(_ req: HttpRequest) -> [String: Any]? {
         let data = Data(req.body)
@@ -172,6 +180,15 @@ enum BoardAPI {
         } catch {
             return errorResponse("debug_export_failed", error.localizedDescription, status: 500)
         }
+    }
+
+    static func getDevPerf(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(BoardPerfProbe.shared.snapshot())
+    }
+
+    static func resetDevPerf(_ req: HttpRequest) -> HttpResponse {
+        BoardPerfProbe.shared.reset()
+        return jsonResponse(BoardPerfProbe.shared.snapshot())
     }
 
     // MARK: - Privacy: storage stats + delete local data
@@ -329,39 +346,38 @@ enum BoardAPI {
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
-        let started = Date()
-        defer {
-            if ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1" {
-                let ms = Date().timeIntervalSince(started) * 1_000
-                MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
+        BoardPerfProbe.shared.measure(
+            "api.state",
+            title: "GET /api/state",
+            category: "api"
+        ) {
+            // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
+            // SessionStore 供 history / diagnostic / recovery 使用。
+            // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
+            // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
+            let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
+            var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
+            for session in sessions where !session.project.isEmpty {
+                spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
+                    sessionId: session.id,
+                    cwd: session.project,
+                    provider: spawnProvider(from: session),
+                    startedAt: parseISODate(session.startedAt)
+                ))
             }
+            let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
+            deliverMatchedSpawnPrompts(matchedSpawnIntents)
+            feedPlannerSessionRunStates(sessions)
+            // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
+            // 不在 UI 里显示，保持 channel 列表干净
+            let channels = ChannelRegistry.shared.list()
+                .filter { !$0.name.hasPrefix("__") }
+                .map { BoardDTOBuilder.channelDTO($0) }
+            _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
+            let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
+            let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
+            return jsonResponse(state)
         }
-        // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
-        // SessionStore 供 history / diagnostic / recovery 使用。
-        // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
-        // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
-        let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
-        var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
-        for session in sessions where !session.project.isEmpty {
-            spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
-                sessionId: session.id,
-                cwd: session.project,
-                provider: spawnProvider(from: session),
-                startedAt: parseISODate(session.startedAt)
-            ))
-        }
-        let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
-        deliverMatchedSpawnPrompts(matchedSpawnIntents)
-        feedPlannerSessionRunStates(sessions)
-        // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
-        // 不在 UI 里显示，保持 channel 列表干净
-        let channels = ChannelRegistry.shared.list()
-            .filter { !$0.name.hasPrefix("__") }
-            .map { BoardDTOBuilder.channelDTO($0) }
-        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
-        let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
-        let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
-        return jsonResponse(state)
     }
 
     private static func spawnProvider(from session: SessionDTO) -> String? {
@@ -523,6 +539,10 @@ enum BoardAPI {
             events: state.events,
             artifacts: state.artifacts,
             edges: state.edges,
+            renderProfile: state.renderProfile,
+            renderProfileStatus: state.renderProfileStatus,
+            renderObjects: state.renderObjects,
+            renderRelations: state.renderRelations,
             nodeAssignments: nodeAssignments(for: state),
             canEditInternals: state.access.role == .owner,
             integrationEntities: integrationEntitiesFor(nodes: state.nodes)
@@ -1180,15 +1200,72 @@ enum BoardAPI {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
+        return BoardPerfProbe.shared.measure(
+            "api.planner.graph",
+            title: "GET /planner/:id/graph",
+            category: "api",
+            detail: "canvas=\(String(canvasId.prefix(24)))"
+        ) {
+            do {
+                reconcilePlannerRunState(canvasId: canvasId)
+                syncPlannerSessionOutputArtifacts(canvasId: canvasId)
+                let state = try PlannerBoardBridge.graphState(
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                )
+                return jsonResponse(graphEnvelope(state))
+            } catch let err as PlannerCoreError {
+                return mapPlannerCoreError(err)
+            } catch {
+                return errorResponse("planner_error", error.localizedDescription, status: 400)
+            }
+        }
+    }
+
+    private struct RenderValuesPatchRequest: Decodable {
+        let objects: [String: CanvasRenderObjectValues]?
+        let relations: [String: CanvasRenderRelationValues]?
+        let renderOnlyObjects: [CanvasObject]?
+    }
+
+    static func patchCanvasRenderValues(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: RenderValuesPatchRequest.self) else {
+            return errorResponse("invalid_json", "body must be a render values patch", status: 400)
+        }
         do {
-            reconcilePlannerRunState(canvasId: canvasId)
-            syncPlannerSessionOutputArtifacts(canvasId: canvasId)
+            _ = try PlannerBoardBridge.store.patchRenderValues(
+                canvasId: canvasId,
+                objectValues: body.objects ?? [:],
+                relationValues: body.relations ?? [:],
+                renderOnlyObjects: body.renderOnlyObjects
+            )
             let state = try PlannerBoardBridge.graphState(
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
+            BoardServer.shared.broadcastStateChanged()
             return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func revealCanvasRenderProfile(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            _ = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId)
+            let path = PlannerBoardBridge.store.renderProfilePath(canvasId: canvasId)
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            return jsonResponse(["path": path])
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1222,18 +1299,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1836,18 +1902,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1859,6 +1914,7 @@ enum BoardAPI {
         struct DispatchRequest: Decodable {
             let runner: PlannerDispatchRunner?
             let cwd: String?
+            let initialPrompt: String?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -1880,6 +1936,7 @@ enum BoardAPI {
                 canvasId: canvasId,
                 node: result.dispatchedNode,
                 cwdOverride: body?.cwd,
+                initialPromptOverride: body?.initialPrompt,
                 includeInitialPromptInIntent: false
             )
             if let spawnRequest {
@@ -2110,18 +2167,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2142,18 +2188,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2302,18 +2337,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2355,18 +2379,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2394,18 +2407,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2433,18 +2435,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2486,18 +2477,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2518,18 +2498,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2603,7 +2572,7 @@ enum BoardAPI {
         outputDecoder.dateDecodingStrategy = .iso8601
         guard !bodyData.isEmpty,
               let output = try? outputDecoder.decode(PlannerNodeOutput.self, from: bodyData) else {
-            return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
+            return errorResponse("invalid_json", plannerNodeOutputPayloadHelp, status: 400)
         }
         do {
             // Capture the pre-submit node.status so we can detect the
@@ -2656,6 +2625,444 @@ enum BoardAPI {
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    static func runCanvasSceneAction(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        struct Body: Decodable {
+            var actionId: String
+            var userRole: String?
+            var controlledPlayerId: String?
+            var autoRun: Bool?
+        }
+        guard let body = try? JSONDecoder().decode(Body.self, from: Data(req.body)),
+              !body.actionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"actionId\":\"...\"}", status: 400)
+        }
+        do {
+            let actor = PlannerPermission.currentActorId()
+            let snapshot = BoardLayoutStore.shared.snapshot()
+            let state = try PlannerBoardBridge.canvasState(for: canvasId, snapshot: snapshot, actorUserId: actor)
+            let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+            guard let scene = state.canvas.sceneSpec,
+                  scene.kind == "poker-table",
+                  scene.orchestration == nil || scene.orchestration?.kind == "poker-rules-v1" else {
+                return errorResponse("unsupported_scene_action", "only poker-rules-v1 scene actions are supported", status: 400)
+            }
+            guard let dealerNodeId = scene.orchestration?.stateNodeId
+                    ?? scene.artifactBindings.first(where: { $0.id == "game-state" })?.nodeId
+                    ?? scene.nodeAnchors.first(where: { $0.id == "dealer" || $0.role == "dealer" })?.nodeId else {
+                return errorResponse("invalid_scene", "poker scene is missing Dealer state binding", status: 400)
+            }
+            switch body.actionId {
+            case "start-game":
+                try configurePokerRoleNodes(
+                    canvasId: canvasId,
+                    scene: scene,
+                    userRole: body.userRole ?? "observer",
+                    controlledPlayerId: body.controlledPlayerId
+                )
+                let role = normalizedPokerUserRole(body.userRole)
+                let controlled = normalizedPokerPlayerId(body.controlledPlayerId)
+                let autoRun = body.autoRun ?? true
+                let gameState = pokerInitialGameState(userRole: role, controlledPlayerId: controlled, autoRun: autoRun)
+                let actionLog: BoardJSONValue = .object([
+                    "actionLog": .array([
+                        .string("Rules Orchestrator 初始化牌局"),
+                        .string("Blind posted: 50 / 100"),
+                        .string("下一行动: Ada")
+                    ])
+                ])
+                var result = try submitPokerSystemState(
+                    canvasId: canvasId,
+                    dealerNodeId: dealerNodeId,
+                    summary: "Rules Orchestrator started Poker Table",
+                    gameState: gameState,
+                    actionLog: actionLog,
+                    actorUserId: actor
+                )
+                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+                BoardServer.shared.broadcastStateChanged()
+                return jsonResponse(result, status: 201, reason: "Created")
+            case "pause-auto", "resume-auto", "step":
+                let currentState = latestPokerSceneState(
+                    artifactVersions: record.artifactVersions,
+                    nodeId: dealerNodeId,
+                    reference: scene.orchestration?.stateReference ?? "game-state.json"
+                )
+                let patch: BoardJSONValue
+                let summary: String
+                if body.actionId == "step" {
+                    patch = try pokerStepStatePatch(
+                        canvasId: canvasId,
+                        scene: scene,
+                        artifacts: state.artifacts,
+                        currentState: currentState
+                    )
+                    summary = "Rules Orchestrator applied player action"
+                } else {
+                    let autoRun = body.actionId == "resume-auto"
+                    let status = body.actionId == "resume-auto" ? "auto-running" : "paused"
+                    patch = mergeBoardJSONObjects(currentState, BoardJSONValue.object([
+                        "setup": BoardJSONValue.object(["autoRun": BoardJSONValue.bool(autoRun)]),
+                        "orchestrationStatus": BoardJSONValue.string(status),
+                        "actionLog": BoardJSONValue.array([
+                            BoardJSONValue.string("Rules Orchestrator \(status)"),
+                            BoardJSONValue.string("下一步由当前行动者节点产出 Player Action Artifact")
+                        ])
+                    ]))
+                    summary = "Rules Orchestrator \(status)"
+                }
+                var result = try submitPokerSystemState(
+                    canvasId: canvasId,
+                    dealerNodeId: dealerNodeId,
+                    summary: summary,
+                    gameState: patch,
+                    actionLog: .object(["actionLog": patch.objectValue?["actionLog"] ?? .array([])]),
+                    actorUserId: actor
+                )
+                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+                BoardServer.shared.broadcastStateChanged()
+                return jsonResponse(result, status: 201, reason: "Created")
+            default:
+                return errorResponse("unsupported_scene_action", "unsupported poker scene action '\(body.actionId)'", status: 400)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func configurePokerRoleNodes(
+        canvasId: String,
+        scene: CanvasSceneSpec,
+        userRole: String,
+        controlledPlayerId: String?
+    ) throws {
+        let role = normalizedPokerUserRole(userRole)
+        let controlled = normalizedPokerPlayerId(controlledPlayerId)
+        let playerAnchors = scene.nodeAnchors.filter { $0.role == "player" }
+        for anchor in playerAnchors {
+            let shouldBeHuman = role == "player" && normalizedPokerPlayerId(anchor.id) == controlled
+            _ = try PlannerBoardBridge.store.updateNodeGate(
+                canvasId: canvasId,
+                nodeId: anchor.nodeId,
+                executionMode: shouldBeHuman ? .human : .auto
+            )
+        }
+        if let dealer = scene.nodeAnchors.first(where: { $0.role == "dealer" }) {
+            _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: canvasId, nodeId: dealer.nodeId, executionMode: .auto)
+        }
+        if let gm = scene.nodeAnchors.first(where: { $0.id == "gm" || $0.role == "approval" }) {
+            _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: canvasId, nodeId: gm.nodeId, executionMode: .human)
+        }
+    }
+
+    private static func submitPokerSystemState(
+        canvasId: String,
+        dealerNodeId: String,
+        summary: String,
+        gameState: BoardJSONValue,
+        actionLog: BoardJSONValue,
+        actorUserId: String?
+    ) throws -> PlannerNodeOutputResult {
+        _ = try PlannerBoardBridge.store.updateNodeGate(
+            canvasId: canvasId,
+            nodeId: dealerNodeId,
+            executionMode: .auto
+        )
+        let output = PlannerNodeOutput(
+            nodeId: dealerNodeId,
+            status: .done,
+            message: PlannerNodeOutputMessage(summary: summary, routeTo: []),
+            artifacts: [
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "game-state.json",
+                    reference: "game-state.json",
+                    payload: sceneJSONPayload(gameState),
+                    routeTo: []
+                ),
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "action-log.json",
+                    reference: "action-log.json",
+                    payload: sceneJSONPayload(actionLog),
+                    routeTo: []
+                )
+            ],
+            next: .complete,
+            forceNewVersion: true
+        )
+        return try PlannerBoardBridge.submitNodeOutput(
+            nodeId: dealerNodeId,
+            output: output,
+            for: canvasId,
+            snapshot: BoardLayoutStore.shared.snapshot(),
+            actorUserId: actorUserId,
+            submittedByKind: .system,
+            submittedBy: "Rules Orchestrator"
+        )
+    }
+
+    private static func latestPokerSceneState(
+        artifactVersions: [PlannerArtifactVersion],
+        nodeId: String,
+        reference: String
+    ) -> BoardJSONValue {
+        var state: BoardJSONValue = .object([:])
+        for version in artifactVersions
+            .filter({ $0.nodeId == nodeId && $0.payloadRef == reference })
+            .sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard let payload = version.payloadInline else { continue }
+            let patch: BoardJSONValue
+            if case .object(let object) = payload,
+               let sceneState = object["sceneState"] {
+                patch = sceneState
+            } else {
+                patch = payload
+            }
+            state = mergeBoardJSONObjects(state, patch)
+        }
+        return state
+    }
+
+    private static func pokerStepStatePatch(
+        canvasId: String,
+        scene: CanvasSceneSpec,
+        artifacts: [PlannerArtifact],
+        currentState: BoardJSONValue
+    ) throws -> BoardJSONValue {
+        guard case .object(let stateObject) = currentState else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator needs an object game-state.json before step.")
+        }
+        let nextActor = stateObject["nextActor"]?.stringValue
+            ?? stateObject["nextAction"]?.stringValue
+            ?? ""
+        let playerId = normalizedPokerPlayerId(nextActor)
+        guard let playerId else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator cannot step: nextActor '\(nextActor)' is not a player.")
+        }
+        guard let playerAnchor = scene.nodeAnchors.first(where: { normalizedPokerPlayerId($0.id) == playerId || normalizedPokerPlayerId($0.label) == playerId }) else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator cannot find node anchor for player '\(playerId)'.")
+        }
+        let reference = "\(playerId)-action.json"
+        let action = try latestPokerPlayerAction(
+            canvasId: canvasId,
+            artifacts: artifacts,
+            nodeId: playerAnchor.nodeId,
+            reference: reference
+        )
+        guard (action["playerId"]?.stringValue ?? playerId).lowercased() == playerId else {
+            throw PlannerCoreError.invalidNodeOutput("Poker action artifact '\(reference)' does not belong to current actor '\(playerId)'.")
+        }
+        let actionName = (action["action"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["fold", "call", "raise", "check"].contains(actionName) else {
+            throw PlannerCoreError.invalidNodeOutput("Poker action artifact '\(reference)' must use action fold/call/raise/check.")
+        }
+        let amount = action["amount"]?.intValue ?? 0
+        return applyPokerAction(
+            state: currentState,
+            playerId: playerId,
+            action: actionName,
+            amount: max(0, amount)
+        )
+    }
+
+    private static func latestPokerPlayerAction(
+        canvasId: String,
+        artifacts: [PlannerArtifact],
+        nodeId: String,
+        reference: String
+    ) throws -> [String: BoardJSONValue] {
+        guard let artifact = artifacts
+            .filter({ $0.nodeId == nodeId && $0.reference == reference })
+            .sorted(by: { $0.createdAt < $1.createdAt })
+            .last else {
+            throw PlannerCoreError.invalidNodeOutput("Poker Rules Orchestrator is waiting for \(reference).")
+        }
+        if let payload = artifact.payload,
+           let action = try pokerActionObject(from: payload, canvasId: canvasId, fallbackReference: reference) {
+            return action
+        }
+        throw PlannerCoreError.invalidNodeOutput("Poker action artifact '\(reference)' is missing a typed JSON payload.")
+    }
+
+    private static func pokerActionObject(
+        from payload: BoardJSONValue,
+        canvasId: String,
+        fallbackReference: String
+    ) throws -> [String: BoardJSONValue]? {
+        guard case .object(let object) = payload else { return nil }
+        if object["action"] != nil {
+            return object
+        }
+        if let json = object["json"]?.stringValue,
+           let decoded = boardJSONValueFromJSONString(json)?.objectValue {
+            return decoded
+        }
+        if let sceneState = object["sceneState"]?.objectValue,
+           sceneState["action"] != nil {
+            return sceneState
+        }
+        if let ref = object["reference"]?.stringValue ?? object["filename"]?.stringValue,
+           ref == fallbackReference,
+           let decoded = try pokerActionObjectFromWorkspace(canvasId: canvasId, reference: ref) {
+            return decoded
+        }
+        return nil
+    }
+
+    private static func pokerActionObjectFromWorkspace(canvasId: String, reference: String) throws -> [String: BoardJSONValue]? {
+        guard !reference.contains("/"), !reference.contains("\\") else { return nil }
+        let workspace = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        let url = URL(fileURLWithPath: workspace).appendingPathComponent(reference)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        return try? JSONDecoder().decode(BoardJSONValue.self, from: data).objectValue
+    }
+
+    private static func boardJSONValueFromJSONString(_ json: String) -> BoardJSONValue? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(BoardJSONValue.self, from: data)
+    }
+
+    private static func applyPokerAction(
+        state: BoardJSONValue,
+        playerId: String,
+        action: String,
+        amount: Int
+    ) -> BoardJSONValue {
+        guard case .object(var object) = state else { return state }
+        let playerOrder = ["ada", "bruno", "mina"]
+        let displayName = playerId.prefix(1).uppercased() + playerId.dropFirst()
+        var pot = object["pot"]?.intValue ?? 0
+        var folded = Set<String>()
+        let nextPlayer = playerOrder.drop { $0 != playerId }.dropFirst().first
+        if case .array(let players)? = object["players"] {
+            object["players"] = .array(players.map { value in
+                guard case .object(var player) = value,
+                      let id = player["id"]?.stringValue?.lowercased() else {
+                    return value
+                }
+                if player["status"]?.stringValue == "folded" {
+                    folded.insert(id)
+                }
+                if id == playerId {
+                    if action == "fold" {
+                        player["status"] = .string("folded")
+                        folded.insert(id)
+                    } else {
+                        let spend = action == "check" ? 0 : amount
+                        if spend > 0 {
+                            let stack = max(0, (player["stack"]?.intValue ?? 0) - spend)
+                            player["stack"] = .number(Double(stack))
+                            pot += spend
+                        }
+                        player["status"] = .string("acted")
+                    }
+                } else if id == nextPlayer {
+                    player["status"] = .string("to-act")
+                } else if player["status"]?.stringValue != "folded" {
+                    player["status"] = .string("waiting")
+                }
+                return .object(player)
+            })
+        }
+        let eligibleNext = playerOrder.drop { $0 != playerId }.dropFirst().first { !folded.contains($0) }
+        object["pot"] = .number(Double(pot))
+        object["nextActor"] = eligibleNext.map(BoardJSONValue.string) ?? .string("dealer")
+        object["nextAction"] = .string(eligibleNext.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Dealer")
+        object["orchestrationStatus"] = .string(eligibleNext == nil ? "street-complete" : "auto-running")
+        if eligibleNext == nil {
+            object["legalActions"] = .array([])
+            object["handStatus"] = .string("street-complete")
+        }
+        var log = object["actionLog"]?.arrayValue ?? []
+        let amountLabel = amount > 0 ? " \(amount)" : ""
+        log.append(.string("\(displayName) \(action)\(amountLabel)"))
+        if let next = eligibleNext {
+            log.append(.string("下一行动: \(next.prefix(1).uppercased() + next.dropFirst())"))
+        } else {
+            log.append(.string("本轮行动完成，等待 Dealer 推进下一阶段"))
+        }
+        object["actionLog"] = .array(log)
+        return .object(object)
+    }
+
+    private static func mergeBoardJSONObjects(_ base: BoardJSONValue, _ patch: BoardJSONValue) -> BoardJSONValue {
+        guard case .object(var baseObject) = base,
+              case .object(let patchObject) = patch else {
+            return patch
+        }
+        for (key, value) in patchObject {
+            if let existing = baseObject[key] {
+                baseObject[key] = mergeBoardJSONObjects(existing, value)
+            } else {
+                baseObject[key] = value
+            }
+        }
+        return .object(baseObject)
+    }
+
+    private static func sceneJSONPayload(_ sceneState: BoardJSONValue) -> BoardJSONValue {
+        .object([
+            "type": .string("json"),
+            "sceneState": sceneState
+        ])
+    }
+
+    private static func normalizedPokerUserRole(_ raw: String?) -> String {
+        let value = (raw ?? "observer").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch value {
+        case "gm", "player", "all-ai", "observer":
+            return value
+        default:
+            return "observer"
+        }
+    }
+
+    private static func normalizedPokerPlayerId(_ raw: String?) -> String? {
+        let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["ada", "bruno", "mina"].contains(value) ? value : nil
+    }
+
+    private static func pokerInitialGameState(
+        userRole: String,
+        controlledPlayerId: String?,
+        autoRun: Bool
+    ) -> BoardJSONValue {
+        .object([
+            "setup": .object([
+                "started": .bool(true),
+                "userRole": .string(userRole),
+                "controlledPlayerId": controlledPlayerId.map(BoardJSONValue.string) ?? .null,
+                "autoRun": .bool(autoRun)
+            ]),
+            "phase": .string("Pre-flop"),
+            "pot": .number(150),
+            "nextActor": .string("ada"),
+            "nextAction": .string("Ada"),
+            "communityCards": .array([.string("??"), .string("??"), .string("??"), .string("??"), .string("??")]),
+            "legalActions": .array([.string("fold"), .string("call"), .string("raise")]),
+            "handStatus": .string("in-progress"),
+            "orchestrationStatus": .string(autoRun ? "auto-running" : "paused"),
+            "players": .array([
+                .object(["id": .string("dealer"), "name": .string("Dealer / Table State"), "stack": .number(0), "status": .string("system"), "seat": .string("top"), "holeCards": .array([])]),
+                .object(["id": .string("ada"), "name": .string("Ada"), "style": .string("紧凶型"), "stack": .number(950), "status": .string("to-act"), "seat": .string("left"), "holeCards": .array([.string("As"), .string("Ks")])]),
+                .object(["id": .string("bruno"), "name": .string("Bruno"), "style": .string("诈唬型"), "stack": .number(870), "status": .string("waiting"), "seat": .string("right"), "holeCards": .array([.string("Qh"), .string("Js")])]),
+                .object(["id": .string("mina"), "name": .string("Mina"), "style": .string("保守观察"), "stack": .number(1020), "status": .string("waiting"), "seat": .string("bottom"), "holeCards": .array([.string("9c"), .string("9d")])])
+            ]),
+            "actionLog": .array([
+                .string("Rules Orchestrator 初始化牌局"),
+                .string("Blind posted: 50 / 100"),
+                .string("下一行动: Ada")
+            ]),
+            "rulesMode": .string("phase/order/card-uniqueness assisted; no side-pot engine")
+        ])
     }
 
     static func getPlannerArtifactContent(_ req: HttpRequest) -> HttpResponse {
@@ -3113,17 +3520,7 @@ enum BoardAPI {
                         subCanvasId: existingSubCanvasId,
                         action: "opened",
                         message: "Opened existing sub-canvas.",
-                        graph: PlannerGraphStateEnvelope(
-                            canvas: state.canvas,
-                            nodes: state.nodes,
-                            states: state.states,
-                            proposals: state.proposals,
-                            access: state.access,
-                            activities: state.activities,
-                            events: state.events,
-                            artifacts: state.artifacts,
-                            edges: state.edges
-                        )
+                        graph: graphEnvelope(state)
                     ))
                 }
             }
@@ -3148,17 +3545,7 @@ enum BoardAPI {
                 message: existingSubCanvasId?.isEmpty == false
                     ? "Previous sub-canvas was missing; created and linked a new one."
                     : "Created and linked a sub-canvas.",
-                graph: PlannerGraphStateEnvelope(
-                    canvas: state.canvas,
-                    nodes: state.nodes,
-                    states: state.states,
-                    proposals: state.proposals,
-                    access: state.access,
-                    activities: state.activities,
-                    events: state.events,
-                    artifacts: state.artifacts,
-                    edges: state.edges
-                )
+                graph: graphEnvelope(state)
             ), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -3183,17 +3570,7 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -3336,6 +3713,7 @@ enum BoardAPI {
         canvasId: String,
         node: PlanningNode,
         cwdOverride: String?,
+        initialPromptOverride: String? = nil,
         includeInitialPromptInIntent: Bool = true
     ) throws -> PlannerDispatchSpawnRequest? {
         guard node.workflowRunState == .dispatched else { return nil }
@@ -3356,7 +3734,11 @@ enum BoardAPI {
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
         // `PlannerSessionRunStateBridge` can resolve step → session.
         let purpose = "planner:\(node.id)"
-        let initialPrompt = plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
+        let basePrompt = plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
+        let scenePrompt = initialPromptOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialPrompt = scenePrompt?.isEmpty == false
+            ? "\(basePrompt)\n\nScene action:\n\(scenePrompt!)"
+            : basePrompt
         try BoardLayoutStore.shared.recordSpawnIntent(
             canvasId: canvasId,
             cwd: cwd,
@@ -3405,9 +3787,12 @@ enum BoardAPI {
             "",
             "Artifact submission rules:",
             "- Supported payload.type values: \(artifactTypes).",
+            "- If read_node_contract says output.payload_kind=artifact_ref, submit artifacts[] and put the expected output slot name in artifact.reference; do not submit an artifact_ref wrapper.",
+            "- Canonical inline payload examples: {\"type\":\"json\",\"json\":\"{...}\"}, {\"type\":\"text\",\"text\":\"...\"}, {\"type\":\"html\",\"html\":\"<main>...</main>\"}. Do not use a bare string or {\"content\":...} as artifact payload.",
             "- Inline payloads are allowed up to \(inlineLimitKB)KB.",
             "- For larger text/html/json/file output, write the file inside the workspace and submit payload.file.path.",
             "- Meee2 will copy file-backed artifacts into its artifact store; do not depend on the original file path as the long-term artifact.",
+            "- submit_node_output is the final writeback for the attempt. attach_artifact_to_node is only for interim evidence and does not complete the node.",
             "- If this node is blocked, call submit_node_output with status blocked and include the concrete blocker in message.summary.",
             "",
             "External tools:",
@@ -5519,18 +5904,12 @@ enum BoardAPI {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
         let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
-        guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board, monitor, template, kanban, inbox, or matrix", status: 400)
+        guard rawKind != "template",
+              let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
+            return errorResponse("bad_request", "kind must be board or monitor", status: 400)
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
-            if kind == .template,
-               let templateCanvas = snapshot.canvases.first(where: { $0.id == snapshot.activeCanvasId }) {
-                _ = try PlannerBoardBridge.store.record(
-                    for: planningCanvas(for: templateCanvas, context: "template:\(templateCanvas.id):version:1"),
-                    seedNodes: []
-                )
-            }
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -5622,7 +6001,7 @@ enum BoardAPI {
 
     static let canvasTemplateTags = [
         "engineering", "code-review", "release", "monitor", "workflow",
-        "recap", "research", "design", "ops", "demo"
+        "recap", "research", "design", "ops", "demo", "scene", "travel", "game"
     ]
 
     /// GET /api/templates — returns the unified template catalog:
@@ -5634,7 +6013,7 @@ enum BoardAPI {
             officialTemplateDTO(template)
         }
         let custom = BoardLayoutStore.shared.snapshot().canvases
-            .filter { ($0.kind ?? .board) == .template }
+            .filter { $0.templateMetadata != nil }
             .compactMap { canvas -> CanvasTemplateDTO? in
                 customTemplateDTO(canvas, actor: actor)
             }
@@ -5647,7 +6026,8 @@ enum BoardAPI {
     }
 
     private static func officialTemplateDTO(_ template: CanvasTemplate) -> CanvasTemplateDTO {
-        CanvasTemplateDTO(
+        let preview = officialTemplateRenderPreview(template)
+        return CanvasTemplateDTO(
             id: template.id,
             name: template.name,
             description: template.description,
@@ -5665,7 +6045,11 @@ enum BoardAPI {
             canReplace: false,
             defaultNodesCount: template.defaultNodes.count,
             updatedAt: nil,
-            defaultNodes: template.defaultNodes.map(templateNodeDTO(_:))
+            defaultNodes: template.defaultNodes.map(templateNodeDTO(_:)),
+            sceneSpec: template.sceneSpec,
+            renderProfile: preview.profile,
+            renderObjects: preview.objects,
+            renderRelations: preview.relations
         )
     }
 
@@ -5686,13 +6070,15 @@ enum BoardAPI {
         let metadata = templateMetadata(for: canvas)
         let canEdit = ownerId == actor.userId
         let count = PlannerBoardBridge.store.reusableNodeCount(canvasId: canvas.id)
+        let renderProfile = try? PlannerBoardBridge.store.renderProfileState(canvasId: canvas.id).profile
+        let renderPreview = customTemplateRenderPreview(canvasId: canvas.id)
         return CanvasTemplateDTO(
             id: canvas.id,
             name: canvas.name,
             description: metadata.description,
             icon: metadata.icon,
             source: canvas.scope == .team ? "team" : "private",
-            kind: (canvas.kind ?? .template).rawValue,
+            kind: metadata.defaultCanvasKind.rawValue,
             defaultCanvasKind: metadata.defaultCanvasKind.rawValue,
             category: canvas.scope == .team ? "team" : "private",
             tags: metadata.tags,
@@ -5704,8 +6090,50 @@ enum BoardAPI {
             canReplace: canEdit,
             defaultNodesCount: count,
             updatedAt: metadata.updatedAt,
-            defaultNodes: []
+            defaultNodes: [],
+            sceneSpec: PlannerBoardBridge.store.reusableSceneSpec(canvasId: canvas.id),
+            renderProfile: renderProfile,
+            renderObjects: renderPreview.objects,
+            renderRelations: renderPreview.relations
         )
+    }
+
+    private static func officialTemplateRenderPreview(
+        _ template: CanvasTemplate
+    ) -> (profile: CanvasRenderProfile, objects: [CanvasObject], relations: [CanvasRelation]) {
+        let canvasId = template.id
+        let ownerId = "meee2"
+        let profile = CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId)
+        let canvas = PlanningCanvas(
+            id: canvasId,
+            ownerId: ownerId,
+            title: template.name,
+            plannerContext: template.description,
+            sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(template: template, canvasId: canvasId)
+        )
+        let nodes = CanvasTemplateRegistry.materializeNodes(
+            template: template,
+            canvasId: canvasId,
+            ownerId: ownerId
+        )
+        let resolved = CanvasRenderResolver.resolve(
+            record: PlannerStore.CanvasRecord(canvas: canvas, nodes: nodes, proposals: []),
+            profile: profile
+        )
+        return (profile, resolved.objects, resolved.relations)
+    }
+
+    private static func customTemplateRenderPreview(
+        canvasId: String
+    ) -> (objects: [CanvasObject], relations: [CanvasRelation]) {
+        guard let state = try? PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: BoardLayoutStore.shared.snapshot(),
+            actorUserId: PlannerPermission.currentActorId()
+        ) else {
+            return ([], [])
+        }
+        return (state.renderObjects, state.renderRelations)
     }
 
     private static func templateNodeDTO(_ spec: TemplateNodeSpec) -> CanvasTemplateNodeSpecDTO {
@@ -5736,6 +6164,10 @@ enum BoardAPI {
             tags.formUnion(["engineering", "workflow"])
         case "npc-canvas":
             tags.formUnion(["demo", "design"])
+        case "travel-squad":
+            tags.formUnion(["demo", "travel", "scene"])
+        case "poker-table":
+            tags.formUnion(["demo", "game", "scene"])
         default:
             tags.insert("workflow")
         }
@@ -5774,7 +6206,7 @@ enum BoardAPI {
     ) throws -> (canvas: BoardLayoutStore.Canvas, metadata: BoardLayoutStore.TemplateMetadata, actor: (userId: String, teamId: String)) {
         let actor = BoardLayoutStore.shared.currentActorContext()
         guard let canvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
-              (canvas.kind ?? .board) == .template else {
+              canvas.templateMetadata != nil else {
             throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "template not found: \(templateId)"])
         }
         let ownerId = canvas.ownerUserId ?? canvas.createdBy ?? "local-user"
@@ -5817,8 +6249,8 @@ enum BoardAPI {
 
     private static func canvasKind(from raw: String?, fallback: BoardLayoutStore.CanvasKind = .board) -> BoardLayoutStore.CanvasKind {
         guard let raw,
-              let kind = BoardLayoutStore.CanvasKind(rawValue: raw),
-              kind != .template else {
+              raw != "template",
+              let kind = BoardLayoutStore.CanvasKind(rawValue: raw) else {
             return fallback
         }
         return kind
@@ -5837,6 +6269,7 @@ enum BoardAPI {
     private struct TemplateApplyRequest: Decodable {
         let name: String?
         let scope: String?
+        let adaptationPrompt: String?
     }
 
     private struct TemplateReplaceRequest: Decodable {
@@ -5868,20 +6301,32 @@ enum BoardAPI {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
 
+        let adaptationPrompt = body.adaptationPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
         // canvas-script 模板(id 前缀 cs:)走 sidecar instantiate → governance apply。
         if templateId.hasPrefix("cs:") {
             return applyCanvasScriptTemplate(String(templateId.dropFirst(3)), name: name, scope: scope)
         }
         if let template = CanvasTemplateRegistry.get(templateId) {
-            return applyOfficialCanvasTemplate(template, name: name, scope: scope)
+            return applyOfficialCanvasTemplate(
+                template,
+                name: name,
+                scope: scope,
+                adaptationPrompt: adaptationPrompt?.isEmpty == false ? adaptationPrompt : nil
+            )
         }
-        return applyCustomCanvasTemplate(templateId, name: name, scope: scope)
+        return applyCustomCanvasTemplate(
+            templateId,
+            name: name,
+            scope: scope,
+            adaptationPrompt: adaptationPrompt?.isEmpty == false ? adaptationPrompt : nil
+        )
     }
 
     private static func applyOfficialCanvasTemplate(
         _ template: CanvasTemplate,
         name: String,
-        scope: BoardLayoutStore.CanvasScope
+        scope: BoardLayoutStore.CanvasScope,
+        adaptationPrompt: String?
     ) -> HttpResponse {
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(
@@ -5898,7 +6343,11 @@ enum BoardAPI {
                 id: boardCanvas.id,
                 ownerId: ownerId,
                 title: boardCanvas.name,
-                plannerContext: "template:\(template.id)"
+                plannerContext: templatePlannerContext(template.id, adaptationPrompt: adaptationPrompt),
+                sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(
+                    template: template,
+                    canvasId: canvasId
+                )
             )
             let seedNodes = CanvasTemplateRegistry.materializeNodes(
                 template: template,
@@ -5907,6 +6356,10 @@ enum BoardAPI {
             )
             _ = try PlannerBoardBridge.store.record(for: planning, seedNodes: [])
             _ = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+            try PlannerBoardBridge.store.writeRenderProfile(
+                CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
+                canvasId: canvasId
+            )
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -5916,11 +6369,12 @@ enum BoardAPI {
     private static func applyCustomCanvasTemplate(
         _ templateId: String,
         name: String,
-        scope: BoardLayoutStore.CanvasScope
+        scope: BoardLayoutStore.CanvasScope,
+        adaptationPrompt: String?
     ) -> HttpResponse {
         let actor = BoardLayoutStore.shared.currentActorContext()
         guard let templateCanvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
-              (templateCanvas.kind ?? .board) == .template,
+              templateCanvas.templateMetadata != nil,
               customTemplateDTO(templateCanvas, actor: actor) != nil else {
             return errorResponse("not_found", "template not found: \(templateId)", status: 404)
         }
@@ -5939,13 +6393,24 @@ enum BoardAPI {
                 from: templateId,
                 to: planningCanvas(
                     for: boardCanvas,
-                    context: "template:\(templateId):version:\(metadata.version)"
+                    context: templatePlannerContext(
+                        "\(templateId):version:\(metadata.version)",
+                        adaptationPrompt: adaptationPrompt
+                    )
                 )
             )
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
         }
+    }
+
+    private static func templatePlannerContext(_ templateRef: String, adaptationPrompt: String?) -> String {
+        guard let prompt = adaptationPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return "template:\(templateRef)"
+        }
+        return "template:\(templateRef)\nadaptation:\(prompt)"
     }
 
     // MARK: - canvas-script 模板(Part F,经 meee2-online sidecar)
@@ -6018,7 +6483,11 @@ enum BoardAPI {
                 canReplace: false,
                 defaultNodesCount: item.nodeCount,
                 updatedAt: nil,
-                defaultNodes: []
+                defaultNodes: [],
+                sceneSpec: nil,
+                renderProfile: nil,
+                renderObjects: [],
+                renderRelations: []
             )
         }
     }
@@ -6123,7 +6592,7 @@ enum BoardAPI {
             let created = try BoardLayoutStore.shared.createCanvas(
                 name: name,
                 scope: scope,
-                kind: .template,
+                kind: metadata.defaultCanvasKind,
                 templateMetadata: metadata
             )
             let templateId = created.activeCanvasId

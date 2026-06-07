@@ -147,11 +147,766 @@
   -webkit-user-select: none;
 }
 
+.planner-flow--scene {
+  overflow: hidden;
+}
+
 .planner-flow input,
 .planner-flow textarea,
 .planner-flow [contenteditable='true'] {
   user-select: text;
   -webkit-user-select: text;
+}
+
+.canvas-scene {
+  position: relative;
+  z-index: 2;
+  margin: 12px;
+  height: calc(100% - 24px);
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(12, 16, 22, 0.82);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.planner-flow--scene .canvas-scene {
+  margin: 0;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.canvas-scene__stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.canvas-scene__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 16px 18px 0;
+}
+
+.canvas-scene__copy strong {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.canvas-scene__copy span {
+  color: rgba(235, 238, 242, 0.7);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.canvas-scene__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 10, 14, 0.36);
+}
+
+.canvas-scene__actions button,
+.canvas-scene-node {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: rgba(246, 248, 250, 0.92);
+  background: rgba(18, 23, 31, 0.86);
+  font: inherit;
+}
+
+.canvas-scene__actions button {
+  display: grid;
+  min-width: 118px;
+  min-height: 38px;
+  padding: 6px 10px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.canvas-scene__actions button span,
+.canvas-scene__actions button small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene__actions button small {
+  color: rgba(235, 238, 242, 0.54);
+  font-size: 10.5px;
+  font-weight: 560;
+}
+
+.canvas-scene__actions button:hover:not(:disabled),
+.canvas-scene-node:hover:not(:disabled),
+.canvas-scene-poker__seat:hover,
+.canvas-scene-poker__dealer-state:hover {
+  border-color: rgba(94, 234, 212, 0.55);
+  background: rgba(20, 36, 42, 0.92);
+}
+
+.canvas-scene__actions button:disabled {
+  opacity: 0.45;
+}
+
+.canvas-scene-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 170px;
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.1;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.canvas-scene-node span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.canvas-scene-node em {
+  color: rgba(235, 238, 242, 0.58);
+  font-style: normal;
+}
+
+.canvas-scene-node.is-blocked,
+.canvas-scene-poker__seat.is-blocked,
+.canvas-scene-poker__dealer-state.is-blocked {
+  border-color: rgba(251, 146, 60, 0.65);
+}
+
+.canvas-scene-node.is-done,
+.canvas-scene-poker__seat.is-done,
+.canvas-scene-poker__dealer-state.is-done {
+  border-color: rgba(74, 222, 128, 0.55);
+}
+
+.canvas-scene-travel {
+  position: relative;
+  min-height: 100%;
+  color: rgba(238, 244, 248, 0.94);
+  background:
+    linear-gradient(115deg, rgba(18, 64, 73, 0.45), transparent 50%),
+    radial-gradient(circle at 78% 18%, rgba(250, 204, 21, 0.18), transparent 24%),
+    rgba(12, 22, 25, 0.86);
+}
+
+.canvas-scene-travel__map {
+  position: absolute;
+  left: 26px;
+  right: min(390px, 34%);
+  top: 78px;
+  bottom: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    rgba(255, 255, 255, 0.04);
+  background-size: 32px 32px;
+}
+
+.canvas-scene-travel__map svg {
+  width: 100%;
+  height: 100%;
+  color: rgba(94, 234, 212, 0.8);
+}
+
+.canvas-scene-travel__map circle {
+  fill: rgba(94, 234, 212, 0.95);
+  stroke: rgba(10, 16, 20, 0.85);
+  stroke-width: 1.5;
+}
+
+.canvas-scene-travel__map text {
+  fill: rgba(246, 248, 250, 0.88);
+  font-size: 4px;
+  text-anchor: middle;
+}
+
+.canvas-scene-travel__nodes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.canvas-scene-travel__node {
+  min-width: 78px;
+  justify-content: center;
+}
+
+.canvas-scene-travel__panels {
+  position: absolute;
+  top: 78px;
+  right: 18px;
+  bottom: 18px;
+  display: grid;
+  width: min(350px, 32%);
+  grid-template-rows: 1fr 1fr auto auto;
+  gap: 10px;
+}
+
+.canvas-scene-travel__panels .canvas-scene__actions {
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(8, 12, 18, 0.52);
+}
+
+.canvas-scene-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(8, 12, 18, 0.52);
+  overflow: hidden;
+}
+
+.canvas-scene-card > span {
+  display: block;
+  margin-bottom: 7px;
+  color: rgba(235, 238, 242, 0.58);
+  font-size: 11px;
+}
+
+.canvas-scene-card p {
+  display: grid;
+  grid-template-columns: minmax(40px, 0.35fr) minmax(0, 1fr);
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.canvas-scene-card strong,
+.canvas-scene-card em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene-card em {
+  color: rgba(235, 238, 242, 0.68);
+  font-style: normal;
+}
+
+.canvas-scene-poker {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(620px, 1fr) minmax(250px, 320px);
+  gap: clamp(16px, 2.4vw, 30px);
+  min-height: 100%;
+  padding: 104px 18px 18px;
+  color: rgba(244, 250, 247, 0.94);
+  background:
+    radial-gradient(circle at 47% 48%, rgba(34, 197, 94, 0.24), transparent 44%),
+    linear-gradient(145deg, rgba(10, 34, 24, 0.98), rgba(8, 15, 20, 0.96));
+}
+
+.canvas-scene-poker__table-zone {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.canvas-scene-poker__header {
+  max-width: none;
+  padding: 0 0 12px;
+}
+
+.canvas-scene-poker__felt {
+  position: relative;
+  justify-self: center;
+  width: min(100%, 960px, calc((100vh - 188px) * 1.95));
+  aspect-ratio: 1.95;
+  border: clamp(14px, 2vw, 24px) solid rgba(76, 44, 24, 0.95);
+  border-radius: 999px;
+  background: radial-gradient(ellipse at center, rgba(22, 163, 74, 0.85), rgba(20, 83, 45, 0.92));
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.42), 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+
+.canvas-scene-poker__community {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  gap: clamp(8px, 1.2vw, 14px);
+  transform: translate(-50%, -50%);
+}
+
+.canvas-scene-poker__card {
+  display: grid;
+  place-items: center;
+  width: clamp(38px, 4.4vw, 56px);
+  height: clamp(52px, 6.1vw, 76px);
+  border-radius: 6px;
+  color: rgba(17, 24, 39, 0.9);
+  background: rgba(255, 255, 255, 0.92);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.canvas-scene-poker__seat {
+  position: absolute;
+  display: grid;
+  min-width: clamp(118px, 13vw, 166px);
+  gap: 4px;
+  padding: clamp(8px, 1vw, 12px) clamp(10px, 1.2vw, 14px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 13, 18, 0.76);
+  color: rgba(244, 250, 247, 0.94);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.canvas-scene-poker__seat strong {
+  font-size: clamp(13px, 1.1vw, 16px);
+}
+
+.canvas-scene-poker__seat span,
+.canvas-scene-poker__seat em {
+  color: rgba(235, 238, 242, 0.66);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.canvas-scene-poker__hole-cards {
+  display: inline-flex;
+  justify-content: center;
+  gap: 4px;
+}
+
+.canvas-scene-poker__hole-cards b {
+  display: grid;
+  place-items: center;
+  min-width: 24px;
+  height: 30px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: rgba(246, 248, 250, 0.92);
+  color: rgba(17, 24, 39, 0.9);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.canvas-scene-poker__seat--top { left: 50%; top: 7%; transform: translateX(-50%); }
+.canvas-scene-poker__seat--left { left: 6%; top: 50%; transform: translateY(-50%); }
+.canvas-scene-poker__seat--right { right: 6%; top: 50%; transform: translateY(-50%); }
+.canvas-scene-poker__seat--bottom { left: 50%; bottom: 7%; transform: translateX(-50%); }
+
+.canvas-scene-poker__seat.is-next {
+  border-color: rgba(94, 234, 212, 0.78);
+  box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.08);
+}
+
+.canvas-scene-poker__seat.is-human {
+  border-color: rgba(251, 191, 36, 0.62);
+}
+
+.canvas-scene-poker__dealer-state {
+  position: absolute;
+  display: grid;
+  min-width: clamp(168px, 17vw, 236px);
+  gap: 3px;
+  padding: 10px 14px;
+  border: 1px solid rgba(125, 211, 252, 0.32);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(8, 47, 73, 0.82), rgba(6, 20, 27, 0.86));
+  color: rgba(244, 250, 247, 0.94);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 0 18px rgba(14, 165, 233, 0.08);
+}
+
+.canvas-scene-poker__dealer-state span {
+  color: rgba(125, 211, 252, 0.72);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__dealer-state strong {
+  font-size: clamp(13px, 1.05vw, 16px);
+}
+
+.canvas-scene-poker__dealer-state small,
+.canvas-scene-poker__dealer-state em {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(235, 238, 242, 0.62);
+  font-size: 10.5px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__dealer-state--top {
+  left: 50%;
+  top: 5%;
+  transform: translateX(-50%);
+}
+
+.canvas-scene-poker__dealer-state.is-next {
+  border-color: rgba(125, 211, 252, 0.78);
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.1), inset 0 0 18px rgba(14, 165, 233, 0.12);
+}
+
+.canvas-scene-poker__gm {
+  min-width: 92px;
+  justify-content: center;
+}
+
+.canvas-scene-poker__rail {
+  min-width: 0;
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.canvas-scene-poker__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.canvas-scene-poker__stats span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 9, 12, 0.48);
+  color: rgba(235, 238, 242, 0.56);
+  font-size: 10.5px;
+  font-weight: 680;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__stats strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(244, 250, 247, 0.92);
+  font-size: 13px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__stats em {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(235, 238, 242, 0.54);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 520;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__gm-summary {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 8px;
+  background: rgba(35, 25, 14, 0.48);
+  color: rgba(246, 248, 250, 0.92);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-scene-poker__gm-summary span {
+  color: rgba(251, 191, 36, 0.78);
+  font-size: 10.5px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__gm-summary strong {
+  color: rgba(244, 250, 247, 0.94);
+  font-size: 13px;
+}
+
+.canvas-scene-poker__gm-summary em {
+  color: rgba(235, 238, 242, 0.62);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.canvas-scene-poker__log {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 9, 12, 0.56);
+  overflow: hidden;
+}
+
+.canvas-scene-poker__log strong {
+  color: rgba(244, 250, 247, 0.9);
+  font-size: 12px;
+}
+
+.canvas-scene-poker__log span {
+  color: rgba(235, 238, 242, 0.72);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__automation {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 9, 12, 0.56);
+}
+
+.canvas-scene-poker__setup {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(94, 234, 212, 0.22);
+  border-radius: 8px;
+  background: rgba(5, 9, 12, 0.62);
+}
+
+.canvas-scene-poker__role-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.canvas-scene-poker__role-grid button,
+.canvas-scene-poker__player-select button,
+.canvas-scene-poker__orchestrator-actions button,
+.canvas-scene-poker__start {
+  border: 1px solid rgba(94, 234, 212, 0.24);
+  border-radius: 8px;
+  background: rgba(16, 25, 34, 0.78);
+  color: rgba(246, 248, 250, 0.94);
+  font: inherit;
+  cursor: pointer;
+}
+
+.canvas-scene-poker__role-grid button {
+  display: grid;
+  gap: 2px;
+  min-height: 50px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.canvas-scene-poker__role-grid button.is-selected,
+.canvas-scene-poker__player-select button.is-selected {
+  border-color: rgba(94, 234, 212, 0.68);
+  background: rgba(20, 83, 74, 0.58);
+}
+
+.canvas-scene-poker__role-grid small {
+  color: rgba(235, 238, 242, 0.58);
+  font-size: 11px;
+}
+
+.canvas-scene-poker__player-select,
+.canvas-scene-poker__orchestrator-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.canvas-scene-poker__player-select button,
+.canvas-scene-poker__orchestrator-actions button {
+  min-height: 34px;
+  padding: 7px 8px;
+}
+
+.canvas-scene-poker__start {
+  min-height: 42px;
+  padding: 8px 10px;
+  border-color: rgba(94, 234, 212, 0.58);
+  background: rgba(13, 148, 136, 0.72);
+  font-weight: 760;
+}
+
+.canvas-scene-poker__automation-head {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.canvas-scene-poker__automation-head span {
+  color: rgba(235, 238, 242, 0.54);
+  font-size: 10.5px;
+  font-weight: 740;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__automation-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(244, 250, 247, 0.94);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__auto-button,
+.canvas-scene-poker__human-actions button {
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(94, 234, 212, 0.24);
+  border-radius: 8px;
+  background: rgba(16, 25, 34, 0.78);
+  color: rgba(246, 248, 250, 0.94);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-scene-poker__auto-button:hover:not(:disabled),
+.canvas-scene-poker__human-actions button:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.55);
+  background: rgba(20, 36, 42, 0.92);
+}
+
+.canvas-scene-poker__auto-button:disabled,
+.canvas-scene-poker__human-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.canvas-scene-poker__auto-button span,
+.canvas-scene-poker__auto-button small,
+.canvas-scene-poker__human-actions span,
+.canvas-scene-poker__human-actions small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-scene-poker__auto-button small,
+.canvas-scene-poker__human-actions small {
+  color: rgba(235, 238, 242, 0.56);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.canvas-scene-poker__human-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.canvas-scene-poker__human-actions > strong {
+  color: rgba(235, 238, 242, 0.5);
+  font-size: 10.5px;
+  font-weight: 740;
+  text-transform: uppercase;
+}
+
+.canvas-scene-poker__auto-empty {
+  padding: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: rgba(235, 238, 242, 0.58);
+  font-size: 12px;
+}
+
+@media (max-width: 820px) {
+  .canvas-scene__stage,
+  .canvas-scene-travel,
+  .canvas-scene-poker {
+    min-height: 480px;
+  }
+
+  .canvas-scene-travel__map,
+  .canvas-scene-travel__panels {
+    position: relative;
+    left: auto;
+    right: auto;
+    top: auto;
+    bottom: auto;
+    width: auto;
+  }
+
+  .canvas-scene-travel__map {
+    height: 210px;
+    margin: 16px;
+  }
+
+  .canvas-scene-travel__panels {
+    display: grid;
+    margin: 0 16px 16px;
+  }
+
+  .canvas-scene-poker__felt {
+    width: 100%;
+  }
+
+  .canvas-scene-poker__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .canvas-scene-poker__log {
+    margin: 0;
+  }
+}
+
+@media (max-width: 1040px) {
+  .canvas-scene-poker {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    padding-top: 104px;
+    overflow: auto;
+  }
+
+  .canvas-scene-poker__felt {
+    width: min(100%, 820px);
+  }
+
+  .canvas-scene-poker__rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .planner-banner-stack {
@@ -849,6 +1604,151 @@
 
 .planner-flow__edge .react-flow__edge-marker {
   fill: rgba(178, 174, 163, 0.62);
+}
+
+.planner-flow__edge--render .react-flow__edge-path {
+  stroke: rgba(138, 155, 148, 0.46);
+  stroke-dasharray: 5 6;
+}
+
+.planner-flow__edge--render-dataflow .react-flow__edge-path {
+  stroke: rgba(126, 177, 154, 0.56);
+}
+
+.canvas-object-card {
+  width: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+}
+
+.canvas-object-card.is-selected {
+  border-color: rgba(220, 154, 115, 0.52);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(220, 154, 115, 0.2);
+}
+
+.canvas-object-card.is-pinned {
+  border-color: rgba(141, 174, 155, 0.48);
+}
+
+.canvas-object-card__header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 8px;
+}
+
+.canvas-object-card__icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+}
+
+.canvas-object-card__title {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.canvas-object-card__title strong,
+.canvas-object-card__title span,
+.canvas-object-card__body p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-object-card__title strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.canvas-object-card__title span {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.canvas-object-card__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.canvas-object-card__actions button,
+.canvas-object-card__open {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+}
+
+.canvas-object-card__actions button {
+  width: 24px;
+  height: 24px;
+}
+
+.canvas-object-card__actions button:hover,
+.canvas-object-card__open:hover {
+  border-color: rgba(220, 154, 115, 0.42);
+  color: var(--text);
+}
+
+.canvas-object-card__body {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.canvas-object-card__badge {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.canvas-object-card__body p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.canvas-object-card__open {
+  width: fit-content;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.canvas-object-card--artifact {
+  background: color-mix(in srgb, var(--bg-elevated) 84%, rgba(120, 145, 136, 0.18));
+}
+
+.canvas-object-card--data-source {
+  background: color-mix(in srgb, var(--bg-elevated) 84%, rgba(112, 132, 165, 0.16));
 }
 
 .planner-flow__controls {
@@ -4098,6 +4998,16 @@
   color: var(--text);
   font-size: 24px;
   line-height: 1.2;
+}
+
+.planner-plan-card__template {
+  display: inline-flex;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .planner-plan-card__steps {

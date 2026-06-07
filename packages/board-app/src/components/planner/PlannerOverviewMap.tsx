@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
+import type { Node } from '@xyflow/react'
 import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
 
 interface Props {
-  nodes: PlannerGraphNode[]
+  nodes: Array<PlannerGraphNode | Node<Record<string, unknown>>>
   edges: PlannerGraphEdge[]
 }
 
@@ -73,20 +74,21 @@ export function PlannerOverviewMap({ nodes, edges }: Props) {
   )
 }
 
-function buildOverviewModel(nodes: PlannerGraphNode[]): {
+function buildOverviewModel(nodes: Props['nodes']): {
   boxes: NodeBox[]
   boxById: Map<string, NodeBox>
 } {
   const rawBoxes = nodes.map((node) => {
-    const width = node.width ?? node.measured?.width ?? node.data.node.layout?.width ?? 286
-    const height = node.height ?? node.measured?.height ?? node.data.node.layout?.height ?? 142
+    const maybePlanner = node as PlannerGraphNode
+    const width = node.width ?? node.measured?.width ?? maybePlanner.data?.node?.layout?.width ?? 286
+    const height = node.height ?? node.measured?.height ?? maybePlanner.data?.node?.layout?.height ?? 142
     return {
       id: node.id,
       x: node.position.x,
       y: node.position.y,
       width,
       height,
-      perception: node.data.perception,
+      perception: typeof maybePlanner.data?.perception === 'string' ? maybePlanner.data.perception : 'neutral',
     }
   })
   const minX = Math.min(...rawBoxes.map((box) => box.x))

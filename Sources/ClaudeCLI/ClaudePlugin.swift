@@ -1025,7 +1025,9 @@ class ClaudePlugin: SessionPlugin {
                             data.cwd = aiSession.cwd
                         }
                         data.startedAt = aiSession.startedAt
-                        data.lastActivity = aiSession.lastUpdated
+                        if aiSession.lastUpdated > data.lastActivity {
+                            data.lastActivity = aiSession.lastUpdated
+                        }
                         // 不要碰 data.status：SessionMonitor 每 2s 跑一次这条路径，
                         // 如果这里硬写，会把 hook 刚刚设的 .thinking / .tooling 冲掉，
                         // UI 就出现"回复到一半突然 idle"的抖动。

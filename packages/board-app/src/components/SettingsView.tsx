@@ -33,16 +33,19 @@ import {
   disconnectMeee2Online,
   exportDebugBundle,
   fetchAppSettings,
+  fetchDevPerf,
   fetchStorageStats,
   fetchUserProfile,
   openMeee2OnlineConnect,
   openMeee2OnlineDashboard,
   requestDeleteLocalDataToken,
+  resetDevPerf,
   updateAppSettings,
   type AppSettings,
   type StorageStats,
   type UserProfile,
 } from '../api'
+import type { BoardPerfSnapshot } from '../types'
 
 interface Props {
   onSaved?: (provider: SpawnProvider) => void
@@ -193,6 +196,9 @@ export function SettingsView({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteConfirmAcknowledged, setDeleteConfirmAcknowledged] = useState(false)
   const [deletingLocalData, setDeletingLocalData] = useState(false)
+  const [perfSnapshot, setPerfSnapshot] = useState<BoardPerfSnapshot | null>(null)
+  const [perfLoading, setPerfLoading] = useState(false)
+  const [perfError, setPerfError] = useState<string | null>(null)
   const effectiveAppSettings = normalizeAppSettings(appSettings)
   const settingsCategories: Array<{ id: SettingsCategory; label: string }> = [
     { id: 'general', label: t('settings.categoryGeneral') },
@@ -235,6 +241,15 @@ export function SettingsView({
       .finally(() => setStorageStatsLoading(false))
   }, [])
 
+  const loadPerfSnapshot = useCallback(() => {
+    setPerfLoading(true)
+    setPerfError(null)
+    fetchDevPerf()
+      .then(setPerfSnapshot)
+      .catch((err: Error) => setPerfError(err.message || 'performance diagnostics unavailable'))
+      .finally(() => setPerfLoading(false))
+  }, [])
+
   useEffect(() => {
     loadProfile()
     loadAppSettings()
@@ -246,6 +261,12 @@ export function SettingsView({
       window.removeEventListener('focus', loadAppSettings)
     }
   }, [loadAppSettings, loadProfile, loadStorageStats])
+
+  useEffect(() => {
+    if (activeSettingsCategory === 'developer' && (devMode || effectiveAppSettings.devMode)) {
+      loadPerfSnapshot()
+    }
+  }, [activeSettingsCategory, devMode, effectiveAppSettings.devMode, loadPerfSnapshot])
 
   const runDebugExport = async () => {
     setDebugExporting(true)
@@ -477,6 +498,20 @@ export function SettingsView({
       notify('success', 'Disconnected from meee2 Online')
     } catch (err) {
       notify('error', (err as Error).message || 'Failed to disconnect')
+    }
+  }
+
+  const clearPerfSnapshot = async () => {
+    setPerfLoading(true)
+    setPerfError(null)
+    try {
+      const next = await resetDevPerf()
+      setPerfSnapshot(next)
+      notify('success', t('settings.perfResetDone'))
+    } catch (err) {
+      setPerfError((err as Error).message || 'performance diagnostics reset failed')
+    } finally {
+      setPerfLoading(false)
     }
   }
 
@@ -993,6 +1028,7 @@ export function SettingsView({
         )}
 
         {activeSettingsCategory === 'developer' && (devMode || effectiveAppSettings.devMode) && (
+          <>
           <section className="settings-section">
             <div className="settings-section-header">
               <div>
@@ -1014,6 +1050,39 @@ export function SettingsView({
               </button>
             </label>
           </section>
+
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">{t('settings.perfDiagnostics')}</div>
+                <div className="settings-section-caption">{t('settings.perfDiagnosticsCaption')}</div>
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={loadPerfSnapshot}
+                  disabled={perfLoading}
+                >
+                  {perfLoading ? t('common.loading') : t('common.refresh')}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void clearPerfSnapshot()}
+                  disabled={perfLoading}
+                >
+                  {t('common.reset')}
+                </button>
+              </div>
+            </div>
+            <PerfDiagnosticsPanel
+              snapshot={perfSnapshot}
+              loading={perfLoading}
+              error={perfError}
+            />
+          </section>
+          </>
         )}
         </div>
       </div>
@@ -1035,6 +1104,99 @@ function normalizeAppSettings(settings: AppSettings | null | undefined): AppSett
 function currentTeamForProfile(profile: UserProfile | null): UserProfile['teams'][number] | null {
   if (!profile?.connected) return null
   return profile.teams.find((team) => team.isDefault) ?? profile.teams[0] ?? null
+}
+
+function PerfDiagnosticsPanel({
+  snapshot,
+  loading,
+  error,
+}: {
+  snapshot: BoardPerfSnapshot | null
+  loading: boolean
+  error: string | null
+}) {
+  const { t } = useI18n()
+  const metrics = snapshot?.metrics ?? []
+  const recentEvents = snapshot?.recentEvents ?? []
+  const hotMetrics = [...metrics]
+    .sort((a, b) => {
+      const left = b.totalMs - a.totalMs
+      if (left !== 0) return left
+      return b.count - a.count
+    })
+    .slice(0, 10)
+
+  return (
+    <div className="settings-panel settings-perf-panel">
+      <div className="settings-perf-summary">
+        <div>
+          <span>{t('settings.perfPid')}</span>
+          <strong>{snapshot?.pid ?? '-'}</strong>
+        </div>
+        <div>
+          <span>{t('settings.perfMetrics')}</span>
+          <strong>{metrics.length}</strong>
+        </div>
+        <div>
+          <span>{t('settings.perfEvents')}</span>
+          <strong>{recentEvents.length}</strong>
+        </div>
+        <div>
+          <span>{t('settings.perfEnabled')}</span>
+          <strong>{snapshot ? (snapshot.enabled ? 'on' : 'off') : '-'}</strong>
+        </div>
+      </div>
+      {loading && !snapshot && <small className="muted">{t('common.loading')}</small>}
+      {error && <small className="settings-shortcut-warning">{error}</small>}
+      {!loading && !error && !snapshot && (
+        <small className="muted">{t('settings.perfEmpty')}</small>
+      )}
+      {hotMetrics.length > 0 && (
+        <div className="settings-perf-table" role="table" aria-label={t('settings.perfHotMetrics')}>
+          <div role="row" className="settings-perf-table__row settings-perf-table__head">
+            <span>{t('settings.perfMetric')}</span>
+            <span>{t('settings.perfCount')}</span>
+            <span>{t('settings.perfP95')}</span>
+            <span>{t('settings.perfTotal')}</span>
+            <span>{t('settings.perfBytes')}</span>
+          </div>
+          {hotMetrics.map((metric) => (
+            <div role="row" className="settings-perf-table__row" key={metric.id}>
+              <span title={metric.lastDetail ?? metric.id}>
+                <strong>{metric.title}</strong>
+                <small>{metric.category}{metric.lastDetail ? ` · ${metric.lastDetail}` : ''}</small>
+              </span>
+              <span>{metric.count}</span>
+              <span>{formatMs(metric.p95Ms)}</span>
+              <span>{formatMs(metric.totalMs)}</span>
+              <span>{formatBytes(metric.totalBytes)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {recentEvents.length > 0 && (
+        <details className="settings-perf-events">
+          <summary>{t('settings.perfRecentEvents')}</summary>
+          <div className="settings-perf-event-list">
+            {recentEvents.slice(-12).reverse().map((event) => (
+              <div key={event.id} className="settings-perf-event">
+                <span>
+                  <strong>{event.title}</strong>
+                  <small>{event.category}{event.detail ? ` · ${event.detail}` : ''}</small>
+                </span>
+                <code>{formatMs(event.durationMs)}{event.bytes ? ` · ${formatBytes(event.bytes)}` : ''}</code>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {snapshot && (
+        <small className="muted">
+          {t('settings.perfCapturedAt')}: {formatTimestamp(snapshot.capturedAt)}
+        </small>
+      )}
+    </div>
+  )
 }
 
 function SettingSlider({
@@ -1164,6 +1326,20 @@ function formatBytes(value: number | null | undefined): string {
   // < 10 → 显示一位小数,>= 10 → 整数
   const formatted = v < 10 && i > 0 ? v.toFixed(1) : Math.round(v).toString()
   return `${formatted} ${units[i]}`
+}
+
+function formatMs(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  if (value < 1) return `${value.toFixed(1)}ms`
+  if (value < 100) return `${value.toFixed(1)}ms`
+  return `${Math.round(value)}ms`
+}
+
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return '-'
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return value
+  return new Date(timestamp).toLocaleTimeString()
 }
 
 function PrivacyDeleteConfirmModal({

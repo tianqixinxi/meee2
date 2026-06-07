@@ -22,12 +22,21 @@ final class CanvasTemplateRegistryTests: XCTestCase {
 
     /// Run the same seed path `applyOfficialCanvasTemplate` uses: record the
     /// canvas, then `seedNodesIfEmpty` (which now reconciles dependency edges).
-    private func seedTemplate(_ template: CanvasTemplate, canvasId: String, ownerId: String) throws -> PlannerStore.CanvasRecord {
+    private func seedTemplate(
+        _ template: CanvasTemplate,
+        canvasId: String,
+        ownerId: String,
+        plannerContext: String? = nil
+    ) throws -> PlannerStore.CanvasRecord {
         let canvas = PlanningCanvas(
             id: canvasId,
             ownerId: ownerId,
             title: template.name,
-            plannerContext: "template:\(template.id)"
+            plannerContext: plannerContext ?? "template:\(template.id)",
+            sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(
+                template: template,
+                canvasId: canvasId
+            )
         )
         let seedNodes = CanvasTemplateRegistry.materializeNodes(
             template: template,
@@ -35,7 +44,12 @@ final class CanvasTemplateRegistryTests: XCTestCase {
             ownerId: ownerId
         )
         _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [])
-        return try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+        let record = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+        try PlannerBoardBridge.store.writeRenderProfile(
+            CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
+            canvasId: canvasId
+        )
+        return record
     }
 
     func testCodingOrchestrationIsRegistered() {
@@ -47,6 +61,172 @@ final class CanvasTemplateRegistryTests: XCTestCase {
             CanvasTemplateRegistry.all.contains { $0.id == "coding-orchestration" },
             "must appear in the catalog that backs GET /api/templates"
         )
+    }
+
+    func testSceneTemplatesAreRegistered() {
+        let travel = CanvasTemplateRegistry.get("travel-squad")
+        XCTAssertNotNil(travel, "travel-squad must be registered")
+        XCTAssertEqual(travel?.sceneSpec?.kind, "travel-squad")
+        XCTAssertEqual(travel?.defaultNodes.count, 5)
+
+        let poker = CanvasTemplateRegistry.get("poker-table")
+        XCTAssertNotNil(poker, "poker-table must be registered")
+        XCTAssertEqual(poker?.sceneSpec?.kind, "poker-table")
+        XCTAssertEqual(poker?.defaultNodes.count, 5)
+    }
+
+    func testSceneTemplatesMaterializeRenderProfiles() throws {
+        let travel = try XCTUnwrap(CanvasTemplateRegistry.get("travel-squad"))
+        let travelProfile = CanvasTemplateRegistry.materializeRenderProfile(template: travel, canvasId: "travel-canvas")
+        XCTAssertEqual(travelProfile.logic.layout, .spatial)
+        XCTAssertTrue(travelProfile.values.renderOnlyObjects.contains { object in
+            object.id == "scene:travel-squad:background"
+        })
+        XCTAssertTrue(travelProfile.logic.actions.contains { $0.id == "scene-action:replan-route" })
+        XCTAssertNotNil(travelProfile.values.objects["node:travel-canvas-travel-squad-0"])
+
+        let poker = try XCTUnwrap(CanvasTemplateRegistry.get("poker-table"))
+        let pokerProfile = CanvasTemplateRegistry.materializeRenderProfile(template: poker, canvasId: "poker-canvas")
+        XCTAssertEqual(pokerProfile.logic.layout, .spatial)
+        XCTAssertTrue(pokerProfile.values.renderOnlyObjects.contains { object in
+            object.metadata != nil && object.id == "scene:poker-table:background"
+        })
+        XCTAssertTrue(pokerProfile.logic.actions.contains { $0.id == "scene-action:start-game" })
+        XCTAssertEqual(pokerProfile.values.objects["node:poker-canvas-poker-table-0"]?.rendererVariant, nil)
+    }
+
+    func testTravelSquadMaterializesSceneAnchorsAndInitialState() throws {
+        let template = try XCTUnwrap(CanvasTemplateRegistry.get("travel-squad"))
+        let canvasId = "canvas-travel-\(UUID().uuidString)"
+        let record = try seedTemplate(template, canvasId: canvasId, ownerId: "owner-a")
+        let scene = try XCTUnwrap(record.canvas.sceneSpec)
+
+        XCTAssertEqual(scene.kind, "travel-squad")
+        XCTAssertEqual(record.nodes.count, 5)
+        XCTAssertNotNil(scene.initialState)
+        XCTAssertTrue(scene.nodeAnchors.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-travel-squad-") })
+        XCTAssertTrue(scene.actions.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-travel-squad-") })
+        XCTAssertTrue(scene.artifactBindings.contains { $0.reference == "itinerary.json" })
+        let render = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId)
+        XCTAssertEqual(render.status.state, .valid)
+        XCTAssertEqual(render.profile.logic.layout, .spatial)
+    }
+
+    func testPokerTableMaterializesSceneAnchorsAndInitialState() throws {
+        let template = try XCTUnwrap(CanvasTemplateRegistry.get("poker-table"))
+        let canvasId = "canvas-poker-\(UUID().uuidString)"
+        let record = try seedTemplate(template, canvasId: canvasId, ownerId: "owner-a")
+        let scene = try XCTUnwrap(record.canvas.sceneSpec)
+
+        XCTAssertEqual(scene.kind, "poker-table")
+        XCTAssertEqual(record.nodes.count, 5)
+        XCTAssertNotNil(scene.initialState)
+        XCTAssertTrue(scene.nodeAnchors.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-poker-table-") })
+        XCTAssertTrue(scene.actions.contains { $0.id == "ask-ada" && $0.nodeId.hasSuffix("-1") })
+        XCTAssertTrue(scene.actions.contains { $0.id == "ask-mina" && $0.nodeId.hasSuffix("-3") })
+        XCTAssertEqual(scene.orchestration?.kind, "poker-rules-v1")
+        XCTAssertEqual(scene.orchestration?.stateNodeId, record.nodes.first?.id)
+        XCTAssertTrue(scene.artifactBindings.contains { $0.reference == "game-state.json" })
+        let dealer = try XCTUnwrap(record.nodes.first { $0.title == "Dealer / Table State" })
+        XCTAssertEqual(dealer.executionMode, .auto)
+        XCTAssertEqual(dealer.executorType, .mock)
+        XCTAssertNil(dealer.gate, "Dealer is a system state slot, not a human approval gate")
+        XCTAssertEqual(dealer.schema.outputs, ["game-state.json", "action-log.json"])
+        if case .object(let initial)? = scene.initialState,
+           case .object(let setup)? = initial["setup"],
+           case .bool(let started)? = setup["started"] {
+            XCTAssertFalse(started)
+        } else {
+            XCTFail("poker scene initialState must include setup.started=false")
+        }
+        let gm = try XCTUnwrap(record.nodes.first { $0.title == "GM / 规则裁判" })
+        XCTAssertEqual(gm.status, .ready)
+        XCTAssertNil(gm.blockedReason, "GM starts as a ready human responsibility, not an initial fake blocker")
+    }
+
+    func testPokerStartGamePrimitivesWriteSystemDealerStateAndConfigureHumanPlayer() throws {
+        let template = try XCTUnwrap(CanvasTemplateRegistry.get("poker-table"))
+        let canvasId = "canvas-poker-start-\(UUID().uuidString)"
+        let record = try seedTemplate(template, canvasId: canvasId, ownerId: "owner-a")
+        let dealerId = try XCTUnwrap(record.canvas.sceneSpec?.orchestration?.stateNodeId)
+        let adaId = try XCTUnwrap(record.canvas.sceneSpec?.nodeAnchors.first { $0.id == "ada" }?.nodeId)
+        let brunoId = try XCTUnwrap(record.canvas.sceneSpec?.nodeAnchors.first { $0.id == "bruno" }?.nodeId)
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: canvasId, nodeId: adaId, executionMode: .human)
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: canvasId, nodeId: brunoId, executionMode: .auto)
+        let output = PlannerNodeOutput(
+            nodeId: dealerId,
+            status: .done,
+            message: PlannerNodeOutputMessage(summary: "Rules Orchestrator started Poker Table", routeTo: []),
+            artifacts: [
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "game-state.json",
+                    reference: "game-state.json",
+                    payload: .object([
+                        "type": .string("json"),
+                        "sceneState": .object([
+                            "setup": .object([
+                                "started": .bool(true),
+                                "userRole": .string("player"),
+                                "controlledPlayerId": .string("ada"),
+                                "autoRun": .bool(true)
+                            ])
+                        ])
+                    ]),
+                    routeTo: []
+                )
+            ],
+            next: .complete,
+            forceNewVersion: true
+        )
+        _ = try PlannerBoardBridge.store.submitNodeOutput(
+            canvasId: canvasId,
+            nodeId: dealerId,
+            output: output,
+            submittedByKind: .system,
+            submittedBy: "Rules Orchestrator"
+        )
+
+        let updated = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+        let ada = try XCTUnwrap(updated.nodes.first { $0.title == "Ada 玩家 Agent" })
+        let bruno = try XCTUnwrap(updated.nodes.first { $0.title == "Bruno 玩家 Agent" })
+        let gm = try XCTUnwrap(updated.nodes.first { $0.title == "GM / 规则裁判" })
+        let dealer = try XCTUnwrap(updated.nodes.first { $0.title == "Dealer / Table State" })
+        XCTAssertEqual(ada.executionMode, .human)
+        XCTAssertEqual(bruno.executionMode, .auto)
+        XCTAssertEqual(dealer.executionMode, .auto)
+        XCTAssertEqual(dealer.status, .done)
+        XCTAssertEqual(dealer.workflowRunState, .done)
+        XCTAssertNil(dealer.gate)
+        XCTAssertEqual(gm.executionMode, .human)
+        XCTAssertTrue(updated.artifacts.contains { $0.nodeId == dealerId && $0.reference == "game-state.json" })
+        let version = updated.artifactVersions.last { $0.nodeId == dealerId && $0.payloadRef == "game-state.json" }
+        XCTAssertEqual(version?.submittedByKind, .system)
+        if case .object(let payload)? = version?.payloadInline,
+           case .object(let sceneState)? = payload["sceneState"],
+           case .object(let setup)? = sceneState["setup"],
+           case .bool(let started)? = setup["started"] {
+            XCTAssertTrue(started)
+        } else {
+            XCTFail("system game-state artifact must carry sceneState.setup.started=true")
+        }
+    }
+
+    func testSceneTemplateCanCarryAdaptationContextWithoutChangingSceneSpec() throws {
+        let template = try XCTUnwrap(CanvasTemplateRegistry.get("poker-table"))
+        let canvasId = "canvas-poker-adapt-\(UUID().uuidString)"
+        let record = try seedTemplate(
+            template,
+            canvasId: canvasId,
+            ownerId: "owner-a",
+            plannerContext: "template:poker-table\nadaptation:4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。"
+        )
+        let scene = try XCTUnwrap(record.canvas.sceneSpec)
+
+        XCTAssertEqual(record.canvas.plannerContext, "template:poker-table\nadaptation:4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。")
+        XCTAssertEqual(scene.kind, "poker-table")
+        XCTAssertEqual(record.nodes.count, 5)
+        XCTAssertTrue(scene.nodeAnchors.allSatisfy { $0.nodeId.hasPrefix("\(canvasId)-poker-table-") })
     }
 
     func testCodingOrchestrationSeedsFiveAutoClaudeNodes() throws {
@@ -137,6 +317,7 @@ final class CanvasTemplateRegistryTests: XCTestCase {
             let canvasId = "canvas-\(id)-\(UUID().uuidString)"
             let record = try seedTemplate(template, canvasId: canvasId, ownerId: "owner-a")
 
+            XCTAssertNil(record.canvas.sceneSpec, "\(id): must not gain a scene")
             XCTAssertTrue(record.nodes.allSatisfy { $0.executionMode == .human },
                           "\(id): nodes must stay executionMode=.human")
             XCTAssertTrue(record.nodes.allSatisfy { $0.executorType == .human },

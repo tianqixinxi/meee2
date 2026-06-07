@@ -17,6 +17,7 @@ struct CanvasTemplate: Equatable {
     let kind: BoardLayoutStore.CanvasKind
     let category: String   // 'engineering' / 'team' / 'demo'
     let defaultNodes: [TemplateNodeSpec]
+    let sceneSpec: CanvasSceneSpec?
 
     init(
         id: String,
@@ -25,7 +26,8 @@ struct CanvasTemplate: Equatable {
         icon: String,
         kind: BoardLayoutStore.CanvasKind,
         category: String,
-        defaultNodes: [TemplateNodeSpec]
+        defaultNodes: [TemplateNodeSpec],
+        sceneSpec: CanvasSceneSpec? = nil
     ) {
         self.id = id
         self.name = name
@@ -34,6 +36,7 @@ struct CanvasTemplate: Equatable {
         self.kind = kind
         self.category = category
         self.defaultNodes = defaultNodes
+        self.sceneSpec = sceneSpec
     }
 }
 
@@ -114,11 +117,22 @@ enum CanvasTemplateRegistry {
         teamControlTower,
         engineeringRefactor,
         npcCanvas,
+        travelSquad,
+        pokerTable,
         codingOrchestration
     ]
 
     static func get(_ id: String) -> CanvasTemplate? {
         return all.first { $0.id == id }
+    }
+
+    private static func json(_ raw: [String: Any]) -> BoardJSONValue {
+        BoardJSONValue.fromAny(raw) ?? .object([:])
+    }
+
+    private static func boardJSONValue<T: Encodable>(_ value: T) -> BoardJSONValue? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return try? JSONDecoder().decode(BoardJSONValue.self, from: data)
     }
 
     // MARK: - Templates
@@ -340,7 +354,248 @@ enum CanvasTemplateRegistry {
         ]
     )
 
-    /// 7. coding-orchestration — 主从派发编排，主 Agent 拆分需求 → 3 个 sub
+    /// 7. travel-squad — canvas-level scene demo. Nodes stay executable work
+    /// lines; cities/hotels/routes live in scene state and artifacts.
+    static let travelSquad = CanvasTemplate(
+        id: "travel-squad",
+        name: "Travel Squad",
+        description: "旅行规划小队：路线、酒店、美食、预算和最终确认由多个 AI/人工节点推进",
+        icon: "map",
+        kind: .board,
+        category: "demo",
+        defaultNodes: [
+            TemplateNodeSpec(
+                title: "路线规划 Agent",
+                description: "根据城市、天数和约束产出 itinerary.json",
+                status: "ready",
+                positionHint: ["x": -360, "y": 420],
+                executionMode: "auto",
+                executorType: "claude",
+                goal: "产出十天日本旅行的 itinerary.json，包含城市顺序、每日主题和交通建议",
+                outputs: ["itinerary.json"]
+            ),
+            TemplateNodeSpec(
+                title: "酒店 Agent",
+                description: "比较住宿区域和候选酒店，产出 booking-candidates.json",
+                status: "ready",
+                positionHint: ["x": 0, "y": 420],
+                executionMode: "auto",
+                executorType: "claude",
+                goal: "比较东京、京都、大阪的住宿区域和候选酒店，给出预算内推荐",
+                outputs: ["booking-candidates.json"]
+            ),
+            TemplateNodeSpec(
+                title: "美食 Agent",
+                description: "整理餐厅、咖啡和当地体验，产出 places.json",
+                status: "ready",
+                positionHint: ["x": 360, "y": 420],
+                executionMode: "auto",
+                executorType: "claude",
+                goal: "整理旅行中的餐厅、咖啡和当地体验，按城市产出 places.json",
+                outputs: ["places.json"]
+            ),
+            TemplateNodeSpec(
+                title: "预算审批",
+                description: "人工确认预算边界和可接受的酒店价格",
+                status: "blocked",
+                positionHint: ["x": 720, "y": 420],
+                executionMode: "human",
+                executorType: "human",
+                goal: "确认预算上限、住宿偏好和需要重新计算的路线约束",
+                inputs: ["itinerary.json", "booking-candidates.json"],
+                outputs: ["budget.json"]
+            ),
+            TemplateNodeSpec(
+                title: "最终行程确认",
+                description: "收敛路线、酒店、美食和预算，形成最终旅行 brief",
+                status: "ready",
+                positionHint: ["x": 1080, "y": 420],
+                dependsOn: [0, 1, 2, 3],
+                executionMode: "human",
+                executorType: "human",
+                goal: "审核 itinerary、places、booking candidates 和 budget，确认最终旅行方案",
+                inputs: ["itinerary.json", "places.json", "booking-candidates.json", "budget.json"],
+                outputs: ["travel-brief.md"]
+            )
+        ],
+        sceneSpec: CanvasSceneSpec(
+            kind: "travel-squad",
+            assets: [
+                "background": .string("template:travel-squad/map-paper"),
+                "accent": .string("teal")
+            ],
+            initialState: json([
+                "title": "日本十日旅行",
+                "summary": "东京 → 京都 → 大阪，本地结构化示意，不接外部地图 API。",
+                "route": [
+                    ["id": "tokyo", "label": "东京", "days": "D1-D3", "x": 18, "y": 36],
+                    ["id": "kyoto", "label": "京都", "days": "D4-D7", "x": 52, "y": 55],
+                    ["id": "osaka", "label": "大阪", "days": "D8-D10", "x": 78, "y": 68]
+                ],
+                "timeline": [
+                    ["day": "D1", "title": "抵达东京", "owner": "路线规划 Agent"],
+                    ["day": "D4", "title": "新干线到京都", "owner": "路线规划 Agent"],
+                    ["day": "D8", "title": "大阪美食与返程准备", "owner": "美食 Agent"]
+                ],
+                "budget": ["status": "awaiting", "label": "等待预算审批"],
+                "hotels": [
+                    ["city": "东京", "title": "上野 / 银座区域待比较"],
+                    ["city": "京都", "title": "四条河原町 / 京都站待比较"]
+                ]
+            ]),
+            artifactBindings: [
+                CanvasSceneArtifactBinding(id: "itinerary", nodeId: "node:0", reference: "itinerary.json"),
+                CanvasSceneArtifactBinding(id: "hotels", nodeId: "node:1", reference: "booking-candidates.json"),
+                CanvasSceneArtifactBinding(id: "places", nodeId: "node:2", reference: "places.json"),
+                CanvasSceneArtifactBinding(id: "budget", nodeId: "node:3", reference: "budget.json")
+            ],
+            nodeAnchors: [
+                CanvasSceneNodeAnchor(id: "route", label: "路线", nodeId: "node:0", x: 44, y: 30, role: "route"),
+                CanvasSceneNodeAnchor(id: "hotel", label: "酒店", nodeId: "node:1", x: 56, y: 43, role: "hotel"),
+                CanvasSceneNodeAnchor(id: "food", label: "美食", nodeId: "node:2", x: 70, y: 58, role: "food"),
+                CanvasSceneNodeAnchor(id: "budget", label: "预算", nodeId: "node:3", x: 32, y: 66, role: "approval")
+            ],
+            actions: [
+                CanvasSceneAction(id: "replan-route", label: "重算路线", nodeId: "node:0", prompt: "按最新预算和城市偏好重算路线。"),
+                CanvasSceneAction(id: "compare-hotels", label: "比较酒店", nodeId: "node:1", prompt: "更新酒店候选和利弊。"),
+                CanvasSceneAction(id: "review-budget", label: "确认预算", nodeId: "node:3", prompt: "请确认预算约束并产出 budget.json。")
+            ]
+        )
+    )
+
+    /// 8. poker-table — rules-assisted AI role-play canvas. Cards/pot/seats are
+    /// scene state; player agents / GM are executable nodes. Dealer is a
+    /// system state owner for node-scoped artifacts, not an AI session.
+    static let pokerTable = CanvasTemplate(
+        id: "poker-table",
+        name: "Poker Table",
+        description: "德州扑克 AI 角色牌桌：规则调度器维护牌桌状态，玩家和 GM 节点驱动行动 artifact",
+        icon: "club",
+        kind: .board,
+        category: "demo",
+        defaultNodes: [
+            TemplateNodeSpec(
+                title: "Dealer / Table State",
+                description: "系统状态挂载点：Rules Orchestrator 在这里写入 game-state.json 和 action-log.json",
+                status: "ready",
+                positionHint: ["x": -420, "y": 420],
+                executionMode: "auto",
+                executorType: "mock",
+                goal: "作为德州扑克牌桌的权威状态出口；常规规则推进由 Rules Orchestrator 系统写入，不启动 AI session",
+                outputs: ["game-state.json", "action-log.json"]
+            ),
+            TemplateNodeSpec(
+                title: "Ada 玩家 Agent",
+                description: "紧凶型玩家，根据公共信息选择行动",
+                status: "ready",
+                positionHint: ["x": -120, "y": 420],
+                executionMode: "auto",
+                executorType: "claude",
+                goal: "扮演紧凶型玩家 Ada，在轮到自己时选择 fold/call/raise/check 并说明理由",
+                inputs: ["game-state.json"],
+                outputs: ["ada-action.json", "player-model.json"]
+            ),
+            TemplateNodeSpec(
+                title: "Bruno 玩家 Agent",
+                description: "诈唬型玩家，根据公共信息选择行动",
+                status: "ready",
+                positionHint: ["x": 180, "y": 420],
+                executionMode: "auto",
+                executorType: "claude",
+                goal: "扮演诈唬型玩家 Bruno，在轮到自己时选择行动并说明策略",
+                inputs: ["game-state.json"],
+                outputs: ["bruno-action.json", "player-model.json"]
+            ),
+            TemplateNodeSpec(
+                title: "Mina 玩家 Agent",
+                description: "保守观察型玩家，根据公共信息选择行动",
+                status: "ready",
+                positionHint: ["x": 480, "y": 420],
+                executionMode: "auto",
+                executorType: "claude",
+                goal: "扮演保守观察型玩家 Mina，在轮到自己时选择行动并说明风险判断",
+                inputs: ["game-state.json"],
+                outputs: ["mina-action.json", "player-model.json"]
+            ),
+            TemplateNodeSpec(
+                title: "GM / 规则裁判",
+                description: "人工审批揭示、纠正规则辅助判断",
+                status: "ready",
+                positionHint: ["x": 780, "y": 420],
+                executionMode: "human",
+                executorType: "human",
+                goal: "审批揭示、纠正规则辅助判断，并决定是否进入下一手",
+                inputs: ["game-state.json", "action-log.json"],
+                outputs: ["gm-ruling.md"]
+            )
+        ],
+        sceneSpec: CanvasSceneSpec(
+            kind: "poker-table",
+            assets: [
+                "background": .string("template:poker-table/felt"),
+                "felt": .string("emerald")
+            ],
+            initialState: json([
+                "title": "AI Poker Table",
+                "setup": [
+                    "started": false,
+                    "userRole": "observer",
+                    "controlledPlayerId": NSNull(),
+                    "autoRun": true
+                ],
+                "phase": "Pre-flop",
+                "pot": 0,
+                "nextActor": "setup",
+                "nextAction": "Setup",
+                "communityCards": ["??", "??", "??", "??", "??"],
+                "legalActions": [],
+                "handStatus": "setup",
+                "players": [
+                    ["id": "dealer", "name": "Dealer / Table State", "stack": 0, "status": "system", "seat": "top", "holeCards": []],
+                    ["id": "ada", "name": "Ada", "style": "紧凶型", "stack": 1000, "status": "ready", "seat": "left", "holeCards": ["??", "??"]],
+                    ["id": "bruno", "name": "Bruno", "style": "诈唬型", "stack": 1000, "status": "ready", "seat": "right", "holeCards": ["??", "??"]],
+                    ["id": "mina", "name": "Mina", "style": "保守观察", "stack": 1000, "status": "ready", "seat": "bottom", "holeCards": ["??", "??"]]
+                ],
+                "actionLog": [
+                    "请选择你在牌桌里的角色，然后开始游戏。"
+                ],
+                "rulesMode": "phase/order/card-uniqueness assisted; no side-pot engine"
+            ]),
+            artifactBindings: [
+                CanvasSceneArtifactBinding(id: "game-state", nodeId: "node:0", reference: "game-state.json"),
+                CanvasSceneArtifactBinding(id: "action-log", nodeId: "node:0", reference: "action-log.json"),
+                CanvasSceneArtifactBinding(id: "ada", nodeId: "node:1", reference: "ada-action.json"),
+                CanvasSceneArtifactBinding(id: "bruno", nodeId: "node:2", reference: "bruno-action.json"),
+                CanvasSceneArtifactBinding(id: "mina", nodeId: "node:3", reference: "mina-action.json")
+            ],
+            nodeAnchors: [
+                CanvasSceneNodeAnchor(id: "dealer", label: "Table State", nodeId: "node:0", x: 50, y: 16, role: "dealer"),
+                CanvasSceneNodeAnchor(id: "ada", label: "Ada", nodeId: "node:1", x: 16, y: 52, role: "player"),
+                CanvasSceneNodeAnchor(id: "bruno", label: "Bruno", nodeId: "node:2", x: 84, y: 52, role: "player"),
+                CanvasSceneNodeAnchor(id: "mina", label: "Mina", nodeId: "node:3", x: 50, y: 82, role: "player"),
+                CanvasSceneNodeAnchor(id: "gm", label: "GM", nodeId: "node:4", x: 78, y: 18, role: "approval")
+            ],
+            actions: [
+                CanvasSceneAction(id: "next-street", label: "发下一轮牌", nodeId: "node:0", prompt: "推进到下一阶段并更新 game-state.json。"),
+                CanvasSceneAction(id: "ask-ada", label: "要求 Ada 行动", nodeId: "node:1", prompt: "根据当前 game-state.json 给出 Ada 的下一步行动。"),
+                CanvasSceneAction(id: "ask-bruno", label: "要求 Bruno 行动", nodeId: "node:2", prompt: "根据当前 game-state.json 给出 Bruno 的下一步行动。"),
+                CanvasSceneAction(id: "ask-mina", label: "要求 Mina 行动", nodeId: "node:3", prompt: "根据当前 game-state.json 给出 Mina 的下一步行动。"),
+                CanvasSceneAction(id: "gm-review", label: "GM 审批", nodeId: "node:4", prompt: "检查牌局状态和行动是否合法。"),
+                CanvasSceneAction(id: "start-game", label: "开始游戏", nodeId: "node:0", prompt: "由规则调度器初始化 game-state.json 与 action-log.json。"),
+                CanvasSceneAction(id: "step", label: "执行下一步", nodeId: "node:0", prompt: "由规则调度器推进一个可确定的牌局动作。"),
+                CanvasSceneAction(id: "resume-auto", label: "继续自动", nodeId: "node:0", prompt: "由规则调度器继续自动流转直到暂停点。"),
+                CanvasSceneAction(id: "pause-auto", label: "暂停", nodeId: "node:0", prompt: "暂停规则调度器自动流转。")
+            ],
+            orchestration: CanvasSceneOrchestration(
+                kind: "poker-rules-v1",
+                stateNodeId: "node:0",
+                stateReference: "game-state.json",
+                logReference: "action-log.json"
+            )
+        )
+    )
+
+    /// 9. coding-orchestration — 主从派发编排，主 Agent 拆分需求 → 3 个 sub
     ///    并行实现 → 集成验证。全节点 auto + claude，所以用户只需手动「开干」
     ///    主 Agent：它完成后 3 个 sub（.auto + 依赖满足）自动派发，三者都 done
     ///    后集成节点自动派发。依赖以 `dependsOn`(索引) 声明，apply 时落成依赖边。
@@ -483,5 +738,104 @@ enum CanvasTemplateRegistry {
                 widget: spec.widget
             )
         }
+    }
+
+    static func materializeSceneSpec(
+        template: CanvasTemplate,
+        canvasId: String
+    ) -> CanvasSceneSpec? {
+        guard var scene = template.sceneSpec else { return nil }
+
+        func nodeId(forIndex index: Int) -> String {
+            "\(canvasId)-\(template.id)-\(index)"
+        }
+        func resolveNodeId(_ raw: String) -> String {
+            guard raw.hasPrefix("node:"),
+                  let index = Int(raw.dropFirst("node:".count)),
+                  index >= 0,
+                  index < template.defaultNodes.count else {
+                return raw
+            }
+            return nodeId(forIndex: index)
+        }
+
+        scene.artifactBindings = scene.artifactBindings.map { binding in
+            var next = binding
+            next.nodeId = resolveNodeId(binding.nodeId)
+            return next
+        }
+        scene.nodeAnchors = scene.nodeAnchors.map { anchor in
+            var next = anchor
+            next.nodeId = resolveNodeId(anchor.nodeId)
+            return next
+        }
+        scene.actions = scene.actions.map { action in
+            var next = action
+            next.nodeId = resolveNodeId(action.nodeId)
+            return next
+        }
+        if var orchestration = scene.orchestration {
+            orchestration.stateNodeId = orchestration.stateNodeId.map(resolveNodeId)
+            scene.orchestration = orchestration
+        }
+        return scene
+    }
+
+    static func materializeRenderProfile(
+        template: CanvasTemplate,
+        canvasId: String
+    ) -> CanvasRenderProfile {
+        let layout: CanvasRenderLayoutKind = template.sceneSpec == nil
+            ? (template.kind == .monitor ? .collection : .graph)
+            : .spatial
+        var profile = CanvasRenderProfile.default(layout: layout)
+
+        for (index, spec) in template.defaultNodes.enumerated() {
+            let nodeId = "\(canvasId)-\(template.id)-\(index)"
+            profile.values.objects["node:\(nodeId)"] = CanvasRenderObjectValues(
+                x: spec.positionHint?["x"] ?? Double(index) * 320,
+                y: spec.positionHint?["y"] ?? 0,
+                width: spec.positionHint?["width"] ?? 300,
+                height: spec.positionHint?["height"] ?? 168,
+                zIndex: nil,
+                hidden: nil,
+                collapsed: nil,
+                pinned: nil,
+                rendererVariant: spec.widget?.kind.rawValue,
+                density: nil,
+                icon: nil,
+                designToken: nil
+            )
+        }
+
+        if let scene = materializeSceneSpec(template: template, canvasId: canvasId) {
+            var metadata: [String: BoardJSONValue] = ["sceneKind": .string(scene.kind)]
+            if let initialState = scene.initialState {
+                metadata["initialState"] = initialState
+            }
+            if let sceneSpecValue = boardJSONValue(scene) {
+                metadata["sceneSpec"] = sceneSpecValue
+            }
+            profile.values.renderOnlyObjects.append(CanvasObject(
+                id: "scene:\(scene.kind):background",
+                label: "\(scene.kind) background",
+                entityRef: nil,
+                renderOnly: CanvasRenderOnlyObject(kind: .background, id: "scene:\(scene.kind):background"),
+                renderer: .asset,
+                values: nil,
+                metadata: .object(metadata)
+            ))
+            for action in scene.actions {
+                profile.logic.actions.append(CanvasRenderActionRule(
+                    id: "scene-action:\(action.id)",
+                    action: .runSceneAction,
+                    label: action.label,
+                    targetObjectId: "node:\(action.nodeId)",
+                    sceneActionId: action.id
+                ))
+            }
+        }
+
+        return profile
     }
 }

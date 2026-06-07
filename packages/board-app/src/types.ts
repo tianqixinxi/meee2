@@ -130,6 +130,41 @@ export interface SessionIntakeDiagnostics {
   checkedAt: string
 }
 
+export interface BoardPerfMetric {
+  id: string
+  title: string
+  category: string
+  count: number
+  totalMs: number
+  averageMs: number | null
+  p50Ms: number | null
+  p95Ms: number | null
+  maxMs: number | null
+  totalBytes: number
+  lastDetail: string | null
+  lastAt: string | null
+}
+
+export interface BoardPerfEvent {
+  id: string
+  metricId: string
+  title: string
+  category: string
+  durationMs: number | null
+  bytes: number | null
+  detail: string | null
+  at: string
+}
+
+export interface BoardPerfSnapshot {
+  enabled: boolean
+  pid: number
+  startedAt: string
+  capturedAt: string
+  metrics: BoardPerfMetric[]
+  recentEvents: BoardPerfEvent[]
+}
+
 export interface Session {
   id: string
   title: string
@@ -273,7 +308,7 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
-export type CanvasKind = 'board' | 'monitor' | 'template'
+export type CanvasKind = 'board' | 'monitor'
 export type SpawnProvider = 'claude' | 'codex'
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
@@ -392,6 +427,182 @@ export interface CanvasList {
 /** Who can see a planning canvas. Mirrors Swift `PlannerCanvasVisibility`. */
 export type PlannerCanvasVisibility = 'public' | 'private'
 
+export type CanvasSceneKind = 'travel-squad' | 'poker-table' | string
+
+export interface CanvasSceneArtifactBinding {
+  id: string
+  nodeId: string
+  reference: string
+  mode?: 'merge' | 'replace' | string
+}
+
+export interface CanvasSceneNodeAnchor {
+  id: string
+  label: string
+  nodeId: string
+  x: number
+  y: number
+  role?: string | null
+}
+
+export interface CanvasSceneAction {
+  id: string
+  label: string
+  nodeId: string
+  prompt?: string | null
+}
+
+export interface CanvasSceneOrchestration {
+  kind: 'poker-rules-v1' | string
+  stateNodeId?: string | null
+  stateReference?: string | null
+  logReference?: string | null
+}
+
+export interface CanvasSceneSpec {
+  kind: CanvasSceneKind
+  assets?: Record<string, unknown>
+  initialState?: unknown
+  artifactBindings?: CanvasSceneArtifactBinding[]
+  nodeAnchors?: CanvasSceneNodeAnchor[]
+  actions?: CanvasSceneAction[]
+  orchestration?: CanvasSceneOrchestration | null
+}
+
+export type CanvasRenderLayoutKind = 'spatial' | 'graph' | 'collection'
+export type CanvasRenderRendererId =
+  | 'card'
+  | 'document'
+  | 'avatar'
+  | 'container'
+  | 'asset'
+  | 'label'
+  | 'list'
+  | 'kanban'
+  | 'matrix'
+  | 'grid'
+  | 'directed-edge'
+  | 'group-boundary'
+export type CanvasRenderActionId = 'openInspector' | 'openSession' | 'showVersions' | 'runSceneAction' | 'revealProfile'
+export type CanvasObjectEntityKind = 'node' | 'artifact' | 'session' | 'dataSource' | 'subCanvas' | 'integrationEntity'
+export type CanvasRenderOnlyKind = 'background' | 'region' | 'container' | 'label' | 'asset'
+export type CanvasRelationKind = 'dependency' | 'dataflow' | 'membership' | 'projection' | 'spatial-link' | 'grouping'
+
+export interface CanvasObjectEntityRef {
+  kind: CanvasObjectEntityKind
+  id: string
+  nodeId?: string | null
+  reference?: string | null
+}
+
+export interface CanvasRenderOnlyObject {
+  kind: CanvasRenderOnlyKind
+  id: string
+}
+
+export interface CanvasObjectRule {
+  id: string
+  entityKind?: CanvasObjectEntityKind | null
+  renderOnlyKind?: CanvasRenderOnlyKind | null
+  renderer: CanvasRenderRendererId
+}
+
+export interface CanvasRendererRule {
+  id: string
+  renderer: CanvasRenderRendererId
+  entityKind?: CanvasObjectEntityKind | null
+  renderOnlyKind?: CanvasRenderOnlyKind | null
+  variant?: string | null
+  density?: string | null
+}
+
+export interface CanvasRelationRule {
+  id: string
+  kind: CanvasRelationKind
+  renderer: CanvasRenderRendererId
+  visible: boolean
+}
+
+export interface CanvasRenderActionRule {
+  id: string
+  action: CanvasRenderActionId
+  label?: string | null
+  targetObjectId?: string | null
+  sceneActionId?: string | null
+}
+
+export interface CanvasRenderLogic {
+  layout: CanvasRenderLayoutKind
+  objectRules: CanvasObjectRule[]
+  relationRules: CanvasRelationRule[]
+  rendererRules: CanvasRendererRule[]
+  actions: CanvasRenderActionRule[]
+}
+
+export interface CanvasRenderObjectValues {
+  x?: number | null
+  y?: number | null
+  width?: number | null
+  height?: number | null
+  zIndex?: number | null
+  hidden?: boolean | null
+  collapsed?: boolean | null
+  pinned?: boolean | null
+  rendererVariant?: string | null
+  density?: string | null
+  icon?: string | null
+  designToken?: string | null
+}
+
+export interface CanvasRenderRelationValues {
+  visible?: boolean | null
+  label?: string | null
+  routeStyle?: string | null
+}
+
+export interface CanvasObject {
+  id: string
+  label: string
+  entityRef?: CanvasObjectEntityRef | null
+  renderOnly?: CanvasRenderOnlyObject | null
+  renderer: CanvasRenderRendererId
+  values?: CanvasRenderObjectValues | null
+  metadata?: unknown
+}
+
+export interface CanvasRenderValues {
+  objects: Record<string, CanvasRenderObjectValues>
+  relations: Record<string, CanvasRenderRelationValues>
+  renderOnlyObjects: CanvasObject[]
+}
+
+export interface CanvasRenderProfile {
+  version: 1
+  logic: CanvasRenderLogic
+  values: CanvasRenderValues
+}
+
+export interface CanvasRenderProfileStatus {
+  state: 'valid' | 'missing-migrated' | 'invalid-using-last-valid'
+  path: string
+  error?: string | null
+  updatedAt?: string | null
+}
+
+export interface CanvasRelationEndpoint {
+  objectId: string
+}
+
+export interface CanvasRelation {
+  id: string
+  kind: CanvasRelationKind
+  source: CanvasRelationEndpoint
+  target: CanvasRelationEndpoint
+  renderer: CanvasRenderRendererId
+  values?: CanvasRenderRelationValues | null
+  metadata?: unknown
+}
+
 export interface PlanningCanvas {
   id: string
   ownerId: string
@@ -418,6 +629,12 @@ export interface PlanningCanvas {
    * Twin of Zod contract/datasource.ts `DataSource` (only the fields we render
    * are mirrored). */
   dataSources?: DataSourceRecord[]
+  /**
+   * Canvas-level presentation layer for scene templates. It is not a node
+   * widget: scene state starts from the template and is advanced by artifacts
+   * produced by executable nodes.
+   */
+  sceneSpec?: CanvasSceneSpec | null
   /**
    * Atom 2 — first-class consumption edges. AUTHORITATIVE: includes both real
    * mode edges (queue-claim / document-snapshot) AND synthetic
@@ -1330,6 +1547,10 @@ export interface CanvasRuntimeView {
 export type PlannerGraphState = PlannerCanvasState & {
   artifacts: PlannerArtifact[]
   edges: PlannerGraphEdge[]
+  renderProfile?: CanvasRenderProfile | null
+  renderProfileStatus?: CanvasRenderProfileStatus | null
+  renderObjects?: CanvasObject[]
+  renderRelations?: CanvasRelation[]
   /**
    * canvas-spec §7.2 — read-only whole-canvas runtime snapshot consumed by a
    * Monitor html widget. Additive; absent on legacy backends.

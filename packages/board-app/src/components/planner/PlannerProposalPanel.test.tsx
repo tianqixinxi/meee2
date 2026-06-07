@@ -90,6 +90,72 @@ describe('PlannerProposalPanel empty canvas intake', () => {
     expect(screen.getByText('Output')).toBeInTheDocument()
     expect(screen.queryByText(/\*\*Input:/)).not.toBeInTheDocument()
     expect(screen.queryByText('What should I optimize for?')).not.toBeInTheDocument()
+    const prompt = JSON.stringify(apiMocks.streamAssistantChat.mock.calls[0]?.[0]?.messages ?? [])
+    expect(prompt).toContain('A meee2 canvas can be a workflow, monitor, or scene')
+    expect(prompt).toContain('Scene canvas rule')
+    expect(prompt).not.toContain('A meee2 canvas is a graph of executable node cards connected by dependencies')
+  })
+
+  it('submits a confirmed scene template payload when the model returns a poker scene plan', async () => {
+    const onSubmit = vi.fn()
+    apiMocks.streamAssistantChat.mockImplementation(() => streamText(JSON.stringify({
+      action: 'plan',
+      message: '这是一个牌桌 scene canvas。',
+      plan: {
+        title: '德州扑克 Scene Canvas',
+        intro: '确认后用官方 Poker Table 模板创建新画布。',
+        canvasPresentation: 'scene',
+        templateId: 'poker-table',
+        adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
+        steps: [
+          { title: 'Dealer / Table State', body: '系统状态挂载点，维护 game-state.json 和 action-log.json。' },
+          { title: '玩家 Agent', body: '每个玩家根据当前牌局行动。' },
+          { title: 'GM / 规则裁判', body: '审批揭示和规则争议。' },
+        ],
+      },
+    })))
+
+    render(
+      <I18nProvider>
+        <PlannerProposalPanel
+          canvasId="empty-canvas-scene-plan-test"
+          canvasName="德州扑克"
+          proposal={null}
+          previewGraph={{ nodes: [], edges: [] }}
+          busy={false}
+          error={null}
+          access={{
+            actorId: 'local-user',
+            role: 'owner',
+            canCreateProposal: true,
+            canApproveProposal: true,
+            canApplyProposal: true,
+            canRejectProposal: true,
+            canUpdateAssignedNode: true,
+          }}
+          nodeCount={0}
+          hasActionableDrift={false}
+          onSubmit={onSubmit}
+          onApproveAndApply={vi.fn()}
+          onReject={vi.fn()}
+          initialIntakeMessage={{ id: 20, text: '我想开一个 4 人德州扑克 AI 牌局，有 Dealer、3 个玩家、GM 审批' }}
+          emptyMode
+          layout="omni"
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('heading', { name: '德州扑克 Scene Canvas' })).toBeInTheDocument()
+    expect(screen.getByText('Official scene template · Poker Table')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Use scene template' }))
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    const draft = parseConfirmedPlanDraft(String(onSubmit.mock.calls[0][0]))
+    expect(draft).toMatchObject({
+      canvasPresentation: 'scene',
+      templateId: 'poker-table',
+      adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
+    })
   })
 
   it('turns a generic optimization question into a plan for a concrete request', async () => {

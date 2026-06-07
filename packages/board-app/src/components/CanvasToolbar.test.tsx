@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
+import { loadCanvasRecapPosition } from '../preferences'
 import { CanvasToolbar } from './CanvasToolbar'
 
 const apiMocks = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ vi.mock('../api', async () => {
 describe('CanvasToolbar template save flow', () => {
   beforeEach(() => {
     vi.useRealTimers()
+    window.localStorage.clear()
     vi.clearAllMocks()
     apiMocks.fetchTemplateCatalog.mockResolvedValue({
       templates: [],
@@ -350,6 +352,51 @@ describe('CanvasToolbar template save flow', () => {
     vi.useRealTimers()
   })
 
+  it('persists AI recap position per canvas after dragging', () => {
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'board-canvas',
+            name: 'Launch Plan',
+            scope: 'personal',
+            kind: 'board',
+            isDefault: false,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="board-canvas"
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    const recapContext = document.querySelector('.canvas-toolbar__context') as HTMLElement
+    vi.spyOn(recapContext, 'getBoundingClientRect').mockReturnValue({
+      x: 40,
+      y: 50,
+      left: 40,
+      top: 50,
+      right: 400,
+      bottom: 150,
+      width: 360,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    const dragHandle = screen.getByRole('button', { name: 'Move AI recap' })
+    fireEvent(dragHandle, pointerEventWithCoords('pointerdown', 100, 100))
+    fireEvent(dragHandle, pointerEventWithCoords('pointermove', 160, 150))
+    fireEvent(dragHandle, pointerEventWithCoords('pointerup', 160, 150))
+
+    expect(loadCanvasRecapPosition('board-canvas')).toEqual({ x: 100, y: 100 })
+    expect(recapContext).toHaveStyle({ position: 'fixed', left: '100px', top: '100px' })
+  })
+
   it('switches between My and Team canvas tabs in the canvas menu', async () => {
     render(
       <I18nProvider>
@@ -583,3 +630,13 @@ describe('CanvasToolbar template save flow', () => {
     expect(document.querySelector('.canvas-toolbar__hover-recap')).toBeInstanceOf(HTMLElement)
   })
 })
+
+function pointerEventWithCoords(type: string, clientX: number, clientY: number): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperties(event, {
+    pointerId: { value: 1 },
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+  })
+  return event
+}

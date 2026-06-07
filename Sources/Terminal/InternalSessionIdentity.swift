@@ -1,6 +1,11 @@
 import Foundation
 
 public enum InternalSessionIdentity {
+    public struct CliCorrelationIndex {
+        fileprivate let byProviderResumeSessionId: [String: SessionData]
+        fileprivate let byWorkspaceCwd: [String: [SessionData]]
+    }
+
     public static func normalizedManagedWorkspacePath(_ rawPath: String?) -> String? {
         guard let rawPath else { return nil }
         let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -164,6 +169,39 @@ public enum InternalSessionIdentity {
         among candidates: [SessionData],
         surfaceStartedAt: Date? = nil
     ) -> SessionData? {
+        correlatedCliSession(
+            forWorkspaceCwd: rawCwd,
+            in: makeCliCorrelationIndex(candidates: candidates),
+            surfaceStartedAt: surfaceStartedAt
+        )
+    }
+
+    public static func makeCliCorrelationIndex(candidates: [SessionData]) -> CliCorrelationIndex {
+        var byProviderResumeSessionId: [String: SessionData] = [:]
+        var byWorkspaceCwd: [String: [SessionData]] = [:]
+        for candidate in candidates {
+            guard !isSurface(candidate) else { continue }
+            let transcript = (candidate.transcriptPath ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !transcript.isEmpty else { continue }
+            if byProviderResumeSessionId[candidate.sessionId] == nil {
+                byProviderResumeSessionId[candidate.sessionId] = candidate
+            }
+            if let cwd = sessionCwd(candidate) {
+                byWorkspaceCwd[cwd, default: []].append(candidate)
+            }
+        }
+        return CliCorrelationIndex(
+            byProviderResumeSessionId: byProviderResumeSessionId,
+            byWorkspaceCwd: byWorkspaceCwd
+        )
+    }
+
+    public static func correlatedCliSession(
+        forWorkspaceCwd rawCwd: String?,
+        in index: CliCorrelationIndex,
+        surfaceStartedAt: Date? = nil
+    ) -> SessionData? {
         guard let target = normalizedManagedWorkspacePath(rawCwd) else { return nil }
 
         // Only absorb genuine spawn-ordering / clock-granularity skew (the CLI is
@@ -175,12 +213,7 @@ public enum InternalSessionIdentity {
         // candidates. This MUST come before any ranking so a substantive
         // transcript-bearing session can never be out-ranked by a transcript-
         // less or surface record that merely happens to be more recent.
-        let matches = candidates.filter { candidate in
-            guard sessionCwd(candidate) == target else { return false }
-            guard !isSurface(candidate) else { return false }
-            let transcript = (candidate.transcriptPath ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else { return false }
+        let matches = (index.byWorkspaceCwd[target] ?? []).filter { candidate in
             // BUG B temporal guard: a candidate whose LAST activity is before this
             // surface started is by definition a prior run in this reused cwd —
             // reject it (covers the quick-rerun window, not just hour-old runs).
@@ -234,13 +267,18 @@ public enum InternalSessionIdentity {
         forProviderResumeSessionId resumeId: String?,
         among candidates: [SessionData]
     ) -> SessionData? {
+        authoritativeCliSession(
+            forProviderResumeSessionId: resumeId,
+            in: makeCliCorrelationIndex(candidates: candidates)
+        )
+    }
+
+    public static func authoritativeCliSession(
+        forProviderResumeSessionId resumeId: String?,
+        in index: CliCorrelationIndex
+    ) -> SessionData? {
         guard let resumeId = resumeId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !resumeId.isEmpty else { return nil }
-        return candidates.first { candidate in
-            candidate.sessionId == resumeId
-                && !isSurface(candidate)
-                && !(candidate.transcriptPath ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+        return index.byProviderResumeSessionId[resumeId]
     }
 }

@@ -787,7 +787,7 @@ enum AssistantTools {
     private static func submitNodeOutputDef() -> ToolDef {
         ToolDef(
             name: "submit_node_output",
-            description: "Submit structured output for a planner node. meee2 validates routeTo and deterministically routes messages/artifacts to downstream nodes or owner.",
+            description: "Submit structured output once for a completed/blocked planner node attempt. If read_node_contract says output.payload_kind=artifact_ref, put each output slot in artifacts[].reference; do not wrap output in an artifact_ref object. Artifact payloads must be typed objects such as {\"type\":\"json\",\"json\":\"{...}\"} or {\"type\":\"text\",\"text\":\"...\"}. meee2 validates routeTo and routes messages/artifacts to downstream nodes or owner.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -806,12 +806,25 @@ enum AssistantTools {
                         "items": [
                             "type": "object",
                             "properties": [
-                                "kind": ["type": "string"],
-                                "title": ["type": "string"],
-                                "reference": ["type": "string"],
-                                "payload": ["type": "object"],
+                                "kind": [
+                                    "type": "string",
+                                    "description": "Artifact kind, usually generic unless read_node_contract says otherwise."
+                                ],
+                                "title": [
+                                    "type": "string",
+                                    "description": "Human-readable artifact title."
+                                ],
+                                "reference": [
+                                    "type": "string",
+                                    "description": "Output slot/reference from read_node_contract, e.g. game-state.json."
+                                ],
+                                "payload": [
+                                    "type": "object",
+                                    "description": "Typed artifact payload object. Examples: {\"type\":\"json\",\"json\":\"{\\\"ok\\\":true}\"}, {\"type\":\"text\",\"text\":\"summary\"}, {\"type\":\"html\",\"html\":\"<main>...</main>\"}, {\"type\":\"file\",\"file\":{\"path\":\"report.md\",\"mimeType\":\"text/markdown\",\"name\":\"report.md\"}}."
+                                ],
                                 "routeTo": ["type": "array", "items": ["type": "string"]]
-                            ]
+                            ],
+                            "required": ["kind", "title", "reference", "routeTo"]
                         ]
                     ],
                     "next": ["type": "string", "enum": ["complete", "blocked", "needs_owner_review"]],
@@ -896,7 +909,7 @@ enum AssistantTools {
     private static func attachArtifactToNodeDef() -> ToolDef {
         ToolDef(
             name: "attach_artifact_to_node",
-            description: "Attach an artifact reference to a graph node as evidence. This does not change topology.",
+            description: "Attach interim evidence to a graph node without changing node status/topology. Final node results must use submit_node_output. Payload follows the same typed object shape as submit_node_output artifacts.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -906,7 +919,10 @@ enum AssistantTools {
                     "title": ["type": "string"],
                     "reference": ["type": "string"],
                     "status": ["type": "string"],
-                    "payload": ["type": "object"]
+                    "payload": [
+                        "type": "object",
+                        "description": "Typed artifact payload object, e.g. {\"type\":\"json\",\"json\":\"{...}\"} or {\"type\":\"file\",\"file\":{\"path\":\"report.md\",\"mimeType\":\"text/markdown\"}}."
+                    ]
                 ],
                 "required": ["nodeId", "reference"]
             ]
