@@ -801,7 +801,7 @@ function PlannerGraphInner({
         .then((result) => {
           handleGraphStateChanged(result.graph)
           if (actionId !== 'pause-auto') {
-            dispatchNextPokerAutoNode(result.graph, handleCreateNodeSession)
+            dispatchNextPokerAutoNode(result.graph, handleCreateNodeSession, { force: actionId === 'step' })
           }
         })
         .catch((err) => notifyError((err as Error).message || 'Failed to run scene action'))
@@ -3539,6 +3539,7 @@ function buildPokerSceneActionPrompt(
 function dispatchNextPokerAutoNode(
   graph: PlannerGraphState,
   createSession: (nodeId: string, runner: PlannerDispatchRunner, initialPrompt?: string) => void,
+  options: { force?: boolean } = {},
 ) {
   const scene = graph.canvas.sceneSpec
   if (!scene || scene.kind !== 'poker-table') return
@@ -3546,7 +3547,7 @@ function dispatchNextPokerAutoNode(
   const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
     ? state.setup as Record<string, unknown>
     : {}
-  if (setup.autoRun === false) return
+  if (setup.autoRun === false && !options.force) return
   const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
   if (!nextActor || nextActor === 'setup') return
   const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
