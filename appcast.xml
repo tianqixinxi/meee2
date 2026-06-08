@@ -7,6 +7,104 @@
         <description>meee2 release feed</description>
         <language>en</language>
         <item>
+            <title>meee2 v0.5.0</title>
+            <description><![CDATA[## What's Changed
+* [codex] Default production online URL to meee2.com by @rsgok in https://github.com/tianqixinxi/meee2/pull/46
+* [codex] Add team canvas sync by @rsgok in https://github.com/tianqixinxi/meee2/pull/49
+* Refresh canvas list on board events by @rsgok in https://github.com/tianqixinxi/meee2/pull/50
+* [codex] Add React Flow planner graph by @rsgok in https://github.com/tianqixinxi/meee2/pull/51
+* Add awaiting-input run state + reconcile node outputs with artifacts by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/52
+* Wire Swift planner bridge to meee2-online TS sidecar runtime by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/53
+* Release wave: 14 specs (Node Contract v2, sessions, ownership, planner UI, connectors) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/54
+* Optimize meee2 AI native workflow by @rsgok in https://github.com/tianqixinxi/meee2/pull/56
+* UI-6: drop AIRecapDrawer session list, hand off to SessionsView by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/57
+* PlannerCore: cross-ref Swift↔Zod twin enums by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/58
+* Stable machineId UUID + MCP env injects MEEE2_API_URL by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/55
+* Codex/left aichat empty canvas by @rsgok in https://github.com/tianqixinxi/meee2/pull/59
+* [codex] Add Board settings page, light mode, and i18n by @rsgok in https://github.com/tianqixinxi/meee2/pull/60
+* [codex] Document release plan ownership by @rsgok in https://github.com/tianqixinxi/meee2/pull/61
+* [codex] Add cross-platform recap core by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/63
+* [codex] Align Sparkle update docs by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/64
+* [codex] Add unified settings and internal sessions by @rsgok in https://github.com/tianqixinxi/meee2/pull/62
+* [codex] close M0-M4 release hardening gaps by @rsgok in https://github.com/tianqixinxi/meee2/pull/65
+* ui-simplification: wave 1-3 (widget model + 34 UI mental-model fixes) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/67
+* ui-simplification followup: 11 mental-model fixes + missing PR #67 tests by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/68
+* [codex] Add canvas monitor recap flow by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/69
+* fix(theme): complete light-theme coverage for canvas, inspector & transcript by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/71
+* feat(inspector): nodeKind dispatch + artifact mode by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/72
+* feat(artifact): dataSource abstraction — authored / aggregated / mirrored by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/73
+* feat(card): nodeKind 视觉分辨 — kind tag + 色调微差 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/75
+* feat(state-machine): PR-A — validator 4 tai + deprecation alias + artifact-draft-hide by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/74
+* fix(inspector): datasource UI completeness — schema fix + empty-state hints by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/76
+* feat(state-machine): status to 3-tai - drop draft, ready as initial by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/77
+* feat(integration): artifact-driven view + purge fabricated integration data by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/78
+* feat(planner): make HTTP runtime harness configurable, default to real anthropic by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/80
+* feat(create): hide session-kind in create panels (short-term deprecation) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/79
+* feat(card): session-kind nodes show kai-gan button by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/81
+* feat(card): prompt brief one-line on session/step cards by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/82
+* feat(artifact): reviewStatus by payload type + pending badge by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/83
+* feat(monitor): run/wait duration + monitor priority signal by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/84
+* fix(inspector): mode-aware empty state hint for artifact (originally PR #76 promise) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/85
+* feat(inspector): inline editor for first artifact (authored + empty) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/86
+* feat(inspector): runtime info in progress section (workflowRunState + spawn/awaiting buttons) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/87
+* fix(card+inspector): running-session visual + drop legacy session warning by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/88
+* feat(inspector): drop DIALOGUE input section (transcript already covers it) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/89
+* feat(inspector+card): drop input/output sections from Inspector; add Output button to card by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/90
+* Feat/wjk fix sessions layout by @rsgok in https://github.com/tianqixinxi/meee2/pull/66
+* feat(card): artifact node surfaces version chain prominently by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/91
+* fix(inspector): authored editor stays available after first save (multiple versions) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/92
+* [codex] Fix Sessions workspace and Monitor sources by @rsgok in https://github.com/tianqixinxi/meee2/pull/93
+* Require LLM-backed planning and fix internal session workspace by @rsgok in https://github.com/tianqixinxi/meee2/pull/94
+* feat(canvas): 4-atom model + unified Artifact + inspector redesign by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/95
+* fix(planner): make dispatched node sessions observable + UTF-8 tail decode by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/97
+* fix(planner): 「开干」spawned two internal sessions (double-dispatch) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/98
+* test(e2e): regression for 开干 double internal session by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/99
+* [codex] Remove external session management by @rsgok in https://github.com/tianqixinxi/meee2/pull/96
+* fix(planner): deliver dispatch prompt (ready-gated) + don't adopt stale CLI status by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/101
+* ci: run board-app vitest + coverage (informational, non-blocking) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/102
+* [codex] Polish Quick Open and settings by @rsgok in https://github.com/tianqixinxi/meee2/pull/103
+* [codex] Add Claude workflow import by @rsgok in https://github.com/tianqixinxi/meee2/pull/104
+* test(e2e): 开干 auto-starts session + delivers initial prompt by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/105
+* [codex] Upgrade template catalog by @rsgok in https://github.com/tianqixinxi/meee2/pull/106
+* Polish template entry points and monitor layout by @rsgok in https://github.com/tianqixinxi/meee2/pull/108
+* feat(template): coding-orchestration board (主Agent → 前端/后端/重构 子agent) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/109
+* [codex] Add team mode desktop integration by @rsgok in https://github.com/tianqixinxi/meee2/pull/107
+* fix by @rsgok in https://github.com/tianqixinxi/meee2/pull/111
+* feat(planner): internal-PTY terminal, session 3-state model, kanban PM rollup + configurable node states by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/112
+* fix(recap): stop AI-recap infinite respawn that froze the app by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/110
+* Session/terminal lifecycle fixes + resizable nodes + upstream-staleness badge by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/113
+* [codex] Fix planner assistant and terminal layout races by @rsgok in https://github.com/tianqixinxi/meee2/pull/114
+* [codex] Move session terminals into canvas overlay by @rsgok in https://github.com/tianqixinxi/meee2/pull/115
+* fix(board): output artifact inspector visualizes, not data-source binding by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/116
+* Polish planner recap, monitor layout, and assistant session UX by @rsgok in https://github.com/tianqixinxi/meee2/pull/117
+* [codex] Keep ended planner session bindings by @rsgok in https://github.com/tianqixinxi/meee2/pull/118
+* [codex] Add Artifacts global index by @rsgok in https://github.com/tianqixinxi/meee2/pull/119
+* feat(board): session overlay 并排布局 + 节点状态跟会话走 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/120
+* [codex] Improve artifact previews and monitor AI surface by @rsgok in https://github.com/tianqixinxi/meee2/pull/121
+* feat(planner): apply 委托 meee2-online sidecar(方向 A,env-gated,纯 node/edge) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/123
+* feat(planner): GUI 接入 canvas-script 模板(经 sidecar instantiate) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/124
+* feat(planner): step 节点输入面对齐 canvas runtime 数据模型(Edge/EdgeMode/DataSource/sub-view) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/126
+* fix(planner): sidecar URL 默认连 :18890(canvas-script 模板无需手动配 env) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/127
+* fix(planner): step 节点输入面显示 step→artifact→step(配套 Part C 数据流) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/128
+* Add scene canvas templates and poker orchestration by @rsgok in https://github.com/tianqixinxi/meee2/pull/122
+* Fix planner experience todo regressions by @rsgok in https://github.com/tianqixinxi/meee2/pull/130
+
+
+**Full Changelog**: https://github.com/tianqixinxi/meee2/compare/v0.4.4...v0.5.0]]></description>
+            <pubDate>Mon, 08 Jun 2026 19:29:08 +0000</pubDate>
+            <sparkle:version>0.5.0</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/tianqixinxi/meee2/releases/download/v0.5.0/meee2-v0.5.0.dmg"
+                sparkle:version="0.5.0"
+                sparkle:shortVersionString="0.5.0"
+                type="application/octet-stream"
+                sparkle:edSignature="Uo7XYpUwKW+ykGN9YlRVMcTpFa03+08g4LoTKzngJSSib20+UHdG3O8610xmA0Gp0LZ4L1JUugGIBMOL3KS5AQ=="
+                length="23297618" />
+        </item>
+
+        <item>
             <title>meee2 v0.4.4</title>
             <description><![CDATA[## What's Changed
 * fix(board): keep transcript dock open on canvas click (#21) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/30
