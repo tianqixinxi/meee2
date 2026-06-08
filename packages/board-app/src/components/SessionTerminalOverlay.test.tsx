@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
+import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
 import type { CanvasInfo, Session } from '../types'
 import { SessionTerminalOverlay } from './SessionTerminalOverlay'
 
@@ -117,5 +118,39 @@ describe('SessionTerminalOverlay', () => {
         && payload.surfaceId === 'surface-1'
       ))).toBe(true)
     })
+  })
+
+  it('forces follow-up native layouts through the terminal settle window', () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <I18nProvider>
+          <SessionTerminalOverlay
+            target={{ sessionId: 'session-1', canvasId: 'canvas-1' }}
+            session={{ ...session, terminalBackend: 'ghostty-surface' }}
+            canvas={canvas}
+            onClose={vi.fn()}
+          />
+        </I18nProvider>,
+      )
+
+      act(() => {
+        vi.advanceTimersByTime(
+          NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS[
+            NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS.length - 1
+          ],
+        )
+      })
+
+      const forcedLayoutCalls = apiMocks.syncNativeSessionsWorkspace.mock.calls.filter(([payload]) => (
+        payload.phase === 'layout'
+        && payload.mode === 'terminal'
+        && payload.sessionId === 'session-1'
+        && payload.surfaceId === 'surface-1'
+      ))
+      expect(forcedLayoutCalls.length).toBeGreaterThanOrEqual(NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS.length)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

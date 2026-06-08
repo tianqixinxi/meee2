@@ -164,6 +164,7 @@ function resolveReasonKind(input: {
 }): MonitorReasonKind {
   const normalizedStatus = input.status.toLowerCase()
   const workflowRunState = input.node.workflowRunState ?? ''
+  if (nodeIsComplete(input.node)) return 'normal'
   if (normalizedStatus === 'permissionrequired' || input.pendingTool) return 'permission_required'
   if (normalizedStatus === 'waitingforuser') return 'waiting_for_user'
   if (input.inboxPending > 0) return 'inbox_pending'
@@ -172,6 +173,10 @@ function resolveReasonKind(input: {
   if (input.node.status === 'blocked' || input.blockers.length > 0) return 'blocked'
   if (workflowRunState === 'failed' || normalizedStatus === 'failed' || normalizedStatus === 'dead') return 'failed'
   return 'normal'
+}
+
+function nodeIsComplete(node: CanvasMonitorNodeInput): boolean {
+  return node.workflowRunState === 'done' || node.status === 'done'
 }
 
 function findSessionForNode(

@@ -4,4 +4,6 @@ Canvas presentation is modeled through a canvas-owned Render Profile: declarativ
 
 Render Logic is changed through approved proposals because it can reshape what the canvas means, while Render Values may be written directly by UI gestures because they are presentation preferences inside the canvas content. The trade-off is that the canvas layer now owns a stronger render resolver and profile file, but nodes can stay narrowed to executable or owned work instead of carrying visual-only identities such as Artifacts, seats, backgrounds, and labels.
 
+Connected Artifacts and bound concrete sessions are not default Canvas Objects. Artifacts surface through node I/O, the artifact inspector, and explicit output reveal affordances; sessions surface through node execution status and the native terminal overlay. Persisted Render Values may still place deliberate presentation objects, but the default resolver does not turn every connected runtime object into a floating canvas card.
+
 Legacy `sceneSpec`, `monitorSpec`, node widgets, and node layout remain migration sources only. Canvas Scene decisions from ADR-0006 and Rules Orchestrator decisions from ADR-0007 still hold, but the Render Profile is the implementation path for presenting those scenes rather than a parallel scene-specific rendering model.

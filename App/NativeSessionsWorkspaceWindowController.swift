@@ -587,6 +587,7 @@ private final class TerminalPaneRegistry {
     private var controllers: [String: NativeTerminalPaneControlling] = [:]
     private var lru: [String] = []
     private var activeKey: String?
+    private var layoutWorkItems: [DispatchWorkItem] = []
 
     init(hostView: NativeTerminalPaneHostView) {
         self.hostView = hostView
@@ -639,6 +640,7 @@ private final class TerminalPaneRegistry {
         remember(key)
         attach(controller)
         controller.focus()
+        scheduleStabilizedLayouts(for: key, tracePayload: tracePayload)
         Self.logTrace(
             tracePayload,
             phase: "native.workspace.focus.done",
@@ -649,11 +651,23 @@ private final class TerminalPaneRegistry {
     }
 
     func layoutActive() {
+        layoutActive(stabilize: false, tracePayload: nil)
+    }
+
+    private func layoutActive(stabilize: Bool, tracePayload: [String: Any]?) {
         guard let hostView, let controller = activeController else { return }
         controller.layout(in: hostView.bounds, hidden: hostView.bounds.width < 8 || hostView.bounds.height < 8)
+        guard stabilize, hostView.bounds.width >= 8, hostView.bounds.height >= 8 else { return }
+        controller.stabilizeLayout()
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.layout.stabilized",
+            extra: "surface=\(controller.terminalSurfaceId.prefix(8))"
+        )
     }
 
     func hideActive() {
+        cancelStabilizedLayouts()
         activeController?.hide()
         activeKey = nil
     }
@@ -671,6 +685,23 @@ private final class TerminalPaneRegistry {
             hostView.addSubview(controller.paneView)
         }
         controller.layout(in: hostView.bounds, hidden: false)
+    }
+
+    private func scheduleStabilizedLayouts(for key: String, tracePayload: [String: Any]?) {
+        cancelStabilizedLayouts()
+        layoutWorkItems = [40, 140, 320, 700, 1200].map { delayMs in
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, self.activeKey == key else { return }
+                self.layoutActive(stabilize: true, tracePayload: tracePayload)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: item)
+            return item
+        }
+    }
+
+    private func cancelStabilizedLayouts() {
+        layoutWorkItems.forEach { $0.cancel() }
+        layoutWorkItems = []
     }
 
     private func remember(_ key: String) {
@@ -741,6 +772,7 @@ protocol NativeTerminalPaneControlling: AnyObject {
     var terminalSessionId: String? { get }
     func layout(in frame: NSRect, hidden: Bool)
     func focus()
+    func stabilizeLayout()
     func hide()
     func detach()
     func matches(surfaceId: String, sessionId: String?) -> Bool
@@ -748,6 +780,8 @@ protocol NativeTerminalPaneControlling: AnyObject {
 }
 
 extension NativeTerminalPaneControlling {
+    func stabilizeLayout() {}
+
     func matches(surfaceId rawSurfaceId: String, sessionId rawSessionId: String?) -> Bool {
         if !rawSurfaceId.isEmpty, rawSurfaceId == terminalSurfaceId { return true }
         if let rawSessionId, !rawSessionId.isEmpty, rawSessionId == terminalSessionId { return true }

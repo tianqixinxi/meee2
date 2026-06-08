@@ -86,6 +86,20 @@ export function TypedPayloadPreview({ payload }: { payload: ArtifactPayload }) {
           {payload.lines != null && <div><dt>lines</dt><dd>{payload.lines}</dd></div>}
         </dl>
       )
+    case 'json':
+      return (
+        <div className="artifacts-typed-payload artifacts-typed-payload--json">
+          <div className="artifacts-typed-payload__json-summary">{payload.preview}</div>
+          <dl className="artifacts-typed-payload__json-entries">
+            {payload.entries.map((entry) => (
+              <div key={entry.key}>
+                <dt>{entry.key}</dt>
+                <dd>{entry.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )
     case 'markdown':
       return <pre className="artifacts-typed-payload artifacts-typed-payload--markdown">{payload.preview}</pre>
     case 'integration':

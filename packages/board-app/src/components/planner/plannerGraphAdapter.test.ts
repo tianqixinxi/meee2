@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boundSessionIsLive, visibleOutputReferences } from './plannerGraphAdapter'
+import { boundSessionIsLive, buildPlannerGraph, visibleOutputReferences } from './plannerGraphAdapter'
 import type { PlannerArtifact, PlanningNode } from '../../types'
 
 function node(overrides: Partial<PlanningNode> = {}): PlanningNode {
@@ -108,5 +108,37 @@ describe('boundSessionIsLive (canonical alias matching)', () => {
   it('is false for a null bound id or an absent live set', () => {
     expect(boundSessionIsLive(new Set(['abc']), null)).toBe(false)
     expect(boundSessionIsLive(undefined, 'abc')).toBe(false)
+  })
+})
+
+describe('buildPlannerGraph — revealed output artifacts', () => {
+  it('connects a revealed output artifact to downstream nodes', () => {
+    const producer = node({
+      id: 'producer',
+      title: 'Producer',
+      schema: { inputs: [], outputs: ['repo://docs/prd/spec.md'], goal: '' },
+    })
+    const consumer = node({
+      id: 'consumer',
+      title: 'Consumer',
+      schema: { inputs: ['prd'], outputs: [], goal: '' },
+      dependsOnNodeIds: ['producer'],
+    })
+    const graph = buildPlannerGraph({
+      nodes: [producer, consumer],
+      states: [],
+      mode: 'design',
+      artifacts: [artifact({ id: 'art-1', nodeId: 'producer', reference: 'repo://docs/prd/spec.md' })],
+      ioArtifactVisibility: {
+        producer: { inputs: [], outputs: ['repo://docs/prd/spec.md'] },
+      },
+    })
+
+    const artifactNode = graph.nodes.find((item) => item.id.startsWith('io-artifact-producer-output-'))
+    expect(artifactNode).toBeTruthy()
+    expect(graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'producer', target: artifactNode?.id }),
+      expect.objectContaining({ source: artifactNode?.id, target: 'consumer' }),
+    ]))
   })
 })

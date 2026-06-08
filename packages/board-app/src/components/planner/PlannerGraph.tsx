@@ -2962,6 +2962,7 @@ function buildCanvasObjectOverlay(input: {
   const dataSourcesById = new Map((state.canvas.dataSources ?? []).map((source) => [source.id, source]))
   const objects = (state.renderObjects ?? []).filter((object) =>
     object.entityRef?.kind !== 'node'
+    && object.entityRef?.kind !== 'session'
     && object.values?.hidden !== true
     && object.renderOnly?.kind !== 'background',
   )
@@ -3209,19 +3210,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-// 简略进展蒸馏 —— 从实时会话 DTO 里挑出卡片放大后要露的最少信息。和 inspector
-// 「进展」段同源(boardState.sessions),但 inspector 显示 currentTask/currentTool/
-// 最近两条消息/调试 id/一堆按钮,卡片只要「最近一条 AI 回复」。倒序找第一条有文本
-// 的 assistant 条目,文本按卡片宽度截断(服务端已 ~200 字,这里再压到 ~160)。
+// 简略进展蒸馏 —— 从实时会话 DTO 里挑出卡片放大后要露的最少信息。优先使用
+// session recap / summary,避免把最近一条原始 assistant 消息(常带 markdown
+// 和完成报告全文)贴到节点卡片上；没有 summary 时才短 fallback 到 assistant tail。
 function summarizeSessionProgress(session: Session): NodeLiveProgress {
+  const recap = cleanProgressText(session.latestRecap?.content)
+  if (recap) {
+    return { lastReply: { role: 'summary', text: truncateMessageText(recap, 160) } }
+  }
   const messages = session.recentMessages ?? []
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i]
-    if (m.role === 'assistant' && m.text?.trim()) {
-      return { lastReply: { role: m.role, text: truncateMessageText(m.text, 160) } }
+    const text = cleanProgressText(m.text)
+    if (m.role === 'assistant' && text) {
+      return { lastReply: { role: m.role, text: truncateMessageText(text, 160) } }
     }
   }
   return { lastReply: null }
+}
+
+function cleanProgressText(value: string | null | undefined): string | null {
+  const text = value
+    ?.replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#*_`>[\]()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return text || null
 }
 
 // 浅比较两份简略进展,决定注入 effect 要不要给该节点换新 data 对象(换了才重渲染)。

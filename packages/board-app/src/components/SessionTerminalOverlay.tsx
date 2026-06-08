@@ -2,6 +2,7 @@ import { ExternalLink, Terminal as TerminalIcon, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { syncNativeSessionsWorkspace, type NativeTerminalRect } from '../api'
 import { useI18n } from '../lib/i18n'
+import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
 import {
   nativeTerminalTargetForSession,
   type SessionOpenTarget,
@@ -90,7 +91,7 @@ export function SessionTerminalOverlay({
 
   const scheduleStabilizedLayouts = useCallback(() => {
     layoutTimerRefs.current.forEach((timer) => window.clearTimeout(timer))
-    layoutTimerRefs.current = [40, 140, 320].map((delay) => window.setTimeout(() => {
+    layoutTimerRefs.current = NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS.map((delay) => window.setTimeout(() => {
       latestSyncRef.current('layout', { force: true })
     }, delay))
   }, [])
