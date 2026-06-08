@@ -9,10 +9,19 @@ export function resolvedArtifactPayload(
   artifact: PlannerArtifact,
   content?: PlannerArtifactContent,
 ): ArtifactPayload | null {
-  return normalizeArtifactPayload(artifact.typedPayload, artifact.reviewStatus)
-    ?? normalizeArtifactPayload(artifact.payload, artifact.reviewStatus, artifact.kind)
-    ?? normalizeArtifactPayload(content?.payload, artifact.reviewStatus, content?.type ?? artifact.kind)
+  const fetchedPayload = normalizeArtifactPayload(content?.payload, artifact.reviewStatus, content?.type ?? artifact.kind)
     ?? normalizeArtifactPayload(parseJSONMaybe(content?.content), artifact.reviewStatus, content?.type ?? artifact.kind)
+  const artifactPayload = normalizeArtifactPayload(artifact.payload, artifact.reviewStatus, artifact.kind)
+
+  if (isJsonBlobMetadata(artifact.payload) && fetchedPayload?.type === 'json') {
+    return normalizeArtifactPayload(artifact.typedPayload, artifact.reviewStatus)
+      ?? fetchedPayload
+      ?? artifactPayload
+  }
+
+  return normalizeArtifactPayload(artifact.typedPayload, artifact.reviewStatus)
+    ?? artifactPayload
+    ?? fetchedPayload
 }
 
 export function normalizeArtifactPayload(
@@ -226,6 +235,14 @@ function parseJSONMaybe(raw: string | null | undefined): unknown {
   } catch {
     return null
   }
+}
+
+function isJsonBlobMetadata(raw: unknown): boolean {
+  const obj = objectField(raw)
+  if (!obj) return false
+  if (semanticPayloadType(stringField(obj, 'type')) !== 'json') return false
+  if (!stringField(obj, 'blobRef')) return false
+  return obj.data === undefined && obj.value === undefined && obj.items === undefined && obj.json === undefined
 }
 
 function objectField(value: unknown): Record<string, unknown> | null {

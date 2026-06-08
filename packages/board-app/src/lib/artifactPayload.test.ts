@@ -45,4 +45,32 @@ describe('resolvedArtifactPayload — json artifacts', () => {
     expect(payload.preview).toBe('JSON object · 2 fields')
     expect(payload.entries).toContainEqual({ key: 'total', value: '44' })
   })
+
+  it('prefers fetched JSON content over file-backed blob metadata', () => {
+    const content: PlannerArtifactContent = {
+      artifactId: 'art-1',
+      type: 'json',
+      mimeType: 'application/json',
+      filename: 'source_target_candidates.json',
+      size: 128,
+      blobRef: 'artifact://c1/art-1/source_target_candidates.json',
+      content: JSON.stringify([{ source: 'web', target: 'acme.com' }]),
+    }
+
+    const payload = resolvedArtifactPayload(artifact({
+      payload: {
+        type: 'json',
+        blobRef: 'artifact://c1/art-1/source_target_candidates.json',
+        filename: 'source_target_candidates.json',
+        mimeType: 'application/json',
+        size: 128,
+      },
+    }), content)
+
+    expect(payload?.type).toBe('json')
+    if (payload?.type !== 'json') throw new Error('expected json payload')
+    expect(payload.preview).toBe('JSON array · 1 item')
+    expect(payload.entries).toEqual([{ key: '0', value: 'Object(2)' }])
+    expect(payload.entries).not.toContainEqual({ key: 'blobRef', value: 'artifact://c1/art-1/source_target_candidates.json' })
+  })
 })
