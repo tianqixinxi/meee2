@@ -419,9 +419,9 @@ function buildVisibleIOArtifactNodes(input: {
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
   onBindInput?: (nodeId: string, input: string, reference: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
-}): Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }> {
+}): Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection; downstreamNodeIds: string[] }> {
   const graphNodeById = new Map(input.graphNodes.map((node) => [node.id, node]))
-  const result: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }> = []
+  const result: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection; downstreamNodeIds: string[] }> = []
   for (const { node: sourceNode } of input.previewNodes) {
     // canvas-spec §7.1 — step AND session nodes can expand their I/O slot
     // artifacts onto the canvas (both are "会产出 artifact 的节点"). Other kinds
@@ -463,6 +463,12 @@ function buildVisibleIOArtifactNodes(input: {
       const id = ioArtifactNodeId(sourceNode.id, entry.direction, entry.item)
       const artifactKind = entry.artifact ? artifactKindForArtifact(entry.artifact, entry.reference) : artifactKindFor(entry.reference)
       const xOffset = entry.direction === 'input' ? -300 : 360
+      const downstreamNodeIds = entry.direction === 'output'
+        ? input.previewNodes
+          .map(({ node }) => node)
+          .filter((node) => node.id !== sourceNode.id && (node.dependsOnNodeIds ?? []).includes(sourceNode.id))
+          .map((node) => node.id)
+        : []
       const height = artifactKind === 'kanban' ? 280 : 120
       // 默认宽度 seed:kanban 420、html/json/file 360、其余 240。原来这些宽度写死
       // 在 CSS 里;改成 NodeResizer 自由调整后,默认宽度统一由外框 initialWidth 给。
@@ -496,6 +502,7 @@ function buildVisibleIOArtifactNodes(input: {
       result.push({
         sourceNodeId: sourceNode.id,
         direction: entry.direction,
+        downstreamNodeIds,
         node: {
           id,
           type: 'plannerNode' as const,
@@ -541,17 +548,31 @@ function buildVisibleIOArtifactNodes(input: {
 }
 
 function buildIOArtifactEdges(
-  artifactNodes: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }>,
+  artifactNodes: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection; downstreamNodeIds: string[] }>,
 ): PlannerGraphEdge[] {
-  return artifactNodes.map((item) => edgeFor({
-    id: item.direction === 'input'
-      ? `planner-edge-${item.node.id}-${item.sourceNodeId}`
-      : `planner-edge-${item.sourceNodeId}-${item.node.id}`,
-    source: item.direction === 'input' ? item.node.id : item.sourceNodeId,
-    target: item.direction === 'input' ? item.sourceNodeId : item.node.id,
-    perception: 'neutral',
-    preview: false,
-  }))
+  return artifactNodes.flatMap((item) => {
+    const primary = edgeFor({
+      id: item.direction === 'input'
+        ? `planner-edge-${item.node.id}-${item.sourceNodeId}`
+        : `planner-edge-${item.sourceNodeId}-${item.node.id}`,
+      source: item.direction === 'input' ? item.node.id : item.sourceNodeId,
+      target: item.direction === 'input' ? item.sourceNodeId : item.node.id,
+      perception: 'neutral',
+      preview: false,
+    })
+    if (item.direction !== 'output') return [primary]
+    return [
+      primary,
+      ...item.downstreamNodeIds.map((targetNodeId) => edgeFor({
+        id: `planner-edge-${item.node.id}-${targetNodeId}`,
+        source: item.node.id,
+        target: targetNodeId,
+        perception: 'flow',
+        preview: false,
+        suppressInsert: true,
+      })),
+    ]
+  })
 }
 
 function ioArtifactNodeId(nodeId: string, direction: IOArtifactDirection, item: string): string {
@@ -1001,6 +1022,7 @@ function edgeFor(input: {
   preview: boolean
   forceAnimated?: boolean
   onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void
+  suppressInsert?: boolean
   edgeMode?: PlannerEdgeMode
 }): PlannerGraphEdge {
   return {
@@ -1024,7 +1046,7 @@ function edgeFor(input: {
       onInsertTransform: input.onInsertTransform,
       // Preview edges and subCanvas edges should not show the + (would
       // try to mutate a state that doesn't exist yet).
-      suppressInsert: input.preview || Boolean(input.forceAnimated),
+      suppressInsert: input.suppressInsert || input.preview || Boolean(input.forceAnimated),
       edgeMode: input.edgeMode,
     },
     className: [

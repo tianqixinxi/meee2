@@ -2489,6 +2489,26 @@ textarea {
 .artifacts-typed-payload--file dd {
   margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--text);
 }
+.artifacts-typed-payload--json {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.artifacts-typed-payload__json-summary {
+  color: var(--text-dim); font-family: var(--mono); font-size: 11.5px;
+}
+.artifacts-typed-payload__json-entries {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px;
+  margin: 0; padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: 5px; background: rgba(168,165,155,0.06);
+}
+.artifacts-typed-payload__json-entries > div { display: contents; }
+.artifacts-typed-payload__json-entries dt {
+  min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-faint); font-family: var(--mono); font-size: 11px;
+}
+.artifacts-typed-payload__json-entries dd {
+  min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-family: var(--mono); font-size: 11.5px;
+}
 .artifacts-typed-payload--markdown {
   font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: pre-wrap;
   max-height: 240px; overflow: auto; line-height: 1.55;

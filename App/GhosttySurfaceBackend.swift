@@ -338,7 +338,12 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         let startedAt = Date()
         terminalView.window?.makeFirstResponder(terminalView)
         terminalView.setSurfaceVisible(true)
+        fitToCurrentSize()
         logPerf("focus", startedAt: startedAt)
+    }
+
+    func stabilizeLayout() {
+        fitToCurrentSize()
     }
 
     func scrollWheel(with event: NSEvent) {

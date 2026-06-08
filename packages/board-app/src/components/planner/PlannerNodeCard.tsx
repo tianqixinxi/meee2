@@ -1499,6 +1499,9 @@ function compactArtifactPreview(artifact: PlannerArtifact | undefined, max = 90)
       case 'file':
         raw = typed.filename
         break
+      case 'json':
+        raw = typed.preview
+        break
     }
   }
   if (!raw) {

@@ -2997,6 +2997,8 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(boundNode.chatThreadId, "explicit-session")
         XCTAssertEqual(boundNode.source, .session)
         XCTAssertEqual(boundNode.workflowRunState, .running)
+        XCTAssertFalse(graph.renderObjects.contains { $0.entityRef?.kind == .session })
+        XCTAssertFalse(graph.renderObjects.contains { $0.id == "session:explicit-session" })
         // No bind proposal was created — only the governance graph-change one.
         XCTAssertFalse(graph.proposals.contains { $0.summary.contains("Bind") })
 
@@ -3070,10 +3072,10 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertTrue(graph.artifacts.contains { $0.reference == "repo://prd.md" })
         let artifact = try XCTUnwrap(graph.artifacts.first { $0.reference == "repo://prd.md" })
-        XCTAssertTrue(graph.renderObjects.contains {
+        XCTAssertFalse(graph.renderObjects.contains {
             $0.id == "artifact:\(artifact.id)" && $0.entityRef?.kind == .artifact
         })
-        XCTAssertTrue(graph.renderRelations.contains {
+        XCTAssertFalse(graph.renderRelations.contains {
             $0.kind == .dataflow
                 && $0.source.objectId == "node:\(node.id)"
                 && $0.target.objectId == "artifact:\(artifact.id)"

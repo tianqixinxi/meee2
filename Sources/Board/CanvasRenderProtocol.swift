@@ -253,17 +253,6 @@ struct CanvasRenderResolver {
 
         for node in record.nodes {
             append(object(for: node, values: profile.values.objects["node:\(node.id)"]))
-            if let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !sessionId.isEmpty {
-                append(CanvasObject(
-                    id: "session:\(sessionId)",
-                    label: sessionId,
-                    entityRef: CanvasObjectEntityRef(kind: .session, id: sessionId, nodeId: node.id, reference: nil),
-                    renderOnly: nil,
-                    renderer: .avatar,
-                    values: profile.values.objects["session:\(sessionId)"],
-                    metadata: nil
-                ))
-            }
             if let subCanvasId = node.subCanvasId?.trimmingCharacters(in: .whitespacesAndNewlines), !subCanvasId.isEmpty {
                 append(CanvasObject(
                     id: "subCanvas:\(subCanvasId)",
@@ -275,19 +264,6 @@ struct CanvasRenderResolver {
                     metadata: nil
                 ))
             }
-        }
-
-        for artifact in record.artifacts {
-            let objectId = "artifact:\(artifact.id)"
-            append(CanvasObject(
-                id: objectId,
-                label: artifact.title,
-                entityRef: CanvasObjectEntityRef(kind: .artifact, id: artifact.id, nodeId: artifact.nodeId, reference: artifact.reference),
-                renderOnly: nil,
-                renderer: .document,
-                values: profile.values.objects[objectId],
-                metadata: nil
-            ))
         }
 
         for source in record.canvas.dataSources {
@@ -330,24 +306,6 @@ struct CanvasRenderResolver {
         }
 
         var seenRelationIds = Set(relations.map(\.id))
-        for artifact in record.artifacts {
-            let sourceId = "node:\(artifact.nodeId)"
-            let targetId = "artifact:\(artifact.id)"
-            guard seenObjectIds.contains(sourceId), seenObjectIds.contains(targetId) else { continue }
-            let relationId = "dataflow:\(artifact.nodeId):artifact:\(artifact.id)"
-            guard !seenRelationIds.contains(relationId) else { continue }
-            seenRelationIds.insert(relationId)
-            relations.append(CanvasRelation(
-                id: relationId,
-                kind: .dataflow,
-                source: CanvasRelationEndpoint(objectId: sourceId),
-                target: CanvasRelationEndpoint(objectId: targetId),
-                renderer: .directedEdge,
-                values: profile.values.relations[relationId],
-                metadata: nil
-            ))
-        }
-
         for node in record.nodes {
             for upstreamId in node.dependsOnNodeIds ?? [] {
                 let sourceId = "node:\(upstreamId)"
@@ -369,19 +327,6 @@ struct CanvasRenderResolver {
         }
 
         for node in record.nodes {
-            if let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !sessionId.isEmpty {
-                let relationId = "membership:node:\(node.id):session:\(sessionId)"
-                relations.append(CanvasRelation(
-                    id: relationId,
-                    kind: .membership,
-                    source: CanvasRelationEndpoint(objectId: "node:\(node.id)"),
-                    target: CanvasRelationEndpoint(objectId: "session:\(sessionId)"),
-                    renderer: .groupBoundary,
-                    values: profile.values.relations[relationId],
-                    metadata: nil
-                ))
-            }
             if let subCanvasId = node.subCanvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !subCanvasId.isEmpty {
                 let relationId = "projection:node:\(node.id):subCanvas:\(subCanvasId)"

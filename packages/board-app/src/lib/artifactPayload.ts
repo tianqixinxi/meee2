@@ -20,6 +20,9 @@ export function normalizeArtifactPayload(
   reviewStatus?: ArtifactReviewStatus,
   typeHint?: string,
 ): ArtifactPayload | null {
+  if (typeHint === 'json' && Array.isArray(raw)) {
+    return withReview(normalizeJsonPayload(raw), reviewStatus)
+  }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const obj = raw as Record<string, unknown>
   const type = semanticPayloadType(stringField(obj, 'type') ?? typeHint)
@@ -79,6 +82,10 @@ export function normalizeArtifactPayload(
         sizeBytes: numberField(obj, 'sizeBytes') ?? numberField(obj, 'size') ?? 0,
         lines: numberField(obj, 'lines'),
       }, status)
+    }
+    case 'json': {
+      const value = obj.data ?? obj.value ?? obj.items ?? obj
+      return withReview(normalizeJsonPayload(value), status)
     }
     case 'markdown': {
       const preview = stringField(obj, 'preview')
@@ -143,10 +150,60 @@ function semanticPayloadType(value: string | undefined): ArtifactPayload['type']
     || value === 'impl-pr'
     || value === 'check-result'
     || value === 'file'
+    || value === 'json'
     || value === 'markdown'
     || value === 'integration'
   ) return value
   return undefined
+}
+
+function normalizeJsonPayload(value: unknown): Extract<ArtifactPayload, { type: 'json' }> {
+  const rootKind = Array.isArray(value)
+    ? 'array'
+    : value && typeof value === 'object'
+      ? 'object'
+      : 'value'
+  const entries = jsonEntries(value)
+  return {
+    type: 'json',
+    rootKind,
+    preview: jsonPreview(value, rootKind),
+    entries,
+  }
+}
+
+function jsonEntries(value: unknown): Array<{ key: string; value: string }> {
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((item, index) => ({
+      key: String(index),
+      value: jsonCell(item),
+    }))
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).slice(0, 12).map(([key, item]) => ({
+      key,
+      value: jsonCell(item),
+    }))
+  }
+  return [{ key: 'value', value: jsonCell(value) }]
+}
+
+function jsonPreview(value: unknown, rootKind: 'object' | 'array' | 'value'): string {
+  if (Array.isArray(value)) return `JSON array · ${value.length} item${value.length === 1 ? '' : 's'}`
+  if (value && typeof value === 'object') {
+    const count = Object.keys(value as Record<string, unknown>).length
+    return `JSON object · ${count} field${count === 1 ? '' : 's'}`
+  }
+  return `JSON ${rootKind} · ${jsonCell(value)}`
+}
+
+function jsonCell(value: unknown): string {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 80)}...` : value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return `Array(${value.length})`
+  if (typeof value === 'object') return `Object(${Object.keys(value as Record<string, unknown>).length})`
+  return String(value)
 }
 
 function itemTitle(item: unknown): string {

@@ -845,6 +845,8 @@ export type ArtifactPayload =
                                                      failing: string[] })
   | (ArtifactPayloadCommon & { type: 'file';         filename: string; mime: string; sizeBytes: number;
                                                      lines?: number | null })
+  | (ArtifactPayloadCommon & { type: 'json';         rootKind: 'object' | 'array' | 'value'; preview: string;
+                                                     entries: Array<{ key: string; value: string }> })
   | (ArtifactPayloadCommon & { type: 'markdown';     preview: string })
   | (ArtifactPayloadCommon & { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / ...
                                                      externalId: string; externalUrl?: string | null;

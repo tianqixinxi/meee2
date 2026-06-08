@@ -26,6 +26,7 @@ import {
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
+import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
 import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
 interface Props {
@@ -1400,7 +1401,7 @@ function NativeTerminalPanel({
 
   const scheduleStabilizedLayouts = useCallback(() => {
     layoutTimerRefs.current.forEach((timer) => window.clearTimeout(timer))
-    layoutTimerRefs.current = [40, 140, 320].map((delay) => window.setTimeout(() => {
+    layoutTimerRefs.current = NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS.map((delay) => window.setTimeout(() => {
       syncNative('layout', { force: true })
     }, delay))
   }, [syncNative])
