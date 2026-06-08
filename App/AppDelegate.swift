@@ -131,12 +131,27 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         schedulePostLaunchStartup(launchStartedAt: launchStartedAt)
     }
 
+    /// 首次启动(从未启动过 meee2)返回 true 并打标,只触发一次。让新用户自动看到
+    /// Board 里的 FirstRunOnboarding 引导 —— 菜单栏 app 双击后默认只有图标,引导窗口
+    /// 本来要靠用户自己点菜单 "Open Board" 才出现,新用户根本不知道有这一步。
+    private static func consumeFirstLaunchOnboardingFlag() -> Bool {
+        let key = "meee2.hasLaunchedBefore"
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: key) { return false }
+        defaults.set(true, forKey: key)
+        return true
+    }
+
     private func schedulePostLaunchStartup(launchStartedAt: Date) {
         DispatchQueue.main.async { [weak self] in
             self?.startSessionRuntime()
             self?.startBoardServer()
 
-            if BoardCommand.shouldShowOnLaunch {
+            // 新用户首次启动:自动打开 Board,让 FirstRunOnboarding 引导接住他们。
+            // 否则菜单栏 app 双击后只有图标,引导窗口要靠用户自己点菜单 "Open Board"
+            // 才出现 —— 新用户根本不知道有这步。flag 先消费,保证只弹一次。
+            let isFirstLaunch = Self.consumeFirstLaunchOnboardingFlag()
+            if BoardCommand.shouldShowOnLaunch || isFirstLaunch {
                 DispatchQueue.main.async { [weak self] in
                     self?.openBoardMenu()
                 }

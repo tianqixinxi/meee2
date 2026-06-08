@@ -64,14 +64,16 @@ public enum ReadinessDoctor {
             title: "Claude Code runtime",
             providerName: "Claude Code",
             component: runtime.claude,
-            actionId: "configure-provider-claude"
+            actionId: "configure-provider-claude",
+            notFoundDetail: "Claude Code not found. Install it with `npm install -g @anthropic-ai/claude-code`, then reopen meee2."
         ))
         checks.append(providerCheck(
             id: "provider.codex",
             title: "Codex runtime",
             providerName: "Codex",
             component: runtime.codex,
-            actionId: "configure-provider-codex"
+            actionId: "configure-provider-codex",
+            notFoundDetail: "Codex not found. Install the Codex CLI (`npm install -g @openai/codex`), then reopen meee2."
         ))
         checks.append(hookCheck(hookStatus))
         checks.append(hookSocketCheck())
@@ -139,7 +141,8 @@ public enum ReadinessDoctor {
         title: String,
         providerName: String,
         component: AgentRuntimeComponentStatus,
-        actionId: String
+        actionId: String,
+        notFoundDetail: String
     ) -> ReadinessCheck {
         if component.available {
             let passed = component.configured
@@ -169,7 +172,7 @@ public enum ReadinessDoctor {
             title: title,
             status: .info,
             severity: .informational,
-            detail: "\(providerName) was not found on this Mac.",
+            detail: notFoundDetail,
             recoveryAction: nil,
             metadata: [
                 "cliAvailable": "false",
