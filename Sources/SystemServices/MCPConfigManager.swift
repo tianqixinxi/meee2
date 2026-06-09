@@ -73,9 +73,28 @@ public final class MCPConfigManager {
         let entry = mcpServers[serverName] as? [String: Any]
         let configCommand = entry?["command"] as? String
         let configArgs = entry?["args"] as? [String] ?? []
-        let configured = configCommand != nil && !configArgs.isEmpty
-        let command = configCommand ?? "node"
-        let args = configArgs.isEmpty ? [expectedServerPath] : configArgs
+        let selfConfigured = configCommand != nil && !configArgs.isEmpty
+        // 插件接管模式:官方插件启用时 ensureRegistered() 会刻意清掉自注册条目,
+        // 注册改由插件管理(mcp__plugin_meee2_meee2__*),launcher 跑的是
+        // ~/.meee2/mcp-meee2/ 下的 staged bridge。诊断必须认这条路径,否则
+        // readiness 的 mcpCheck 因 configured=false 永远报红并循环触发修复。
+        let pluginManaged = !selfConfigured && Meee2AgentRuntimeInstaller.meee2ClaudePluginActive()
+        let configured = selfConfigured || pluginManaged
+        let stagedServerPath = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent(subdir, isDirectory: true)
+            .appendingPathComponent(serverJsName).path
+        // 插件模式下没有 config 里的 command 可抄,GUI 精简 PATH 里裸 `node`
+        // 大概率不可用,按注册路径同款逻辑解析绝对路径再探测。
+        let command = configCommand ?? (pluginManaged ? resolveNodeBinary() : "node")
+        let args: [String]
+        if !configArgs.isEmpty {
+            args = configArgs
+        } else if pluginManaged, FileManager.default.fileExists(atPath: stagedServerPath) {
+            args = [stagedServerPath]
+        } else {
+            args = [expectedServerPath]
+        }
         let serverPath = args.first ?? expectedServerPath
         let serverExists = FileManager.default.fileExists(atPath: serverPath)
         let nodeAvailable = commandAvailable(command)
@@ -134,8 +153,13 @@ public final class MCPConfigManager {
         )
     }
 
-    /// 应用启动时调；无论现在是啥状态都收敛到"已注册，命令指向当前的 server.js
-    /// 绝对路径"。
+    /// 应用启动时调；把 meee2 的 MCP 注册收敛到正确状态。
+    ///
+    /// 合并策略:官方插件(meee2@meee2-official)已装且启用时,**让位给插件那套
+    /// `mcp__plugin_meee2_meee2__*`** —— 不再自注册一个会与之冲突、且 app 重建后
+    /// 路径/env 易陈旧的 `mcp__meee2__` server,并清掉历史上写过的自注册条目。
+    /// 插件不在时保留自注册作 fallback(Claude.app 无 CLI / 纯 Codex 等装不了插件
+    /// 的环境仍要能用)。Claude 与 Codex 各自独立判断。
     public func ensureRegistered() {
         let expectedServerPath = resolveServerScriptPath()
         NSLog("[MCPConfigManager] expected server.js path: \(expectedServerPath)")
@@ -145,9 +169,11 @@ public final class MCPConfigManager {
             return
         }
 
+        let claudePluginActive = Meee2AgentRuntimeInstaller.meee2ClaudePluginActive()
+
         // node 路径——meee2 作为 launchd 启动的 GUI app，PATH 是精简版，不含
-        // nvm / Homebrew 目录；裸 `node` 的 MCP 条目在 meee2 自己以及它派发的
-        // session 里都起不来。注册时解析出一个绝对路径写进去。
+        // nvm / Homebrew 目录；裸 `node` 的 MCP 条目起不来。注册时解析出绝对路径。
+        // (Codex 始终自注册,所以 nodeBin 总要解析。)
         let nodeBin = resolveNodeBinary()
         if nodeBin == "node" {
             NSLog("[MCPConfigManager] WARNING: could not resolve an absolute node path; falling back to bare `node` (requires Node.js >= 18 on the spawner PATH).")
@@ -155,48 +181,53 @@ public final class MCPConfigManager {
             NSLog("[MCPConfigManager] resolved node binary → \(nodeBin)")
         }
 
+        // ── Claude Code (~/.claude.json + settings.json allowlist) ──
+        // 官方插件已装且启用 → 让位给 mcp__plugin_meee2_meee2__*,清掉自注册条目;
+        // 否则保留自注册作 fallback(Claude.app 无 CLI 等装不了插件的环境)。
+        if claudePluginActive {
+            NSLog("[MCPConfigManager] meee2 Claude plugin active → MCP via mcp__plugin_meee2_meee2__*; not self-registering")
+            deregisterClaudeSelfEntry()
+            // 插件 launcher 优先用 ~/.meee2/mcp-meee2/server.js;发布一份与当前 app 同版的 bridge。
+            _ = try? stageServerForPluginRuntime()
+            syncMeee2Allowlist(usePlugin: true)
+        } else {
+            registerClaudeSelfEntry(serverPath: expectedServerPath, nodeBin: nodeBin)
+            syncMeee2Allowlist(usePlugin: false)
+        }
+
+        // ── Codex (~/.codex/config.toml) ──
+        // 不在本次合并范围:readiness 的 codexMCPConfigured() 依赖这个自注册块,
+        // 保持原有的无条件自注册行为。
+        ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
+    }
+
+    /// 自注册路径:把 `mcpServers.meee2` 写进 ~/.claude.json(读→merge→原子写)。
+    /// 仅当 Claude 插件不在时调用。env 里仅当用户显式配置 self-hosted base URL 时
+    /// 才注入 MEEE2_API_URL,默认 SaaS 保留 MCP server 的本地优先 discovery。
+    private func registerClaudeSelfEntry(serverPath: String, nodeBin: String) {
         var rootObject: [String: Any] = readConfig() ?? [:]
         var mcpServers = (rootObject["mcpServers"] as? [String: Any]) ?? [:]
 
         let existing = mcpServers[serverName] as? [String: Any]
         let existingCmd = existing?["command"] as? String
-        let existingArgs = existing?["args"] as? [String]
-        let existingArgsFirst = existingArgs?.first
-
-        // Already correctly registered → 跳过 mcpServers 写入但 permissions
-        // allowlist 仍要 ensure（旧版本 meee2 注册了 server 但没配 allowlist，
-        // 升级到新版后第一次启动需要补上）。
-        // 同时检查 env 里有没有 MEEE2_API_URL —— M1 之前注册的 entry 没这个
-        // 字段，MCP server 会一直降级走老的直连 Supabase 路径并喷 deprecation
-        // warning，所以发现缺失也要重写。
-        // 仅当用户显式配置了 self-hosted base URL 时才注入 MEEE2_API_URL。
-        // 默认 SaaS 场景下不写,这样 MCP server 的 discoverAPI() 仍可以走
-        // 本机 127.0.0.1 BoardServer 优先发现路径,避免 session/inbox/planner
-        // 这种本地接口被强制重路由到公网导致功能丢失。
+        let existingArgsFirst = (existing?["args"] as? [String])?.first
         let existingEnv = existing?["env"] as? [String: String] ?? [:]
         let apiUrlOverride = Meee2Identity.apiUrlOverride
         let envIsCorrect: Bool = {
             if let override = apiUrlOverride {
                 return existingEnv["MEEE2_API_URL"] == override
-            } else {
-                return existingEnv["MEEE2_API_URL"] == nil
             }
+            return existingEnv["MEEE2_API_URL"] == nil
         }()
-        if existingCmd == nodeBin,
-           existingArgsFirst == expectedServerPath,
-           envIsCorrect {
+        if existingCmd == nodeBin, existingArgsFirst == serverPath, envIsCorrect {
             NSLog("[MCPConfigManager] already registered with correct path + env, noop")
-            ensurePermissionsAllowlist()
-            ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
             return
         }
 
-        // env: 用户配置了 self-hosted base URL 时才传 MEEE2_API_URL,
-        // 让 SaaS 默认安装保留 MCP server 的本地优先 discovery 行为。
         var entry: [String: Any] = [
             "type": "stdio",
             "command": nodeBin,
-            "args": [expectedServerPath]
+            "args": [serverPath]
         ]
         if let override = apiUrlOverride {
             entry["env"] = ["MEEE2_API_URL": override]
@@ -206,21 +237,26 @@ public final class MCPConfigManager {
 
         guard writeConfigAtomic(rootObject) else {
             NSLog("[MCPConfigManager] failed to write ~/.claude.json; leaving it alone")
-            ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
             return
         }
+        NSLog(existing == nil
+            ? "[MCPConfigManager] registered meee2 MCP server → \(serverPath)"
+            : "[MCPConfigManager] updated meee2 MCP server path → \(serverPath)")
+    }
 
-        if existing == nil {
-            NSLog("[MCPConfigManager] registered meee2 MCP server → \(expectedServerPath)")
-        } else {
-            NSLog("[MCPConfigManager] updated meee2 MCP server path → \(expectedServerPath)")
+    /// 插件接管 Claude 侧时,清掉历史上自注册的 `mcpServers.meee2`(若有),
+    /// 避免与 mcp__plugin_meee2_meee2__* 双注册。幂等。
+    private func deregisterClaudeSelfEntry() {
+        guard var rootObject = readConfig(),
+              var mcpServers = rootObject["mcpServers"] as? [String: Any],
+              mcpServers[serverName] != nil else {
+            return
         }
-
-        // 把 meee2 的 MCP tool 加进 settings.json 的 permissions.allow，
-        // agent 调用就不再被 PermissionRequest 弹框拦住。幂等：已经全部都在
-        // 就静默退出。
-        ensurePermissionsAllowlist()
-        ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
+        mcpServers.removeValue(forKey: serverName)
+        rootObject["mcpServers"] = mcpServers
+        if writeConfigAtomic(rootObject) {
+            NSLog("[MCPConfigManager] removed legacy self-registered meee2 entry from ~/.claude.json (plugin active)")
+        }
     }
 
     public func currentServerScriptPath() -> String {
@@ -255,26 +291,32 @@ public final class MCPConfigManager {
         return targetDir.appendingPathComponent(serverJsName).path
     }
 
-    /// 确保 meee2 的 MCP tool 全部在 `~/.claude/settings.json` 的
-    /// `permissions.allow` 里。读 → merge → 原子写。文件缺失时创建一个
-    /// 只包含我们这些 tool 的最小文档（不破坏 SettingsConfigManager 的 hooks
-    /// 流，因为它走自己的 ensureHooksConfigured，会再次 read+merge 自己的
-    /// 字段，不依赖整个文件状态）。
-    private func ensurePermissionsAllowlist() {
+    /// 把 settings.json 的 permissions.allow 收敛到当前生效那套 meee2 MCP tool。
+    /// usePlugin=true → `mcp__plugin_meee2_meee2__*`(插件命名空间);否则 → 自注册的
+    /// `mcp__meee2__*`。两套命名空间互斥:切过去时把另一套残留条目一并清掉,避免
+    /// allowlist 里堆叠失效项。读 → merge → 原子写,幂等。
+    private func syncMeee2Allowlist(usePlugin: Bool) {
+        let legacyPrefix = "mcp__meee2__"
+        let pluginPrefix = "mcp__plugin_meee2_meee2__"
+        let bases = mcpToolNames.map { $0.replacingOccurrences(of: legacyPrefix, with: "") }
+        let desired = bases.map { (usePlugin ? pluginPrefix : legacyPrefix) + $0 }
+        let desiredSet = Set(desired)
+
         var rootObject: [String: Any] = readSettings() ?? [:]
         var permissions = (rootObject["permissions"] as? [String: Any]) ?? [:]
         var allow = (permissions["allow"] as? [String]) ?? []
 
-        let supportedMeee2Tools = Set(mcpToolNames)
         let originalCount = allow.count
+        // 保留:非 meee2 条目,或正好属于想要那套。其余 meee2 条目(含另一命名空间)清掉。
         allow = allow.filter { name in
-            !name.hasPrefix("mcp__meee2__") || supportedMeee2Tools.contains(name)
+            let isMeee2 = name.hasPrefix(legacyPrefix) || name.hasPrefix(pluginPrefix)
+            return !isMeee2 || desiredSet.contains(name)
         }
-
+        let keptCount = allow.count
         let existing = Set(allow)
-        let missing = mcpToolNames.filter { !existing.contains($0) }
-        if missing.isEmpty && allow.count == originalCount {
-            // 全部已在，不动磁盘
+        let missing = desired.filter { !existing.contains($0) }
+        if missing.isEmpty && keptCount == originalCount {
+            // 已经正好是想要那套,不动磁盘
             return
         }
         allow.append(contentsOf: missing)
@@ -285,9 +327,8 @@ public final class MCPConfigManager {
             NSLog("[MCPConfigManager] failed to write settings.json permissions allowlist")
             return
         }
-        let names = missing.joined(separator: ", ")
-        let removedCount = originalCount - allow.count + missing.count
-        NSLog("[MCPConfigManager] permissions.allow synced meee2 MCP tools; added \(missing.count), removed \(removedCount). Added: \(names)")
+        let removedCount = originalCount - keptCount
+        NSLog("[MCPConfigManager] permissions.allow → \(usePlugin ? "plugin" : "self") namespace; added \(missing.count), removed \(removedCount)")
     }
 
     /// Codex 的 MCP 配置是 TOML：

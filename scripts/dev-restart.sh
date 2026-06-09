@@ -14,6 +14,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# 项目级 env:加载仓库根的 .env(若存在),变量自动 export(set -a)。把
+# MEEE2_ONLINE_APP_BASE_URL 等放进 .env 即可,不必每次命令带 env / 改全局 shell。
+# .env 本地忽略(.git/info/exclude),不进版本库 —— 可放凭证。
+set -a
+[ -f .env ] && . ./.env
+set +a
+
 BINARY=".build/arm64-apple-macosx/debug/meee2"
 if [[ ! -x "$BINARY" ]]; then
   echo "meee2 debug binary not found at $BINARY — did you run 'swift build'?" >&2

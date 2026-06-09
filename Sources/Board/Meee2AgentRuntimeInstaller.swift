@@ -243,6 +243,10 @@ enum Meee2AgentRuntimeInstaller {
             }
         }
 
+        // 插件可能刚装上 → 再收敛一次 MCP 注册:此时 meee2PluginActive() 已能
+        // 看到插件,会清掉自注册的 mcp__meee2__,不必等下次 app 启动。幂等。
+        MCPConfigManager.shared.ensureRegistered()
+
         let status = diagnose(forceRefresh: true)
         let ok: Bool
         switch normalized {
@@ -411,6 +415,47 @@ enum Meee2AgentRuntimeInstaller {
         guard let text = try? String(contentsOf: config, encoding: .utf8) else { return false }
         return text.contains("[marketplaces.\(marketplaceName)]")
             || text.contains("[marketplaces.\"\(marketplaceName)\"]")
+    }
+
+    /// 权威、无副作用的"meee2 官方 Claude 插件是否已装且启用"检测。
+    /// MCPConfigManager 用它决定 Claude 侧是否让位给插件(mcp__plugin_meee2_meee2__*),
+    /// 停止自注册一个会冲突、且 app 重建后路径/env 易陈旧的 mcp__meee2__ server。
+    /// 纯文件读,不跑 `claude` 子进程,可安全用在启动路径上:
+    /// installed_plugins.json 有安装记录,且 settings.json 的 enabledPlugins
+    /// 没把它显式置 false(缺省视为启用)。
+    /// (Codex 侧不在此合并范围 —— readiness 的 codexMCPConfigured() 依赖自注册的
+    ///  [mcp_servers.meee2] 块,故 Codex 继续自注册,保持现状。)
+    static func meee2ClaudePluginActive() -> Bool {
+        claudePluginActiveFromState()
+    }
+
+    private static func claudePluginActiveFromState() -> Bool {
+        let home = URL(fileURLWithPath: NSHomeDirectory())
+        let installed = home
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent("installed_plugins.json")
+        guard
+            let data = try? Data(contentsOf: installed),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let plugins = root["plugins"] as? [String: Any],
+            let records = plugins[pluginSelector] as? [[String: Any]],
+            !records.isEmpty
+        else {
+            return false
+        }
+        // 已装。再看启用状态:enabledPlugins[selector] 显式为 false 才算禁用,缺省启用。
+        let settings = home
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("settings.json")
+        if let sdata = try? Data(contentsOf: settings),
+           let sroot = try? JSONSerialization.jsonObject(with: sdata) as? [String: Any],
+           let enabled = sroot["enabledPlugins"] as? [String: Any],
+           let flag = enabled[pluginSelector] as? Bool,
+           flag == false {
+            return false
+        }
+        return true
     }
 
     private static func codexPluginInstalled() -> Bool {
