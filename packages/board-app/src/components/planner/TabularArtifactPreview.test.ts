@@ -21,6 +21,15 @@ describe('parseTabular', () => {
     expect(data?.totalRows).toBe(50)
   })
 
+  it('discovers columns from every rendered row, not just an early prefix', () => {
+    // 键在第 25 行才首次出现 — 行在渲染范围内(MAX_ROWS=30),列必须被发现。
+    const rows: Array<Record<string, unknown>> = Array.from({ length: 30 }, (_, i) => ({ company: `c${i}` }))
+    rows[24].late_field = 'surfaced'
+    const data = parseTabular(rows)
+    expect(data?.columns).toContain('late_field')
+    expect(data?.rows[24][1]).toBe('surfaced')
+  })
+
   it('caps columns at 8 and counts dropped ones', () => {
     const wide = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`k${i}`, i]))
     const data = parseTabular([wide])

@@ -16,8 +16,6 @@
 
 const MAX_ROWS = 30
 const MAX_COLUMNS = 8
-/** 列发现只扫前 N 行 — 防止超长数组里晚出现的稀有键把表头抖宽。 */
-const COLUMN_SCAN_ROWS = 20
 const MAX_CELL_CHARS = 120
 
 export interface TabularData {
@@ -68,8 +66,13 @@ export function parseTabular(value: unknown): TabularData | null {
     }
   }
 
+  // 列发现必须覆盖每一条「会被渲染」的行:只扫一个比 MAX_ROWS 小的前缀的话,
+  // 晚出现的键(行 21–30 才有的字段)会被静默吞掉且 droppedColumns 还是 0 —
+  // 违背 footer 的「不静默截断」承诺。MAX_ROWS 之外的行本来就不渲染,
+  // 它们的键不参与发现。
+  const renderedRows = objectRows.slice(0, MAX_ROWS)
   const allColumns: string[] = []
-  for (const row of objectRows.slice(0, COLUMN_SCAN_ROWS)) {
+  for (const row of renderedRows) {
     for (const key of Object.keys(row)) {
       if (!allColumns.includes(key)) allColumns.push(key)
     }
@@ -77,7 +80,7 @@ export function parseTabular(value: unknown): TabularData | null {
   const columns = allColumns.slice(0, MAX_COLUMNS)
   return {
     columns,
-    rows: objectRows.slice(0, MAX_ROWS).map((row) => columns.map((c) => cellText(row[c]))),
+    rows: renderedRows.map((row) => columns.map((c) => cellText(row[c]))),
     totalRows: objectRows.length,
     droppedColumns: allColumns.length - columns.length,
   }
