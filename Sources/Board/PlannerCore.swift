@@ -4971,18 +4971,57 @@ final class PlannerStore {
                 let alreadyTerminal = record.nodes[stepIndex].outputSubmittedAt != nil
                     || record.nodes[stepIndex].workflowRunState == .done
                 guard boundToThisSession, !alreadyTerminal else { return record }
-                record.nodes[stepIndex].sessionId = sessionId
-                record.nodes[stepIndex].chatThreadId = sessionId
-                record.nodes[stepIndex].source = .session
-                record.nodes[stepIndex].workflowRunState = .awaitingInput
-                record.nodes[stepIndex].status = .blocked
-                record.nodes[stepIndex].blockedReason = "Session \(String(sessionId.prefix(8))) 已结束；可打开恢复，或替换为新会话。"
-                if let legacySessionIndex {
-                    record.nodes[legacySessionIndex].sessionId = sessionId
-                    record.nodes[legacySessionIndex].chatThreadId = sessionId
-                    record.nodes[legacySessionIndex].workflowRunState = .awaitingInput
-                    record.nodes[legacySessionIndex].status = .blocked
+                let endedReason = "Session \(String(sessionId.prefix(8))) 已结束；可打开恢复，或替换为新会话。"
+
+                // 幂等守卫:节点可能早已被 demote 成「会话已结束 / awaitingInput」这个
+                // 稳定终态。缺这个守卫时,每次 /api/state 轮询(多个 board 客户端 × ~1Hz)
+                // 都会对一个早已结束的会话重写同样字段、append 一条重复的 nodeStateChanged
+                // 事件、再 save() —— events.jsonl 无界膨胀(实测单 canvas 涨到 ~1.5 万条 /
+                // ~5MB),每次 save 全量重编码 state.json + events.jsonl,把一个核烧满。
+                // 只有字段真有变化才落库,语义对齐下方活会话分支的 `guard changed`。
+                // sessionId 已等于入参(boundToThisSession 已校验),无需重新赋值。
+                var changed = false
+                if record.nodes[stepIndex].source != .session {
+                    record.nodes[stepIndex].source = .session
+                    changed = true
                 }
+                if record.nodes[stepIndex].chatThreadId != sessionId {
+                    record.nodes[stepIndex].chatThreadId = sessionId
+                    changed = true
+                }
+                if record.nodes[stepIndex].workflowRunState != .awaitingInput {
+                    record.nodes[stepIndex].workflowRunState = .awaitingInput
+                    changed = true
+                }
+                if record.nodes[stepIndex].status != .blocked {
+                    record.nodes[stepIndex].status = .blocked
+                    changed = true
+                }
+                if record.nodes[stepIndex].blockedReason != endedReason {
+                    record.nodes[stepIndex].blockedReason = endedReason
+                    changed = true
+                }
+                if let legacySessionIndex {
+                    if record.nodes[legacySessionIndex].sessionId != sessionId {
+                        record.nodes[legacySessionIndex].sessionId = sessionId
+                        changed = true
+                    }
+                    if record.nodes[legacySessionIndex].chatThreadId != sessionId {
+                        record.nodes[legacySessionIndex].chatThreadId = sessionId
+                        changed = true
+                    }
+                    if record.nodes[legacySessionIndex].workflowRunState != .awaitingInput {
+                        record.nodes[legacySessionIndex].workflowRunState = .awaitingInput
+                        changed = true
+                    }
+                    if record.nodes[legacySessionIndex].status != .blocked {
+                        record.nodes[legacySessionIndex].status = .blocked
+                        changed = true
+                    }
+                }
+
+                guard changed else { return record }
+
                 record.events.append(event(
                     canvasId: canvasId,
                     type: .nodeStateChanged,

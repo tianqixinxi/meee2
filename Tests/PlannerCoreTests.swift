@@ -4264,6 +4264,62 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(node.blockedReason, "Session claude-d 已结束；可打开恢复，或替换为新会话。")
     }
 
+    /// Regression (PERF): the dead-session demotion branch must be idempotent.
+    /// Root cause of a pegged CPU core — `/api/state` polling (multiple board
+    /// clients × ~1Hz) kept feeding an already-ended session through
+    /// `applyRunStateForSession(.pending)`. That branch had no `guard changed`,
+    /// so every poll re-wrote identical fields, re-appended an identical
+    /// `nodeStateChanged` event, and re-`save()`d the whole canvas. events.jsonl
+    /// grew without bound (observed ~15k duplicate events / ~5MB) and each save
+    /// re-encoded the full log → one core burned at 100%. After the fix,
+    /// re-observing a dead session must NOT append new events or grow the log.
+    func testDeadSessionRunStateIsIdempotentAndDoesNotGrowEventLog() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-dead",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: .running
+        )
+
+        // First dead observation — demotes the node (one legit state change).
+        let afterFirstDeath = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: PlannerSessionRunStateBridge.runState(for: .dead)
+        )
+        let baselineEventCount = try XCTUnwrap(afterFirstDeath).events.count
+
+        // Subsequent identical dead observations (simulating repeated
+        // /api/state polls) must be no-ops — no new events, log must not grow.
+        for _ in 0..<10 {
+            let record = try PlannerBoardBridge.store.applyRunStateForSession(
+                sessionId: "claude-dead",
+                runState: PlannerSessionRunStateBridge.runState(for: .dead)
+            )
+            XCTAssertEqual(
+                try XCTUnwrap(record).events.count,
+                baselineEventCount,
+                "repeated dead-session observation must not append duplicate events"
+            )
+        }
+
+        // Behavior preserved: the node stays correctly demoted for resume.
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.sessionId, "claude-dead")
+        XCTAssertEqual(node.workflowRunState, .awaitingInput)
+        XCTAssertEqual(node.status, .blocked)
+        XCTAssertEqual(node.blockedReason, "Session claude-d 已结束；可打开恢复，或替换为新会话。")
+    }
+
     /// Regression: when an agent calls `submit_node_output` with status=blocked,
     /// the Claude session returning to idle right after must NOT flip the node
     /// back to dispatched / wipe the blockedReason. Reproduces the
