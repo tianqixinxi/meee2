@@ -44,6 +44,7 @@ import { getWidgetComponent } from './widgets'
 import { resolveWidgetData } from './widgetDataResolver'
 import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
 import { getViewSchema } from '../../integrations/viewSchemas'
+import { TabularArtifactPreview, parseArtifactJSON, parseTabular } from './TabularArtifactPreview'
 import {
   ARTIFACT_LABELS,
   CARD_TOOLTIPS,
@@ -1013,6 +1014,14 @@ function ArtifactPreview({
     )
   }
   if (kind === 'json') {
+    // 数组形 JSON(节点输出最常见:一批公司/任务/记录)→ 表格可视化;
+    // 解析不出表格(对象/标量/超限)退回原来的 <pre> dump。
+    const parsed =
+      parseArtifactJSON(content?.content)
+      ?? parseArtifactJSON(inlineString(artifact.payload, 'json'))
+      ?? content?.payload
+    const table = parseTabular(parsed)
+    if (table) return <TabularArtifactPreview data={table} />
     const value = content?.content ?? inlineString(artifact.payload, 'json') ?? JSON.stringify(content?.payload ?? artifact.payload ?? {}, null, 2)
     return <pre className="planner-node__artifact-pre">{value}</pre>
   }
@@ -1020,6 +1029,18 @@ function ArtifactPreview({
     return <IntegrationArtifactPreview artifact={artifact} content={content} />
   }
   if (kind === 'file') {
+    // .json 文件不再只给「文件名 + 大小」存根 — 内容已经随 content 端点
+    // 全量返回,结构是数组就直接画表,文件信息折进表格 footer。
+    const looksJson = /json/i.test(content?.mimeType ?? '')
+      || /\.json$/i.test(content?.filename ?? '')
+      || /\.json$/i.test(artifact.reference)
+    const table = looksJson ? parseTabular(parseArtifactJSON(content?.content)) : null
+    if (table) {
+      const caption = [content?.filename, typeof content?.size === 'number' ? formatBytes(content.size) : '']
+        .filter(Boolean)
+        .join(' · ')
+      return <TabularArtifactPreview data={table} caption={caption || undefined} />
+    }
     return <ArtifactMetadata artifact={artifact} content={content} label={ARTIFACT_LABELS.fileLabel} />
   }
   const text = content?.content ?? inlineString(artifact.payload, 'text')
