@@ -4264,6 +4264,121 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(node.blockedReason, "Session claude-d 已结束；可打开恢复，或替换为新会话。")
     }
 
+    /// Regression (PERF): the dead-session demotion branch must be idempotent.
+    /// Root cause of a pegged CPU core — `/api/state` polling (multiple board
+    /// clients × ~1Hz) kept feeding an already-ended session through
+    /// `applyRunStateForSession(.pending)`. That branch had no `guard changed`,
+    /// so every poll re-wrote identical fields, re-appended an identical
+    /// `nodeStateChanged` event, and re-`save()`d the whole canvas. events.jsonl
+    /// grew without bound (observed ~15k duplicate events / ~5MB) and each save
+    /// re-encoded the full log → one core burned at 100%. After the fix,
+    /// re-observing a dead session must NOT append new events or grow the log.
+    func testDeadSessionRunStateIsIdempotentAndDoesNotGrowEventLog() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-dead",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: .running
+        )
+
+        // First dead observation — demotes the node (one legit state change).
+        let afterFirstDeath = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: PlannerSessionRunStateBridge.runState(for: .dead)
+        )
+        let baselineEventCount = try XCTUnwrap(afterFirstDeath).events.count
+
+        // Subsequent identical dead observations (simulating repeated
+        // /api/state polls) must be no-ops — no new events, log must not grow.
+        for _ in 0..<10 {
+            let record = try PlannerBoardBridge.store.applyRunStateForSession(
+                sessionId: "claude-dead",
+                runState: PlannerSessionRunStateBridge.runState(for: .dead)
+            )
+            XCTAssertEqual(
+                try XCTUnwrap(record).events.count,
+                baselineEventCount,
+                "repeated dead-session observation must not append duplicate events"
+            )
+        }
+
+        // Behavior preserved: the node stays correctly demoted for resume.
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.sessionId, "claude-dead")
+        XCTAssertEqual(node.workflowRunState, .awaitingInput)
+        XCTAssertEqual(node.status, .blocked)
+        XCTAssertEqual(node.blockedReason, "Session claude-d 已结束；可打开恢复，或替换为新会话。")
+    }
+
+    /// Regression (review follow-up): the idempotency guard must also see
+    /// active-run drift, not just blueprint-node fields. After a node is
+    /// demoted by a dead observation, starting a fresh run resets that run's
+    /// nodeStates to .pending; the next dead observation hits the guard with
+    /// unchanged blueprint fields. If the guard only compared PlanningNode,
+    /// it would short-circuit before mirrorIntoActiveRun and the new run
+    /// would keep showing pending/ready-to-dispatch for a still-bound dead
+    /// session. The re-sync must also converge (no event growth afterwards).
+    func testDeadSessionReMirrorsIntoFreshRunAndStillConverges() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-dead",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: .running
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: PlannerSessionRunStateBridge.runState(for: .dead)
+        )
+
+        // Fresh run after the demotion — its nodeStates start over from
+        // .pending while the blueprint node keeps the demoted fields.
+        let freshRun = try PlannerBoardBridge.startRun(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+
+        // Next dead observation: blueprint unchanged, but the run is out of
+        // sync → must mirror the demotion into the fresh run.
+        let resynced = try XCTUnwrap(try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: PlannerSessionRunStateBridge.runState(for: .dead)
+        ))
+        let run = try XCTUnwrap(resynced.runs.first { $0.id == freshRun.id })
+        let runNode = try XCTUnwrap(run.nodeStates[stepId])
+        XCTAssertEqual(runNode.runState, .awaitingInput, "fresh run must reflect the dead-session demotion")
+        XCTAssertEqual(runNode.sessionId, "claude-dead")
+
+        // Once re-synced, further dead observations are no-ops again.
+        let settledEventCount = resynced.events.count
+        for _ in 0..<5 {
+            let record = try PlannerBoardBridge.store.applyRunStateForSession(
+                sessionId: "claude-dead",
+                runState: PlannerSessionRunStateBridge.runState(for: .dead)
+            )
+            XCTAssertEqual(
+                try XCTUnwrap(record).events.count,
+                settledEventCount,
+                "re-sync must converge — no event growth after the run is mirrored"
+            )
+        }
+    }
+
     /// Regression: when an agent calls `submit_node_output` with status=blocked,
     /// the Claude session returning to idle right after must NOT flip the node
     /// back to dispatched / wipe the blockedReason. Reproduces the

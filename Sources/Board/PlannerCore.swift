@@ -4971,25 +4971,62 @@ final class PlannerStore {
                 let alreadyTerminal = record.nodes[stepIndex].outputSubmittedAt != nil
                     || record.nodes[stepIndex].workflowRunState == .done
                 guard boundToThisSession, !alreadyTerminal else { return record }
-                record.nodes[stepIndex].sessionId = sessionId
-                record.nodes[stepIndex].chatThreadId = sessionId
-                record.nodes[stepIndex].source = .session
-                record.nodes[stepIndex].workflowRunState = .awaitingInput
-                record.nodes[stepIndex].status = .blocked
-                record.nodes[stepIndex].blockedReason = "Session \(String(sessionId.prefix(8))) 已结束；可打开恢复，或替换为新会话。"
-                if let legacySessionIndex {
-                    record.nodes[legacySessionIndex].sessionId = sessionId
-                    record.nodes[legacySessionIndex].chatThreadId = sessionId
-                    record.nodes[legacySessionIndex].workflowRunState = .awaitingInput
-                    record.nodes[legacySessionIndex].status = .blocked
+                let endedReason = "Session \(String(sessionId.prefix(8))) 已结束；可打开恢复，或替换为新会话。"
+
+                // 幂等守卫:节点可能早已被 demote 成「会话已结束 / awaitingInput」这个
+                // 稳定终态。缺这个守卫时,每次 /api/state 轮询(多个 board 客户端 × ~1Hz)
+                // 都会对一个早已结束的会话重写同样字段、append 一条重复的 nodeStateChanged
+                // 事件、再 save() —— events.jsonl 无界膨胀(实测单 canvas 涨到 ~1.5 万条 /
+                // ~5MB),每次 save 全量重编码 state.json + events.jsonl,把一个核烧满。
+                // 只有字段真有变化才落库,语义对齐下方活会话分支的 `guard changed`。
+                // sessionId 已等于入参(boundToThisSession 已校验),无需重新赋值。
+                var changed = false
+                if record.nodes[stepIndex].source != .session {
+                    record.nodes[stepIndex].source = .session
+                    changed = true
                 }
-                record.events.append(event(
-                    canvasId: canvasId,
-                    type: .nodeStateChanged,
-                    nodeId: record.nodes[stepIndex].id,
-                    summary: "\(record.nodes[stepIndex].title) — session ended, kept binding for resume"
-                ))
-                mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
+                if record.nodes[stepIndex].chatThreadId != sessionId {
+                    record.nodes[stepIndex].chatThreadId = sessionId
+                    changed = true
+                }
+                if record.nodes[stepIndex].workflowRunState != .awaitingInput {
+                    record.nodes[stepIndex].workflowRunState = .awaitingInput
+                    changed = true
+                }
+                if record.nodes[stepIndex].status != .blocked {
+                    record.nodes[stepIndex].status = .blocked
+                    changed = true
+                }
+                if record.nodes[stepIndex].blockedReason != endedReason {
+                    record.nodes[stepIndex].blockedReason = endedReason
+                    changed = true
+                }
+                if let legacySessionIndex {
+                    if record.nodes[legacySessionIndex].sessionId != sessionId {
+                        record.nodes[legacySessionIndex].sessionId = sessionId
+                        changed = true
+                    }
+                    if record.nodes[legacySessionIndex].chatThreadId != sessionId {
+                        record.nodes[legacySessionIndex].chatThreadId = sessionId
+                        changed = true
+                    }
+                    if record.nodes[legacySessionIndex].workflowRunState != .awaitingInput {
+                        record.nodes[legacySessionIndex].workflowRunState = .awaitingInput
+                        changed = true
+                    }
+                    if record.nodes[legacySessionIndex].status != .blocked {
+                        record.nodes[legacySessionIndex].status = .blocked
+                        changed = true
+                    }
+                }
+
+                // Active run 的 nodeStates 是独立于蓝图字段的另一份状态:节点
+                // demote 后若又启动了新 run,WorkflowRun.start 会把该 run 里的
+                // 节点重置回 .pending。守卫只看蓝图字段会在这种漂移下短路,run
+                // 一直显示 pending/可派发而不是 awaitingInput。所以把「镜像后
+                // run 状态是否有变化」一起算进幂等判断:漂移时照常 mirror +
+                // recompute,一次即收敛,不会回到每次轮询都落库的老问题。
+                let demoteMirror: (inout RunNodeState) -> Void = { state in
                     state.sessionId = sessionId
                     state.chatThreadId = sessionId
                     state.runState = .awaitingInput
@@ -5001,6 +5038,27 @@ final class PlannerStore {
                         state.attempts[last].runState = .awaitingInput
                     }
                 }
+                var runOutOfSync = false
+                if let runIdx = activeRunIndex(in: record) {
+                    // 只比较 demote 负责的字段。nextAction 归 recomputeActiveRun
+                    // (WorkflowRunEngine.advance 每次重算)所有,镜像副本整体对比
+                    // 会在 nextAction 上永远不相等,重新退化成每次轮询都落库。
+                    let existing = record.runs[runIdx].nodeStates[stepNodeId]
+                    runOutOfSync = existing?.runState != .awaitingInput
+                        || existing?.sessionId != sessionId
+                        || existing?.chatThreadId != sessionId
+                        || existing?.finishedAt != nil
+                }
+
+                guard changed || runOutOfSync else { return record }
+
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .nodeStateChanged,
+                    nodeId: record.nodes[stepIndex].id,
+                    summary: "\(record.nodes[stepIndex].title) — session ended, kept binding for resume"
+                ))
+                mirrorIntoActiveRun(&record, nodeId: stepNodeId, mutate: demoteMirror)
                 recomputeActiveRun(&record)
                 document.canvases[canvasId] = record
                 try save(canvasId: canvasId)
