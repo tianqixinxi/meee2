@@ -73,9 +73,28 @@ public final class MCPConfigManager {
         let entry = mcpServers[serverName] as? [String: Any]
         let configCommand = entry?["command"] as? String
         let configArgs = entry?["args"] as? [String] ?? []
-        let configured = configCommand != nil && !configArgs.isEmpty
-        let command = configCommand ?? "node"
-        let args = configArgs.isEmpty ? [expectedServerPath] : configArgs
+        let selfConfigured = configCommand != nil && !configArgs.isEmpty
+        // 插件接管模式:官方插件启用时 ensureRegistered() 会刻意清掉自注册条目,
+        // 注册改由插件管理(mcp__plugin_meee2_meee2__*),launcher 跑的是
+        // ~/.meee2/mcp-meee2/ 下的 staged bridge。诊断必须认这条路径,否则
+        // readiness 的 mcpCheck 因 configured=false 永远报红并循环触发修复。
+        let pluginManaged = !selfConfigured && Meee2AgentRuntimeInstaller.meee2ClaudePluginActive()
+        let configured = selfConfigured || pluginManaged
+        let stagedServerPath = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent(subdir, isDirectory: true)
+            .appendingPathComponent(serverJsName).path
+        // 插件模式下没有 config 里的 command 可抄,GUI 精简 PATH 里裸 `node`
+        // 大概率不可用,按注册路径同款逻辑解析绝对路径再探测。
+        let command = configCommand ?? (pluginManaged ? resolveNodeBinary() : "node")
+        let args: [String]
+        if !configArgs.isEmpty {
+            args = configArgs
+        } else if pluginManaged, FileManager.default.fileExists(atPath: stagedServerPath) {
+            args = [stagedServerPath]
+        } else {
+            args = [expectedServerPath]
+        }
         let serverPath = args.first ?? expectedServerPath
         let serverExists = FileManager.default.fileExists(atPath: serverPath)
         let nodeAvailable = commandAvailable(command)
