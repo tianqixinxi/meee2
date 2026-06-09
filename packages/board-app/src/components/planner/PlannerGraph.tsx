@@ -2902,10 +2902,15 @@ function mergeGraphNodesPreservingPositions(
       dragging: current.dragging,
       // 宽高自由调整 — NodeResizer 把用户调整后的尺寸记在 width/height 上。和
       // position 一样要保留:落库还没回来的那个间隙里若来一次无关轮询重建,
-      // 不保留就会把正在调整的卡片弹回默认尺寸。measured 不保留,交给 react-flow
-      // 的 ResizeObserver 重新量,避免内容变化后高度记成旧值。
+      // 不保留就会把正在调整的卡片弹回默认尺寸。
       width: current.width ?? nextNode.width,
       height: current.height ?? nextNode.height,
+      // measured 也必须保留:react-flow 见到没有 measured 的节点会重置
+      // handleBounds 并按 initialHeight 渲染一帧再重测(adoptUserNodes →
+      // parseHandles),节点高度闪一下、连接线端点跟着每次轮询抖一次。内容变化
+      // 不靠丢 measured 兜底——ResizeObserver 发现真实尺寸变化会发 dimensions
+      // change,经 handleNodesChange/applyNodeChanges 持续写回 measured。
+      measured: current.measured,
       // 简略进展 — liveProgress 由 nodeProgressByNodeId 注入到 flowNodes(见上面的
       // 注入 effect),buildPlannerGraph 不产出它。结构重建时从 current 带过来,
       // 否则 plannerState 一变就把卡片上的「最近 AI 回复」清掉、要等下一次轮询才回填。
