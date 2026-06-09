@@ -42,6 +42,8 @@ import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
 import { getWidgetComponent } from './widgets'
 import { resolveWidgetData } from './widgetDataResolver'
+import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
+import { getViewSchema } from '../../integrations/viewSchemas'
 import {
   ARTIFACT_LABELS,
   CARD_TOOLTIPS,
@@ -1027,6 +1029,43 @@ function ArtifactPreview({
 function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerArtifact; content: PlannerArtifactContent | null }) {
   const payload = objectPayload(artifact.payload)
   const url = stringField(payload, 'url') ?? (artifact.reference.includes('://') ? artifact.reference : null)
+  // Integration view 层(节点级):能投影成已注册的 IntegrationEntity 时,走
+  // view-schema 渲染 — badge(integration:entityKind + secondary)+ preview
+  // detail 行(label 从 entity payload 取值,typedPayload.fields 已铺进去)。
+  // 投影不出来(未注册的 connector / 裸 URL)退回原 provider/summary/url 简版。
+  const entity = artifactToIntegrationEntity(artifact)
+  const schema = entity ? viewSchemaOf(entity.schemaId) : undefined
+  if (entity && schema) {
+    const entityPayload = objectPayload(entity.payload)
+    // 只认投影产出的 url(artifactToIntegrationEntity 已滤掉 gsheet:// 等内部
+    // scheme)。这里不能再兜底上面的 raw `url` — 它会把内部引用变回死链接。
+    const entityUrl = stringField(entityPayload, 'url')
+    const secondary = stringField(entityPayload, 'secondary')
+    const details = schema.preview.details
+      .map((d) => ({ ...d, value: d.value || scalarField(entityPayload, d.label) }))
+      .filter((d) => d.value && d.kind !== 'link')
+      .slice(0, 4)
+    return (
+      <div className="planner-node__integration-preview">
+        <strong>
+          {schema.integrationId}:{schema.entityKind}
+          {secondary ? ` · ${secondary}` : ''}
+        </strong>
+        {details.length > 0 && (
+          <span>
+            {details.map((d) => `${d.label} ${d.value}`).join(' · ')}
+          </span>
+        )}
+        {entityUrl ? (
+          <a href={entityUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+            {entityUrl}
+          </a>
+        ) : (
+          <code>{artifact.reference}</code>
+        )}
+      </div>
+    )
+  }
   const provider = stringField(payload, 'provider') ?? artifact.kind
   const summary = stringField(payload, 'summary') ?? content?.content
   return (
@@ -1042,6 +1081,22 @@ function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerAr
       )}
     </div>
   )
+}
+
+/** `<integrationId>:<entityKind>` → view schema(拆分一次,避免两处 slice)。 */
+function viewSchemaOf(schemaId: string) {
+  const sep = schemaId.indexOf(':')
+  if (sep <= 0) return undefined
+  return getViewSchema(schemaId.slice(0, sep), schemaId.slice(sep + 1))
+}
+
+/** detail 行取值:integration fields 是 string|number 混合(rows/columns 是数),
+ *  stringField 只认 string 会把数值行整行丢掉。 */
+function scalarField(object: Record<string, unknown> | null, field: string): string {
+  const value = object?.[field]
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
 }
 
 function ArtifactMetadata({

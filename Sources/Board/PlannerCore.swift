@@ -2551,6 +2551,9 @@ extension NodeContractV2 {
             ("https://github.com", "github"),
             ("git@github.com", "github"),
             ("github://", "github"),
+            // 顺序敏感:spreadsheets 是 docs.google.com 的子路径,必须排在前面。
+            ("https://docs.google.com/spreadsheets", "google-sheets"),
+            ("gsheet://", "google-sheets"),
             ("https://docs.google.com", "google-docs"),
             ("gdoc://", "google-docs"),
             ("file://", "file"),

@@ -108,12 +108,14 @@ export function normalizeArtifactPayload(
     case 'integration': {
       const connector = stringField(obj, 'connector') ?? stringField(obj, 'source') ?? 'external'
       const externalId = stringField(obj, 'externalId') ?? stringField(obj, 'id') ?? ''
+      const fields = flatRecordField(obj, 'fields')
       return withReview({
         type: 'integration',
         connector,
         externalId,
         externalUrl: stringField(obj, 'externalUrl') ?? stringField(obj, 'url'),
         summary: stringField(obj, 'summary') ?? stringField(obj, 'preview'),
+        ...(fields ? { fields } : {}),
       }, status)
     }
     default:
@@ -264,6 +266,20 @@ function numberField(obj: Record<string, unknown>, key: string): number | undefi
 function arrayField(obj: Record<string, unknown>, key: string): unknown[] {
   const value = obj[key]
   return Array.isArray(value) ? value : []
+}
+
+/** 只保留 string/number 值的扁平对象(integration.fields — view detail 行的数据面)。 */
+function flatRecordField(
+  obj: Record<string, unknown>,
+  key: string,
+): Record<string, string | number> | undefined {
+  const value = objectField(obj[key])
+  if (!value) return undefined
+  const out: Record<string, string | number> = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))) out[k] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function stringArrayField(obj: Record<string, unknown>, key: string): string[] {
