@@ -115,6 +115,16 @@ export function TypedPayloadPreview({ payload }: { payload: ArtifactPayload }) {
             </a>
           )}
           {payload.summary && <div className="artifacts-typed-payload__integration-summary">{payload.summary}</div>}
+          {payload.fields && Object.keys(payload.fields).length > 0 && (
+            <dl className="artifacts-typed-payload__entries">
+              {Object.entries(payload.fields).map(([key, value]) => (
+                <div key={key}>
+                  <dt>{key}</dt>
+                  <dd>{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
         </div>
       )
   }
