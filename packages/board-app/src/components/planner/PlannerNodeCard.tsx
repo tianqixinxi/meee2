@@ -1037,7 +1037,9 @@ function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerAr
   const schema = entity ? viewSchemaOf(entity.schemaId) : undefined
   if (entity && schema) {
     const entityPayload = objectPayload(entity.payload)
-    const entityUrl = stringField(entityPayload, 'url') ?? url
+    // 只认投影产出的 url(artifactToIntegrationEntity 已滤掉 gsheet:// 等内部
+    // scheme)。这里不能再兜底上面的 raw `url` — 它会把内部引用变回死链接。
+    const entityUrl = stringField(entityPayload, 'url')
     const secondary = stringField(entityPayload, 'secondary')
     const details = schema.preview.details
       .map((d) => ({ ...d, value: d.value || scalarField(entityPayload, d.label) }))
