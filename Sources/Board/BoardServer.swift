@@ -628,6 +628,10 @@ public final class BoardServer {
         server.POST["/api/planner/canvases/:id/scene/actions"] = BoardServer.cors(BoardAPI.runCanvasSceneAction)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
         server.GET["/api/planner/canvases/:id/artifacts/:artifactId/content"] = BoardServer.cors(BoardAPI.getPlannerArtifactContent)
+        // Direct artifact-layer read/write — 账本直改,不经节点状态机。
+        // session(MCP get_artifact/update_artifact)与人工同走这两个端点。
+        server.GET["/api/planner/canvases/:id/artifacts/latest"] = BoardServer.cors(BoardAPI.getLatestPlannerArtifacts)
+        server.POST["/api/planner/canvases/:id/artifacts/update"] = BoardServer.cors(BoardAPI.updatePlannerArtifact)
         // UI-1 (ENG-3) — artifact version chain read API.
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/artifact-versions"] = BoardServer.cors(BoardAPI.listPlannerArtifactVersions)
         server.GET["/api/planner/canvases/:id/artifact-versions/:versionId"] = BoardServer.cors(BoardAPI.getPlannerArtifactVersion)

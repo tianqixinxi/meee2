@@ -42,7 +42,9 @@ public final class MCPConfigManager {
         "mcp__meee2__read_inbox",
         "mcp__meee2__read_node_contract",
         "mcp__meee2__submit_node_output",
-        "mcp__meee2__attach_artifact_to_node"
+        "mcp__meee2__attach_artifact_to_node",
+        "mcp__meee2__get_artifact",
+        "mcp__meee2__update_artifact"
     ]
 
     private var configPath: URL {
