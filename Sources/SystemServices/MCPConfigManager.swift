@@ -44,7 +44,8 @@ public final class MCPConfigManager {
         "mcp__meee2__submit_node_output",
         "mcp__meee2__attach_artifact_to_node",
         "mcp__meee2__get_artifact",
-        "mcp__meee2__update_artifact"
+        "mcp__meee2__update_artifact",
+        "mcp__meee2__update_artifact_views"
     ]
 
     private var configPath: URL {
@@ -100,7 +101,7 @@ public final class MCPConfigManager {
         let serverPath = args.first ?? expectedServerPath
         let serverExists = FileManager.default.fileExists(atPath: serverPath)
         let nodeAvailable = commandAvailable(command)
-        let requiredTools = ["read_node_contract", "submit_node_output", "attach_artifact_to_node"]
+        let requiredTools = ["read_node_contract", "submit_node_output", "attach_artifact_to_node", "update_artifact_views"]
 
         guard serverExists else {
             return Meee2MCPStatus(

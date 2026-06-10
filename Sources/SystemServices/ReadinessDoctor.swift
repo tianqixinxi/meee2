@@ -59,23 +59,8 @@ public enum ReadinessDoctor {
         let mcpStatus = MCPConfigManager.shared.diagnoseMeee2Server()
 
         var checks: [ReadinessCheck] = []
-        checks.append(providerCheck(
-            id: "provider.claude",
-            title: "Claude Code runtime",
-            providerName: "Claude Code",
-            component: runtime.claude,
-            actionId: "configure-provider-claude",
-            notFoundDetail: "Claude Code not found. Install it with `npm install -g @anthropic-ai/claude-code`, then reopen meee2."
-        ))
-        checks.append(providerCheck(
-            id: "provider.codex",
-            title: "Codex runtime",
-            providerName: "Codex",
-            component: runtime.codex,
-            actionId: "configure-provider-codex",
-            notFoundDetail: "Codex not found. Install the Codex CLI (`npm install -g @openai/codex`), then reopen meee2."
-        ))
-        checks.append(hookCheck(hookStatus))
+        checks.append(contentsOf: providerReadinessChecks(runtime: runtime))
+        checks.append(hookCheck(hookStatus, required: runtime.claude.available && !runtime.codex.configured))
         checks.append(hookSocketCheck())
         checks.append(boardServerCheck())
         checks.append(mcpCheck(mcpStatus))
@@ -113,6 +98,14 @@ public enum ReadinessDoctor {
             let result = Meee2AgentRuntimeInstaller.install(target: "codex")
             messages.append(contentsOf: result.messages)
             logs.append(contentsOf: result.logs)
+        case "install-provider-claude":
+            messages.append("Install Claude Code first, then return here and configure the meee2 plugin.")
+            messages.append("Run: npm install -g @anthropic-ai/claude-code")
+            logs.append("[ReadinessDoctor] Claude Code CLI missing; install command: npm install -g @anthropic-ai/claude-code")
+        case "install-provider-codex":
+            messages.append("Install Codex first, then return here and configure the meee2 plugin.")
+            messages.append("Run: npm install -g @openai/codex")
+            logs.append("[ReadinessDoctor] Codex CLI missing; install command: npm install -g @openai/codex")
         case "configure-provider-all", "configure-runtime-all":
             SettingsConfigManager.shared.ensureHooksConfigured()
             let result = Meee2AgentRuntimeInstaller.install(target: "all")
@@ -136,24 +129,60 @@ public enum ReadinessDoctor {
         )
     }
 
+    static func providerReadinessChecks(runtime: Meee2AgentRuntimeStatus) -> [ReadinessCheck] {
+        let anyAvailable = runtime.claude.available || runtime.codex.available
+        let anyConfigured = runtime.claude.configured || runtime.codex.configured
+        return [
+            providerCheck(
+                id: "provider.claude",
+                title: "Claude Code runtime",
+                providerName: "Claude Code",
+                component: runtime.claude,
+                configureActionId: "configure-provider-claude",
+                installActionId: "install-provider-claude",
+                installCommand: "npm install -g @anthropic-ai/claude-code",
+                notFoundDetail: "Claude Code was not found. Install Claude Code first, then configure its meee2 plugin.",
+                anyAvailable: anyAvailable,
+                anyConfigured: anyConfigured
+            ),
+            providerCheck(
+                id: "provider.codex",
+                title: "Codex runtime",
+                providerName: "Codex",
+                component: runtime.codex,
+                configureActionId: "configure-provider-codex",
+                installActionId: "install-provider-codex",
+                installCommand: "npm install -g @openai/codex",
+                notFoundDetail: "Codex was not found. Install the Codex CLI first, then configure its meee2 plugin.",
+                anyAvailable: anyAvailable,
+                anyConfigured: anyConfigured
+            )
+        ]
+    }
+
     private static func providerCheck(
         id: String,
         title: String,
         providerName: String,
         component: AgentRuntimeComponentStatus,
-        actionId: String,
-        notFoundDetail: String
+        configureActionId: String,
+        installActionId: String,
+        installCommand: String,
+        notFoundDetail: String,
+        anyAvailable: Bool,
+        anyConfigured: Bool
     ) -> ReadinessCheck {
         if component.available {
             let passed = component.configured
+            let blocking = !passed && !anyConfigured
             return ReadinessCheck(
                 id: id,
                 title: title,
-                status: passed ? .pass : .fail,
-                severity: .required,
+                status: passed ? .pass : (blocking ? .fail : .warn),
+                severity: blocking || passed ? .required : .recommended,
                 detail: component.detail ?? (passed ? "\(providerName) is configured." : "\(providerName) is installed but not configured."),
                 recoveryAction: passed ? nil : ReadinessAction(
-                    id: actionId,
+                    id: configureActionId,
                     label: "Configure \(providerName)",
                     kind: "repair",
                     command: component.command
@@ -167,13 +196,19 @@ public enum ReadinessDoctor {
             )
         }
 
+        let blocking = !anyAvailable && !anyConfigured
         return ReadinessCheck(
             id: id,
             title: title,
-            status: .info,
-            severity: .informational,
+            status: blocking ? .fail : .info,
+            severity: blocking ? .required : .recommended,
             detail: notFoundDetail,
-            recoveryAction: nil,
+            recoveryAction: ReadinessAction(
+                id: installActionId,
+                label: "Install \(providerName)",
+                kind: "manual",
+                command: installCommand
+            ),
             metadata: [
                 "cliAvailable": "false",
                 "appAvailable": "false"
@@ -181,7 +216,7 @@ public enum ReadinessDoctor {
         )
     }
 
-    private static func hookCheck(_ status: SettingsConfigManager.HookConfigurationStatus) -> ReadinessCheck {
+    private static func hookCheck(_ status: SettingsConfigManager.HookConfigurationStatus, required: Bool) -> ReadinessCheck {
         let passed = status.configured
         let detail: String
         if passed {
@@ -197,10 +232,10 @@ public enum ReadinessDoctor {
         return ReadinessCheck(
             id: "provider-hook.claude",
             title: "Claude Code hooks",
-            status: passed ? .pass : .fail,
-            severity: .required,
+            status: passed ? .pass : (required ? .fail : .info),
+            severity: required ? .required : .informational,
             detail: detail,
-            recoveryAction: passed ? nil : ReadinessAction(
+            recoveryAction: passed || !required ? nil : ReadinessAction(
                 id: "configure-hooks",
                 label: "Configure hooks",
                 kind: "repair",

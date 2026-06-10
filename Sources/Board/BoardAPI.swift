@@ -2414,6 +2414,40 @@ enum BoardAPI {
         }
     }
 
+    static func updatePlannerArtifactViews(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateArtifactViewsRequest: Decodable {
+            let artifactId: String?
+            let reference: String?
+            let views: [PlannerArtifactView]?
+            let deleteViewIds: [String]?
+        }
+        struct Envelope: Encodable { let updated: [PlannerArtifact] }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateArtifactViewsRequest.self),
+              body.artifactId?.isEmpty == false || body.reference?.isEmpty == false else {
+            return errorResponse("invalid_json", "body must carry artifactId or reference plus views/deleteViewIds", status: 400)
+        }
+        do {
+            let updated = try PlannerBoardBridge.updateArtifactViews(
+                artifactId: body.artifactId,
+                reference: body.reference,
+                views: body.views ?? [],
+                deleteViewIds: body.deleteViewIds ?? [],
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(Envelope(updated: updated))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func bindPlannerNodeInput(_ req: HttpRequest) -> HttpResponse {
         struct BindInputRequest: Decodable {
             let input: String

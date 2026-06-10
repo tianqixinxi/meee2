@@ -46,6 +46,7 @@ import { getWidgetComponent } from './widgets'
 import { resolveWidgetData } from './widgetDataResolver'
 import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
 import { getViewSchema } from '../../integrations/viewSchemas'
+import { ArtifactViewTabs } from '../artifacts/ArtifactViewTabs'
 import { TabularArtifactPreview, parseArtifactJSON, parseTabular } from './TabularArtifactPreview'
 import {
   ARTIFACT_LABELS,
@@ -1004,6 +1005,25 @@ function ArtifactPreview({
   if (error) {
     return <div className="planner-node__artifact-empty">{error}</div>
   }
+  if (kind === 'kanban' && kanban) {
+    return <KanbanArtifactPreview artifact={artifact} payload={kanban} onOpenItem={onOpenKanbanItem} />
+  }
+  return <ArtifactViewTabs artifact={artifact} content={content} compact emptyLabel={ARTIFACT_LABELS.empty} />
+}
+
+function LegacyArtifactPreview({
+  artifact,
+  kind,
+  kanban,
+  content,
+  onOpenKanbanItem,
+}: {
+  artifact: PlannerArtifact
+  kind: CanvasArtifactKind
+  kanban: KanbanArtifactPayload | null
+  content: PlannerArtifactContent | null
+  onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
+}) {
   if (kind === 'kanban' && kanban) {
     return <KanbanArtifactPreview artifact={artifact} payload={kanban} onOpenItem={onOpenKanbanItem} />
   }

@@ -33,7 +33,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { getPlannerArtifactContent, proposePlannerGraphChange } from '../../api'
 import { useToast } from '../../App'
 import { resolvedArtifactPayload } from '../../lib/artifactPayload'
-import { TypedPayloadPreview } from '../artifacts/TypedPayloadPreview'
+import { ArtifactViewTabs } from '../artifacts/ArtifactViewTabs'
 import type {
   ArtifactPayload,
   ArtifactReviewStatus,
@@ -1069,10 +1069,10 @@ function PayloadBodySwitch({
           return <KanbanPayloadEditor payload={typed} />
       }
     }
-    return <TypedPayloadPreview payload={typed} />
+    return <ArtifactViewTabs artifact={artifact} content={content} />
   }
   // 旧 PlannerArtifactPayloadType 兜底 — text / html / json / file。
-  return <LegacyPayloadPreview artifact={artifact} />
+  return <ArtifactViewTabs artifact={artifact} content={content} />
 }
 
 // ---------------------------------------------------------------------------
