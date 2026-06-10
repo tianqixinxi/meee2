@@ -131,12 +131,36 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         schedulePostLaunchStartup(launchStartedAt: launchStartedAt)
     }
 
+    /// 首次启动(从未启动过 meee2)返回 true 并打标,只触发一次。让新用户自动看到
+    /// Board 里的 FirstRunOnboarding 引导 —— 菜单栏 app 双击后默认只有图标,引导窗口
+    /// 本来要靠用户自己点菜单 "Open Board" 才出现,新用户根本不知道有这一步。
+    private static func consumeFirstLaunchOnboardingFlag() -> Bool {
+        let key = "meee2.hasLaunchedBefore"
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: key) { return false }
+        // 升级守卫:这个 key 是新引入的 — 老用户升上来没有它,不能把升级当
+        // 首装强弹 Board(只想用菜单栏的人会被惊扰)。~/.meee2 下已有持久化
+        // 状态(会话/画布/planner)即视为老装机,补打标后按非首次处理。
+        let meee2Dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meee2", isDirectory: true)
+        let priorInstallMarkers = ["sessions", "board-canvases.json", "planner"]
+        let hasPriorInstall = priorInstallMarkers.contains { marker in
+            FileManager.default.fileExists(atPath: meee2Dir.appendingPathComponent(marker).path)
+        }
+        defaults.set(true, forKey: key)
+        return !hasPriorInstall
+    }
+
     private func schedulePostLaunchStartup(launchStartedAt: Date) {
         DispatchQueue.main.async { [weak self] in
             self?.startSessionRuntime()
             self?.startBoardServer()
 
-            if BoardCommand.shouldShowOnLaunch {
+            // 新用户首次启动:自动打开 Board,让 FirstRunOnboarding 引导接住他们。
+            // 否则菜单栏 app 双击后只有图标,引导窗口要靠用户自己点菜单 "Open Board"
+            // 才出现 —— 新用户根本不知道有这步。flag 先消费,保证只弹一次。
+            let isFirstLaunch = Self.consumeFirstLaunchOnboardingFlag()
+            if BoardCommand.shouldShowOnLaunch || isFirstLaunch {
                 DispatchQueue.main.async { [weak self] in
                     self?.openBoardMenu()
                 }
