@@ -4264,6 +4264,92 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(node.blockedReason, "Session claude-d 已结束；可打开恢复，或替换为新会话。")
     }
 
+    /// Direct artifact-layer write(账本直改):同一 reference 跨节点共享时,
+    /// update_artifact 必须让所有槽位一起前进(各自追加版本行、沿用自己的
+    /// 版本链),且节点状态机完全不动 — 这是「手动更新 artifact 不用先跟
+    /// step 节点的 session 打招呼」机制的核心约束。
+    func testUpdateArtifactByReferenceAdvancesSharedSlotsWithoutTouchingNodes() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeA = "canvas-a-node-1"
+        let nodeB = "canvas-a-node-2"
+        let reference = "gsheet://tracker/Pipeline"
+
+        for nodeId in [nodeA, nodeB] {
+            _ = try PlannerBoardBridge.attachArtifact(
+                nodeId: nodeId,
+                kind: .generic,
+                title: "Tracker · Pipeline",
+                reference: reference,
+                status: "attached",
+                payload: .object(["type": .string("integration"), "connector": .string("google-sheets")]),
+                for: "canvas-a",
+                snapshot: snapshot,
+                actorUserId: "owner-a"
+            )
+        }
+        let before = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let statusesBefore = Dictionary(uniqueKeysWithValues: before.nodes.map { ($0.id, $0.status) })
+
+        let updated = try PlannerBoardBridge.updateArtifact(
+            reference: reference,
+            title: "Tracker · Pipeline (54 rows)",
+            payload: .object([
+                "type": .string("integration"),
+                "connector": .string("google-sheets"),
+                "fields": .object(["rows": .number(54)])
+            ]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        // 两个共享槽位都前进了
+        XCTAssertEqual(updated.count, 2)
+        XCTAssertEqual(Set(updated.map(\.nodeId)), [nodeA, nodeB])
+        XCTAssertTrue(updated.allSatisfy { $0.title == "Tracker · Pipeline (54 rows)" })
+
+        // head 已替换(直读也拿到新 payload)
+        let heads = try PlannerBoardBridge.findArtifacts(
+            reference: reference,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(heads.count, 2)
+        XCTAssertTrue(heads.allSatisfy {
+            $0.payload?.objectValue?["fields"]?.objectValue?["rows"] == .number(54)
+        })
+
+        // 每个槽位各有一条 direct-update 版本行,沿用自己的链
+        for nodeId in [nodeA, nodeB] {
+            let versions = try PlannerBoardBridge.store.artifactVersions(
+                canvasId: "canvas-a",
+                nodeId: nodeId,
+                reference: reference
+            )
+            XCTAssertEqual(versions.first?.metadata?.objectValue?["source"]?.stringValue, "updateArtifact")
+        }
+
+        // 节点状态机一概不动
+        let after = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        for node in after.nodes {
+            XCTAssertEqual(node.status, statusesBefore[node.id], "direct artifact update must not touch node \(node.id)")
+        }
+
+        // 找不到目标要明确报错,不能静默成功
+        XCTAssertThrowsError(try PlannerBoardBridge.updateArtifact(
+            reference: "gsheet://tracker/Nonexistent",
+            title: "x",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            guard case PlannerCoreError.artifactNotFound = error else {
+                return XCTFail("expected artifactNotFound, got \(error)")
+            }
+        }
+    }
+
     /// Regression (PERF): the dead-session demotion branch must be idempotent.
     /// Root cause of a pegged CPU core — `/api/state` polling (multiple board
     /// clients × ~1Hz) kept feeding an already-ended session through
