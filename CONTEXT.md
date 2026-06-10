@@ -61,7 +61,7 @@ A blocking Web Board interaction used when the user must explicitly confirm, rep
 _Avoid_: Banner, toast, passive warning
 
 **Web Board Layer Order**:
-The fixed stacking relationship for Web Board feedback and overlays: Dialog appears above Toast, Toast appears above Notice, and Notice appears above ordinary content only when its surface requires an overlay layout.
+The fixed stacking relationship for Web Board feedback and overlays: Dialog appears above Toast, Toast appears above protected Inspector overlays, Inspector overlays appear above Notice, and Notice appears above ordinary content only when its surface requires an overlay layout.
 _Avoid_: Component-local z-index ladders, toast above dialog
 
 **Doctor**:

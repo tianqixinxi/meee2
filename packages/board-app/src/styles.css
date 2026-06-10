@@ -66,6 +66,7 @@
   /* Web Board layer order: Dialog > Toast > Notice > ordinary content. */
   --z-dialog: 10000;
   --z-toast: 8000;
+  --z-inspector-overlay: 900;
   --z-notice-overlay: 700;
 }
 
@@ -1534,10 +1535,9 @@ textarea {
 .session-terminal-overlay {
   position: fixed;
   inset: 0;
-  /* 2026-06-02:不再 z-index 9500 盖住所有图层。降到 inspector 抽屉
-     (.planner-node-modal-backdrop = z-index 70)同层 —— overlay 作为 inspector
-     左边的并排抽屉。容器 pointer-events:none 让点击穿透回 canvas,只 panel 接收。 */
-  z-index: 70;
+  /* Keep terminal panels in the protected Inspector overlay band: above
+     canvas Notices, below Toast/Dialog surfaces. */
+  z-index: var(--z-inspector-overlay);
   /* 不再 flex 铺满 —— panel 用绝对定位悬浮在 canvas 内容区,
      避开左侧栏 / 顶部 toolbar+recap / 右侧 inspector,四周留白。 */
   display: block;

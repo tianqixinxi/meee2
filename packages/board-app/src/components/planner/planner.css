@@ -1899,7 +1899,7 @@
 .planner-node-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-inspector-overlay);
   display: flex;
   justify-content: flex-end;
   align-items: stretch;
