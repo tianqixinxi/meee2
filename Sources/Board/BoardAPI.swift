@@ -2345,6 +2345,75 @@ enum BoardAPI {
         }
     }
 
+    /// Direct artifact-layer read — `GET …/artifacts/latest?reference=…|artifactId=…`。
+    /// session / 人工脱离节点会话生命周期拉外部对象当前快照(head + payload)。
+    static func getLatestPlannerArtifacts(_ req: HttpRequest) -> HttpResponse {
+        struct Envelope: Encodable { let artifacts: [PlannerArtifact] }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        let artifactId = req.queryParams.first(where: { $0.0 == "artifactId" })?.1
+        let referenceRaw = req.queryParams.first(where: { $0.0 == "reference" })?.1
+        let reference = referenceRaw?.removingPercentEncoding ?? referenceRaw
+        guard (artifactId?.isEmpty == false) || (reference?.isEmpty == false) else {
+            return errorResponse("bad_request", "pass reference or artifactId", status: 400)
+        }
+        do {
+            let artifacts = try PlannerBoardBridge.findArtifacts(
+                artifactId: artifactId,
+                reference: reference,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(Envelope(artifacts: artifacts))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// Direct artifact-layer write — `POST …/artifacts/update`。账本直改:
+    /// 追加版本、前进 head,节点状态机不动。body: {artifactId|reference,
+    /// title?, status?, payload?, submittedByKind?}。
+    static func updatePlannerArtifact(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateArtifactRequest: Decodable {
+            let artifactId: String?
+            let reference: String?
+            let title: String?
+            let status: String?
+            let payload: BoardJSONValue?
+            let submittedByKind: String?
+        }
+        struct Envelope: Encodable { let updated: [PlannerArtifact] }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateArtifactRequest.self) else {
+            return errorResponse("invalid_json", "body must carry artifactId or reference plus fields to update", status: 400)
+        }
+        do {
+            let updated = try PlannerBoardBridge.updateArtifact(
+                artifactId: body.artifactId,
+                reference: body.reference,
+                title: body.title,
+                status: body.status,
+                payload: body.payload,
+                submittedByKind: PlannerArtifactVersionSubmitterKind(rawValue: body.submittedByKind ?? "human") ?? .human,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(Envelope(updated: updated))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func bindPlannerNodeInput(_ req: HttpRequest) -> HttpResponse {
         struct BindInputRequest: Decodable {
             let input: String
@@ -3651,7 +3720,8 @@ enum BoardAPI {
     static func mapPlannerCoreError(_ err: PlannerCoreError) -> HttpResponse {
         switch err {
         case .canvasNotFound, .proposalNotFound, .runNotFound,
-             .dataSourceNotFound, .edgeNotFound, .monitorCardNotFound:
+             .dataSourceNotFound, .edgeNotFound, .monitorCardNotFound,
+             .artifactNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
         case .monitorSpecReplaceGuard:
             return errorResponse("monitor_spec_replace_guard", err.localizedDescription, status: 409)

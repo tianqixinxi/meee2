@@ -150,6 +150,50 @@ const TOOLS = [
       required: ['canvasId', 'nodeId', 'reference'],
     },
   },
+  {
+    name: 'get_artifact',
+    description:
+      'Read the latest version of meee2 canvas artifacts directly — no node ' +
+      'session lifecycle required. Address by reference (returns every node ' +
+      'slot sharing it) or artifactId. Use this to pull the current snapshot ' +
+      'of a shared ledger object (e.g. a tracker tab) before working on it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        reference: { type: 'string', description: 'Artifact reference / slot key, e.g. gsheet://venture-tracker/Pipeline.' },
+        artifactId: { type: 'string', description: 'Exact artifact id (alternative to reference).' },
+      },
+      required: ['canvasId'],
+    },
+  },
+  {
+    name: 'update_artifact',
+    description:
+      'Directly update meee2 canvas artifacts (appends a version, advances ' +
+      'the head) WITHOUT going through node submit — node status / run state ' +
+      'are untouched. Address by reference (advances every node slot sharing ' +
+      'it, keeping shared external objects consistent) or artifactId. Use for ' +
+      'refreshing an external-object snapshot (rows/fields changed) or manual ' +
+      'corrections. Final node results must still use submit_node_output.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        reference: { type: 'string', description: 'Artifact reference shared by the slots to update.' },
+        artifactId: { type: 'string', description: 'Exact artifact id (alternative to reference).' },
+        title: { type: 'string', description: 'New title (omit to keep).' },
+        status: { type: 'string', description: 'New status string (omit to keep).' },
+        payload: {
+          type: 'object',
+          description:
+            'New typed payload object replacing the current one, e.g. ' +
+            '{"type":"integration","connector":"google-sheets","externalUrl":"…","fields":{"rows":54}}. Omit to keep.',
+        },
+      },
+      required: ['canvasId'],
+    },
+  },
 ]
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
@@ -422,6 +466,78 @@ async function handleAttachArtifactToNode(args) {
   )
 }
 
+// Direct artifact-layer write 的会话 scope:assertPlannerToolScope 的
+// 「绑定会话只能动自己节点」语义按 reference 翻译 — 绑定会话只能更新
+// **自己节点挂着的 reference**(共享引用照常扇出到其他节点的镜像槽位,
+// 那正是一致性语义);不是自己节点的 artifact 一律拒绝。没有会话上下文
+// (人工 / operator CLI)或会话未绑定任何节点时放行,由服务端按节点权限兜底
+// (Board 请求不带 per-session 身份,本地模式 actor 回落 owner — 没有这层
+// 守卫,绑定会话就能越权改无关节点的账本)。
+async function assertArtifactWriteScope(canvasId, { reference, artifactId }) {
+  const candidates = envSessionCandidates()
+  if (candidates.length === 0) return
+  const graph = await callApi(
+    'GET',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`,
+  )
+  const nodes = graph.nodes || []
+  const matches = (a, b) => a === b || a.endsWith(b) || b.endsWith(a)
+  const ownNodes = nodes.filter(
+    (n) => n.sessionId && candidates.some((c) => matches(n.sessionId, c)),
+  )
+  // env 里有会话但没绑定任何 planner 节点 → 非 planner 执行上下文,放行。
+  if (ownNodes.length === 0) return
+  let targetRef = (reference || '').trim()
+  if (!targetRef && artifactId) {
+    const res = await callApi(
+      'GET',
+      `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/latest?artifactId=${encodeURIComponent(artifactId)}`,
+    )
+    targetRef = (res?.artifacts?.[0]?.reference || '').trim()
+  }
+  if (!targetRef) throw new Error(`artifact not found for scope check: ${artifactId || reference}`)
+  const owned = ownNodes.some((n) =>
+    (n.artifactRefs || []).some((ref) => (ref || '').trim() === targetRef),
+  )
+  if (!owned) {
+    throw new Error(
+      'update_artifact from a bound session may only target references attached to its own node(s)',
+    )
+  }
+}
+
+async function handleGetArtifact(args) {
+  const { canvasId, reference, artifactId } = args
+  if (!canvasId) throw new Error('canvasId is required')
+  if (!reference && !artifactId) throw new Error('pass reference or artifactId')
+  const qs = artifactId
+    ? `artifactId=${encodeURIComponent(artifactId)}`
+    : `reference=${encodeURIComponent(reference)}`
+  return await callApi(
+    'GET',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/latest?${qs}`,
+  )
+}
+
+async function handleUpdateArtifact(args) {
+  const { canvasId } = args
+  if (!canvasId) throw new Error('canvasId is required')
+  if (!args.reference && !args.artifactId) throw new Error('pass reference or artifactId')
+  await assertArtifactWriteScope(canvasId, { reference: args.reference, artifactId: args.artifactId })
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/update`,
+    {
+      artifactId: args.artifactId,
+      reference: args.reference,
+      title: args.title,
+      status: args.status,
+      payload: withFileCwd(args.payload),
+      submittedByKind: 'agent',
+    },
+  )
+}
+
 // ─── server plumbing ──────────────────────────────────────────────────────
 
 // `instructions` 是 MCP 协议在 InitializeResult 里返回的 system-level hint
@@ -435,7 +551,11 @@ const INSTRUCTIONS = [
   'interface for reading node contracts and submitting structured canvas output.',
   '',
   'Core tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
-  'read_inbox, list_sessions.',
+  'get_artifact, update_artifact, read_inbox, list_sessions.',
+  'Artifact rule: get_artifact pulls the latest snapshot of a shared ledger',
+  'artifact (by reference); update_artifact refreshes it in place (new version,',
+  'node state untouched) — use them when data changed but the node is not',
+  'finishing an attempt.',
   'Planner rule: first read_node_contract; final state must be submitted through',
   'submit_node_output exactly once per completed/blocked attempt. If the contract',
   'says output.payload_kind=artifact_ref, submit artifacts[] and put the output',
@@ -463,6 +583,12 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'attach_artifact_to_node':
         result = await handleAttachArtifactToNode(args)
+        break
+      case 'get_artifact':
+        result = await handleGetArtifact(args)
+        break
+      case 'update_artifact':
+        result = await handleUpdateArtifact(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)

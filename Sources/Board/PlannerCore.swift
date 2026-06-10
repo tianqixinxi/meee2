@@ -2733,6 +2733,9 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case unknownChangeKind(String)
     case invalidNodeOutput(String)
     case activeSessionExists(nodeId: String)
+    /// Direct artifact read/write addressed an artifact (by id or reference)
+    /// that doesn't exist on the canvas.
+    case artifactNotFound(String)
     // Canvas runtime 5-atom governance (PR6+7).
     case dataSourceNotFound(String)
     case edgeNotFound(String)
@@ -2788,6 +2791,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return hint
         case .activeSessionExists(let nodeId):
             return "node \(nodeId) already has an active session; complete or split the node before starting another"
+        case .artifactNotFound(let selector):
+            return "artifact not found: \(selector)"
         case .dataSourceNotFound(let id):
             return "data source not found: \(id)"
         case .edgeNotFound(let id):
@@ -6132,6 +6137,116 @@ final class PlannerStore {
         }
     }
 
+    /// Direct artifact-layer read · 按 artifactId 精确 / reference 归一匹配,
+    /// 返回 latest-per-slot 的 head。session 拉「外部对象当前快照」用。
+    func findArtifacts(
+        canvasId: String,
+        artifactId: String? = nil,
+        reference: String? = nil
+    ) throws -> [PlannerArtifact] {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            return matchArtifacts(record.artifacts, artifactId: artifactId, reference: reference)
+        }
+    }
+
+    /// Direct artifact-layer write(账本直改)— 不经节点状态机。
+    ///
+    /// 现状是 artifact 只能借道节点会话生命周期前进(submit_node_output /
+    /// attach):人工要改个 tracker 的行数都得先跟 step 节点的 session 说一声、
+    /// 等它"操作"一下。这条路径把 artifact 当一等账本对象:人工修正、或任何
+    /// session 主动刷新外部对象快照,都直接在这里追加版本 — 节点 status /
+    /// run state / artifactRefs 一概不动(引用早已挂上,执行态不该被读写抖动)。
+    ///
+    /// 寻址:artifactId 精确命中一个;reference 命中所有共享该引用的槽位 —
+    /// 同一外部对象在多个节点上的镜像(如 tracker 的 Pipeline tab 被
+    /// sourcing/verify 两个节点共享)必须一起前进,否则画布上会出现两个版本
+    /// 的"同一张表"。每个命中槽位各追加一条版本行,沿用其自身版本链。
+    func updateArtifact(
+        canvasId: String,
+        artifactId: String? = nil,
+        reference: String? = nil,
+        title: String? = nil,
+        status: String? = nil,
+        payload: BoardJSONValue? = nil,
+        submittedBy: String? = nil,
+        submittedByKind: PlannerArtifactVersionSubmitterKind = .human
+    ) throws -> [PlannerArtifact] {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard title != nil || status != nil || payload != nil else {
+                throw PlannerCoreError.invalidNodeOutput("updateArtifact requires at least one of title/status/payload")
+            }
+            let targets = matchArtifacts(record.artifacts, artifactId: artifactId, reference: reference)
+            guard !targets.isEmpty else {
+                throw PlannerCoreError.artifactNotFound(artifactId ?? reference ?? "(no selector)")
+            }
+            let now = Date()
+            var updated: [PlannerArtifact] = []
+            for target in targets {
+                var next = target
+                if let title { next.title = title }
+                if let status { next.status = status }
+                if let payload { next.payload = payload }
+                next.createdAt = now
+                let slotKey = artifactSlotKey(canvasId: canvasId, nodeId: target.nodeId, reference: target.reference)
+                let parent = latestVersion(in: record.artifactVersions, slotKey: slotKey)?.versionId
+                let payloadRef = (next.payload?.objectValue?["blobRef"]?.stringValue).flatMap {
+                    $0.isEmpty ? nil : $0
+                } ?? target.reference
+                record.artifactVersions.append(PlannerArtifactVersion(
+                    versionId: "ver-\(canvasId)-\(target.nodeId)-\(stableSuffix("\(target.reference)-\(target.id)-\(now.timeIntervalSince1970)"))",
+                    parentVersionId: parent,
+                    canvasId: canvasId,
+                    nodeId: target.nodeId,
+                    artifactId: target.id,
+                    artifactSlotKey: slotKey,
+                    payloadRef: payloadRef,
+                    payloadInline: next.payload,
+                    inputSnapshot: nil,
+                    displayStrategy: .latest,
+                    forceNewVersion: false,
+                    submittedBy: submittedBy,
+                    submittedByKind: submittedByKind,
+                    metadata: .object([
+                        "title": .string(next.title),
+                        "source": .string("updateArtifact")
+                    ]),
+                    createdAt: now
+                ))
+                // 显式更新不走 mergeArtifacts 的评分仲裁 — 这是用户/调用方的
+                // 明确意图,head 必须前进(否则"分高"的旧 payload 会顶掉直改)。
+                if let idx = record.artifacts.firstIndex(where: { $0.id == target.id }) {
+                    record.artifacts[idx] = next
+                }
+                updated.append(next)
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .artifactAttached,
+                nodeId: targets.first?.nodeId,
+                summary: "\(updated.first?.title ?? "artifact") — direct update",
+                artifactRefs: Array(Set(updated.map(\.reference)))
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return updated
+        }
+    }
+
+    private func matchArtifacts(
+        _ artifacts: [PlannerArtifact],
+        artifactId: String?,
+        reference: String?
+    ) -> [PlannerArtifact] {
+        if let artifactId, !artifactId.isEmpty {
+            return artifacts.filter { $0.id == artifactId }
+        }
+        guard let reference, !reference.isEmpty else { return [] }
+        let normalized = normalizeArtifactReference(reference)
+        return artifacts.filter { normalizeArtifactReference($0.reference) == normalized }
+    }
+
     func updateNodeStatus(
         canvasId: String,
         nodeId: String,
@@ -8532,6 +8647,67 @@ enum PlannerBoardBridge {
         )
         _ = try store.attachArtifact(artifact, canvasId: canvasId)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    /// Direct artifact-layer read — heads matching artifactId / reference.
+    /// 读权限即画布访问权限(canvasState 已校验 viewer 起步)。
+    static func findArtifacts(
+        artifactId: String? = nil,
+        reference: String? = nil,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [PlannerArtifact] {
+        _ = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return try store.findArtifacts(canvasId: canvasId, artifactId: artifactId, reference: reference)
+    }
+
+    /// Direct artifact-layer write — 不经节点状态机(见 store.updateArtifact)。
+    /// 权限对齐 attach:对每个命中槽位所属的节点要求 node-update 权限
+    /// (owner 任意,doer 仅自己的节点,viewer 拒绝)。payload 走与 attach
+    /// 同一套 blob 归一化,按各槽位自己的 artifactId 落 blob。
+    static func updateArtifact(
+        artifactId: String? = nil,
+        reference: String? = nil,
+        title: String? = nil,
+        status: String? = nil,
+        payload: BoardJSONValue? = nil,
+        submittedByKind: PlannerArtifactVersionSubmitterKind = .human,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [PlannerArtifact] {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        let targets = try store.findArtifacts(canvasId: canvasId, artifactId: artifactId, reference: reference)
+        guard !targets.isEmpty else {
+            throw PlannerCoreError.artifactNotFound(artifactId ?? reference ?? "(no selector)")
+        }
+        for target in targets {
+            guard let node = state.nodes.first(where: { $0.id == target.nodeId }) else { continue }
+            try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        }
+        let workspacePath = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        var updated: [PlannerArtifact] = []
+        for target in targets {
+            let normalizedPayload = try payload.flatMap {
+                try PlannerArtifactStorage.normalizePayload(
+                    $0,
+                    canvasId: canvasId,
+                    artifactId: target.id,
+                    workspacePath: workspacePath
+                )
+            }
+            updated += try store.updateArtifact(
+                canvasId: canvasId,
+                artifactId: target.id,
+                title: title,
+                status: status,
+                payload: normalizedPayload,
+                submittedBy: actorUserId,
+                submittedByKind: submittedByKind
+            )
+        }
+        return updated
     }
 
     static func updateNodeStatus(
