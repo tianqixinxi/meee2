@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isOutputArtifactNode } from './InspectorArtifactBody'
+import { isOutputArtifactNode, isSeedAuthorableNode } from './InspectorArtifactBody'
 import type { PlanningNode } from '../../types'
 
 // Minimal artifact-node factory — only the fields isOutputArtifactNode reads.
@@ -59,5 +59,22 @@ describe('isOutputArtifactNode — gates the 数据来源 binding section', () =
         node({ artifactSource: { kind: 'slot', nodeId: 'n1', slotKey: 'out', direction: 'output' } }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('isSeedAuthorableNode — gates manual editor', () => {
+  it('does not allow manual authoring for execution outputs with upstream producers', () => {
+    expect(isSeedAuthorableNode(node({ dependsOnNodeIds: ['producer'] }))).toBe(false)
+  })
+
+  it('does not allow manual authoring for dataSource/canvas-runtime artifacts', () => {
+    expect(isSeedAuthorableNode(node({ artifactSource: { kind: 'dataSource', sourceId: 'src-1' } }))).toBe(false)
+    expect(isSeedAuthorableNode(node({ artifactSource: { kind: 'canvas-runtime' } }))).toBe(false)
+  })
+
+  it('allows manual authoring only for seed output slots', () => {
+    expect(isSeedAuthorableNode(node({
+      artifactSource: { kind: 'slot', nodeId: 'n1', slotKey: 'out', direction: 'output' },
+    }))).toBe(true)
   })
 })

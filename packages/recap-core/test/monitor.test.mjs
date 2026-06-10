@@ -90,4 +90,22 @@ function monitor(overrides = {}) {
   assert.equal(result.items[1].reasonKind, 'normal')
 }
 
+{
+  const result = monitor({
+    nodes: [{ id: 'done-stale', title: 'Done with stale session', status: 'done', workflowRunState: 'done', sessionId: 's-done' }],
+    sessions: [{
+      id: 's-done',
+      status: 'waitingForUser',
+      inboxPending: 3,
+      pendingPermissionTool: 'Shell',
+      pendingPermissionMessage: 'Allow one more command?',
+      recentMessages: [{ role: 'assistant', text: 'Should I keep going?' }],
+    }],
+  })
+  assert.equal(result.counts.needsHumanReply, 0)
+  assert.equal(result.items[0].reasonKind, 'normal')
+  assert.equal(result.items[0].needsHumanReply, false)
+  assert.equal(result.items[0].replyPrompt, null)
+}
+
 console.log('monitor tests passed')

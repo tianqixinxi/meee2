@@ -18,6 +18,7 @@ import { linearViewSchemas } from './linear'
 import { slackViewSchemas } from './slack'
 import { notionViewSchemas } from './notion'
 import { larkViewSchemas } from './lark'
+import { googleSheetsViewSchemas } from './googleSheets'
 
 /** Flat list of every view-schema literal known to v0.1. */
 export const ALL_INTEGRATION_VIEW_SCHEMAS: IntegrationViewSchema[] = [
@@ -26,6 +27,7 @@ export const ALL_INTEGRATION_VIEW_SCHEMAS: IntegrationViewSchema[] = [
   ...slackViewSchemas,
   ...notionViewSchemas,
   ...larkViewSchemas,
+  ...googleSheetsViewSchemas,
 ]
 
 /** Indexed by `<integrationId>:<entityKind>` for O(1) lookup. */
@@ -53,4 +55,5 @@ export {
   slackViewSchemas,
   notionViewSchemas,
   larkViewSchemas,
+  googleSheetsViewSchemas,
 }

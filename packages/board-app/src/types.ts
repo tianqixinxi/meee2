@@ -845,10 +845,16 @@ export type ArtifactPayload =
                                                      failing: string[] })
   | (ArtifactPayloadCommon & { type: 'file';         filename: string; mime: string; sizeBytes: number;
                                                      lines?: number | null })
+  | (ArtifactPayloadCommon & { type: 'json';         rootKind: 'object' | 'array' | 'value'; preview: string;
+                                                     entries: Array<{ key: string; value: string }> })
   | (ArtifactPayloadCommon & { type: 'markdown';     preview: string })
-  | (ArtifactPayloadCommon & { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / ...
+  | (ArtifactPayloadCommon & { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / 'google-sheets' / ...
                                                      externalId: string; externalUrl?: string | null;
-                                                     summary?: string | null })
+                                                     summary?: string | null;
+                                                     /** 扁平明细(如 sheet 的 tab/rows/columns)。view-schema preview
+                                                      *  的 detail 行按 label 从这里取值 — integration 层只带 schema+view
+                                                      *  需要的元数据,不带行级真实数据。 */
+                                                     fields?: Record<string, string | number> | null })
 
 export type ArtifactPayloadType = ArtifactPayload['type']
 

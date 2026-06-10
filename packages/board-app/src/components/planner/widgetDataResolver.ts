@@ -226,9 +226,19 @@ function entityFromSchema(
     ? coerceStatus(readField(entity.payload, mapping.statusField)) ?? schema.badge.status
     : coerceStatus(readField(entity.payload, 'status')) ?? schema.badge.status
   const url = readField(entity.payload, 'url')
+  // Detail 行填充:模板 value 为空时,先按 label 从 entity payload 取同名字段
+  // (artifactToIntegrationEntity 把 typedPayload.fields 铺进了 payload),
+  // link 行再兜底用 url。view-schema 的 label 即数据键 — 新 integration 不用
+  // 写 per-widget 适配器。
   const details = schema.preview.details
     .slice(0, 4)
-    .map((d) => (d.kind === 'link' && !d.value && url ? { ...d, value: url } : d))
+    .map((d) => {
+      if (d.value) return d
+      const fromPayload = readField(entity.payload, d.label)
+      if (fromPayload) return { ...d, value: fromPayload }
+      if (d.kind === 'link' && url) return { ...d, value: url }
+      return d
+    })
   return {
     id: `${entity.schemaId}:${readField(entity.payload, 'id') ?? schema.badge.title}`,
     title: title ?? schema.badge.title,

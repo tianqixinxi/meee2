@@ -25,6 +25,8 @@ import {
   UserRound,
 } from 'lucide-react'
 import type {
+  IntegrationEntity,
+  IntegrationViewSchema,
   NodeAssignment,
   PlannerArtifactContent,
   PlannerArtifactVersion,
@@ -42,6 +44,9 @@ import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
 import { getWidgetComponent } from './widgets'
 import { resolveWidgetData } from './widgetDataResolver'
+import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
+import { getViewSchema } from '../../integrations/viewSchemas'
+import { TabularArtifactPreview, parseArtifactJSON, parseTabular } from './TabularArtifactPreview'
 import {
   ARTIFACT_LABELS,
   CARD_TOOLTIPS,
@@ -141,7 +146,7 @@ function runStateClass(runState: PlannerWorkflowRunState): string {
   }
 }
 
-export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>) {
+export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGraphNode>) {
   const [artifactInputDraft, setArtifactInputDraft] = useState(data.inputReference ?? '')
   useEffect(() => {
     setArtifactInputDraft(data.inputReference ?? '')
@@ -213,6 +218,10 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     const kanban = renderKind === 'kanban'
       ? (contentKanban && (inlineKanban?.items.length ?? 0) === 0 ? contentKanban : inlineKanban ?? contentKanban ?? (artifact ? emptyKanbanPayload(node.title) : null))
       : null
+    // 虚拟 artifact 节点不落库 layout(派生节点),「被用户拉高过」的信号
+    // 只能取 react-flow 的显式 height(NodeResizer 写进 node.height,经
+    // NodeProps 传进来)。有显式高度 → --fill,表格滚动区吃掉多出的纵向空间。
+    const artifactHasExplicitHeight = typeof height === 'number' && height > 0
     return (
       <div
         className={[
@@ -220,6 +229,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           'planner-node--artifact-node',
           `planner-node--artifact-${renderKind}`,
           `planner-node--artifact-${data.artifactDirection ?? 'output'}`,
+          artifactHasExplicitHeight ? 'planner-node--fill' : '',
           selected ? 'is-selected' : '',
           data.guided ? 'is-guided' : '',
         ].filter(Boolean).join(' ')}
@@ -1011,6 +1021,14 @@ function ArtifactPreview({
     )
   }
   if (kind === 'json') {
+    // 数组形 JSON(节点输出最常见:一批公司/任务/记录)→ 表格可视化;
+    // 解析不出表格(对象/标量/超限)退回原来的 <pre> dump。
+    const parsed =
+      parseArtifactJSON(content?.content)
+      ?? parseArtifactJSON(inlineString(artifact.payload, 'json'))
+      ?? content?.payload
+    const table = parseTabular(parsed)
+    if (table) return <TabularArtifactPreview data={table} />
     const value = content?.content ?? inlineString(artifact.payload, 'json') ?? JSON.stringify(content?.payload ?? artifact.payload ?? {}, null, 2)
     return <pre className="planner-node__artifact-pre">{value}</pre>
   }
@@ -1018,6 +1036,18 @@ function ArtifactPreview({
     return <IntegrationArtifactPreview artifact={artifact} content={content} />
   }
   if (kind === 'file') {
+    // .json 文件不再只给「文件名 + 大小」存根 — 内容已经随 content 端点
+    // 全量返回,结构是数组就直接画表,文件信息折进表格 footer。
+    const looksJson = /json/i.test(content?.mimeType ?? '')
+      || /\.json$/i.test(content?.filename ?? '')
+      || /\.json$/i.test(artifact.reference)
+    const table = looksJson ? parseTabular(parseArtifactJSON(content?.content)) : null
+    if (table) {
+      const caption = [content?.filename, typeof content?.size === 'number' ? formatBytes(content.size) : '']
+        .filter(Boolean)
+        .join(' · ')
+      return <TabularArtifactPreview data={table} caption={caption || undefined} />
+    }
     return <ArtifactMetadata artifact={artifact} content={content} label={ARTIFACT_LABELS.fileLabel} />
   }
   const text = content?.content ?? inlineString(artifact.payload, 'text')
@@ -1027,6 +1057,49 @@ function ArtifactPreview({
 function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerArtifact; content: PlannerArtifactContent | null }) {
   const payload = objectPayload(artifact.payload)
   const url = stringField(payload, 'url') ?? (artifact.reference.includes('://') ? artifact.reference : null)
+  // Integration view 层(节点级):能投影成已注册的 IntegrationEntity 时,走
+  // view-schema 渲染 — badge(integration:entityKind + secondary)+ preview
+  // detail 行(label 从 entity payload 取值,typedPayload.fields 已铺进去)。
+  // 投影不出来(未注册的 connector / 裸 URL)退回原 provider/summary/url 简版。
+  const entity = artifactToIntegrationEntity(artifact)
+  const schema = entity ? viewSchemaOf(entity.schemaId) : undefined
+  if (entity && schema && schema.integrationId === 'google-sheets') {
+    // Google Sheets 实体不走通用「一行明细文本」— 渲染成 sheet 样式的格子
+    // (绿表头 + 列名 + 占位行),这才是 tracker 的 view 层。列名由 attach 时
+    // 的 fields.header(逗号串)带进来;行级真实数据仍在表本体,这里只有形状。
+    return <GoogleSheetsTabPreview entity={entity} schema={schema} reference={artifact.reference} />
+  }
+  if (entity && schema) {
+    const entityPayload = objectPayload(entity.payload)
+    // 只认投影产出的 url(artifactToIntegrationEntity 已滤掉 gsheet:// 等内部
+    // scheme)。这里不能再兜底上面的 raw `url` — 它会把内部引用变回死链接。
+    const entityUrl = stringField(entityPayload, 'url')
+    const secondary = stringField(entityPayload, 'secondary')
+    const details = schema.preview.details
+      .map((d) => ({ ...d, value: d.value || scalarField(entityPayload, d.label) }))
+      .filter((d) => d.value && d.kind !== 'link')
+      .slice(0, 4)
+    return (
+      <div className="planner-node__integration-preview">
+        <strong>
+          {schema.integrationId}:{schema.entityKind}
+          {secondary ? ` · ${secondary}` : ''}
+        </strong>
+        {details.length > 0 && (
+          <span>
+            {details.map((d) => `${d.label} ${d.value}`).join(' · ')}
+          </span>
+        )}
+        {entityUrl ? (
+          <a href={entityUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+            {entityUrl}
+          </a>
+        ) : (
+          <code>{artifact.reference}</code>
+        )}
+      </div>
+    )
+  }
   const provider = stringField(payload, 'provider') ?? artifact.kind
   const summary = stringField(payload, 'summary') ?? content?.content
   return (
@@ -1042,6 +1115,97 @@ function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerAr
       )}
     </div>
   )
+}
+
+/**
+ * Google Sheets tracker tab 的 sheet 样式 view:绿表头格子 + 列名 + 占位行。
+ * integration 层只有 schema+view(无 fetch)— 格子是 tab 的「形状」,事实
+ * (行数/更新时间)在 footer 文案里,行格子只是占位纹理,不伪造数据。
+ */
+function GoogleSheetsTabPreview({
+  entity,
+  schema,
+  reference,
+}: {
+  entity: IntegrationEntity
+  schema: IntegrationViewSchema
+  reference: string
+}) {
+  const payload = objectPayload(entity.payload)
+  const url = stringField(payload, 'url')
+  const tab = scalarField(payload, 'tab') || scalarField(payload, 'secondary')
+  const columns = scalarField(payload, 'header')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const rowCount = Number(scalarField(payload, 'rows') || '0')
+  const updated = scalarField(payload, 'updated')
+  // 列数:header 给了列名就数列名;老 payload 只有数值 fields.columns
+  // (无列名,画不出表头格子)时也要保留列数事实,不能比旧通用渲染知道得更少。
+  const columnCount = columns.length > 0 ? columns.length : Number(scalarField(payload, 'columns') || '0')
+  const facts = [
+    Number.isFinite(rowCount) ? `${rowCount} 行` : '',
+    columnCount > 0 ? `${columnCount} 列` : '',
+    updated ? `更新 ${updated}` : '',
+    rowCount === 0 ? '待写入' : '',
+  ].filter(Boolean)
+  return (
+    <div className="planner-node__integration-preview planner-node__sheet">
+      <strong className="planner-node__sheet-head">
+        Google Sheets{schema.entityKind === 'tab' && tab ? ` · ${tab}` : ''}
+      </strong>
+      {columns.length > 0 ? (
+        <div className="planner-node__table-block planner-node__sheet-grid">
+          <div className="planner-node__table-wrap">
+            <table className="planner-node__table">
+              <thead>
+                <tr>
+                  {columns.map((column) => (
+                    <th key={column}>{column}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 3 }, (_, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {columns.map((column) => (
+                      <td key={column}>&nbsp;</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="planner-node__table-footer">{facts.join(' · ')}</div>
+        </div>
+      ) : (
+        facts.length > 0 && <span>{facts.join(' · ')}</span>
+      )}
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+          在 Google Sheets 打开
+        </a>
+      ) : (
+        <code>{reference}</code>
+      )}
+    </div>
+  )
+}
+
+/** `<integrationId>:<entityKind>` → view schema(拆分一次,避免两处 slice)。 */
+function viewSchemaOf(schemaId: string) {
+  const sep = schemaId.indexOf(':')
+  if (sep <= 0) return undefined
+  return getViewSchema(schemaId.slice(0, sep), schemaId.slice(sep + 1))
+}
+
+/** detail 行取值:integration fields 是 string|number 混合(rows/columns 是数),
+ *  stringField 只认 string 会把数值行整行丢掉。 */
+function scalarField(object: Record<string, unknown> | null, field: string): string {
+  const value = object?.[field]
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
 }
 
 function ArtifactMetadata({
@@ -1498,6 +1662,9 @@ function compactArtifactPreview(artifact: PlannerArtifact | undefined, max = 90)
         break
       case 'file':
         raw = typed.filename
+        break
+      case 'json':
+        raw = typed.preview
         break
     }
   }

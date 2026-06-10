@@ -30,8 +30,9 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { proposePlannerGraphChange } from '../../api'
+import { getPlannerArtifactContent, proposePlannerGraphChange } from '../../api'
 import { useToast } from '../../App'
+import { resolvedArtifactPayload } from '../../lib/artifactPayload'
 import { TypedPayloadPreview } from '../artifacts/TypedPayloadPreview'
 import type {
   ArtifactPayload,
@@ -41,6 +42,7 @@ import type {
   NodeStateSnapshot,
   PlanProposal,
   PlannerArtifact,
+  PlannerArtifactContent,
   PlanningNode,
   Widget,
   WidgetKind,
@@ -189,7 +191,7 @@ function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode 
 // TODO(spec §7.4): once the contract carries an explicit `Artifact.authorable`
 // boolean we can drop both this `source`-derivation AND the heuristic and read
 // the flag directly.
-function isSeedAuthorableNode(node: PlanningNode): boolean {
+export function isSeedAuthorableNode(node: PlanningNode): boolean {
   if (node.artifactSource) {
     const src = node.artifactSource
     // dataSource mirror / canvas-runtime / input slot → not authorable.
@@ -275,6 +277,27 @@ export function InspectorArtifactBody({
   }, [initialSelectedArtifactId])
   const activeArtifact =
     nodeArtifacts.find((a) => a.id === selectedArtifactId) ?? latestArtifact
+  const [contentByArtifactId, setContentByArtifactId] = useState<Record<string, PlannerArtifactContent | null>>({})
+  useEffect(() => {
+    if (!activeArtifact) return
+    if (Object.prototype.hasOwnProperty.call(contentByArtifactId, activeArtifact.id)) return
+    let cancelled = false
+    getPlannerArtifactContent(canvasId, activeArtifact.id)
+      .then((content) => {
+        if (!cancelled) {
+          setContentByArtifactId((current) => ({ ...current, [activeArtifact.id]: content }))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setContentByArtifactId((current) => ({ ...current, [activeArtifact.id]: null }))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeArtifact, canvasId, contentByArtifactId])
+  const activeArtifactContent = activeArtifact ? contentByArtifactId[activeArtifact.id] ?? undefined : undefined
 
   // canvas-spec §7.4 — only source/seed artifacts are hand-fillable. See
   // isSeedAuthorableNode above. Gates both the AuthoredFirstArtifactEditor and
@@ -289,7 +312,7 @@ export function InspectorArtifactBody({
   // 编辑切换(仅 markdown / prd / kanban 类型可编辑;v0.1 是占位 — 编辑器尚未上)。
   const [editMode, setEditMode] = useState(false)
   const activePayload: ArtifactPayload | null =
-    activeArtifact?.typedPayload ?? null
+    activeArtifact ? resolvedArtifactPayload(activeArtifact, activeArtifactContent) : null
   // canvas-spec §7.4 — 编辑入口只对源/种子产物开放。非种子(step 执行产物)的
   // payload 即便是 markdown/prd/kanban,也只读,不给「编辑」toggle。
   const canEditPayload =
@@ -659,6 +682,7 @@ export function InspectorArtifactBody({
         {activeArtifact && (
           <PayloadBodySwitch
             artifact={activeArtifact}
+            content={activeArtifactContent}
             editMode={editMode && canEditPayload}
           />
         )}
@@ -1023,15 +1047,17 @@ function AuthoredFirstArtifactEditor({
 // ---------------------------------------------------------------------------
 function PayloadBodySwitch({
   artifact,
+  content,
   editMode,
 }: {
   artifact: PlannerArtifact | null
+  content?: PlannerArtifactContent | null
   editMode: boolean
 }) {
   if (!artifact) {
     return <p className="planner-node-modal__empty">这个节点还没有产出</p>
   }
-  const typed = artifact.typedPayload
+  const typed = resolvedArtifactPayload(artifact, content ?? undefined)
   if (typed) {
     if (editMode) {
       switch (typed.type) {
