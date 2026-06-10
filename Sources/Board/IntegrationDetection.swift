@@ -242,6 +242,19 @@ enum IntegrationCatalog {
                 envKeys: ["LARK_APP_ID", "LARK_APP_SECRET"]
             ),
             setupHint: "Add the Lark MCP server and a Lark App ID + Secret."
+        ),
+        IntegrationDescriptor(
+            id: "google-sheets", name: "Google Sheets", category: "data",
+            mcpServerNames: ["google-sheets", "sheets", "google_sheets", "gdrive"],
+            credentialProbes: [],
+            // Google 没有官方 hosted Sheets MCP;社区 stdio server 各有各的
+            // service-account 配置,没法给一键安装。canvas 侧 view-schema
+            // (google-sheets:sheet/tab)不依赖连接状态 — tracker artifact 由
+            // session attach,view 永远可渲染。
+            install: .unsupported(
+                reason: "No official Google Sheets MCP server yet. Connect any community stdio server (service-account auth) under one of the recognized server names."
+            ),
+            setupHint: "Google Sheets MCP needs a community server + service account — see install.reason."
         )
     ]
 }
@@ -504,7 +517,8 @@ enum IntegrationSignals {
         "supabase": ["supabase.co", "supabase"],
         "sentry": ["sentry.io", "sentry"],
         "postgres": ["postgres", "postgresql", "psql"],
-        "lark": ["larksuite.com", "feishu.cn", "lark", "feishu", "idea-draft", "lark-doc"]
+        "lark": ["larksuite.com", "feishu.cn", "lark", "feishu", "idea-draft", "lark-doc"],
+        "google-sheets": ["docs.google.com/spreadsheets", "gsheet://", "google sheets", "google-sheets"]
     ]
 }
 

@@ -2684,7 +2684,10 @@
 }
 
 .planner-node--artifact-node {
-  width: 240px;
+  /* 宽高自由调整 — 同 .planner-node 的策略:外框(adapter 给 initialWidth /
+   * NodeResizer 写显式 px)决定宽度,卡片 width:100% 填满。原来的固定 240px
+   * 会把 NodeResizer 的横向调整完全吃掉:外框变宽、卡片纹丝不动。 */
+  width: 100%;
   min-height: 116px;
   border-left-width: 3px;
   border-color: rgba(170, 157, 132, 0.3);
@@ -2773,13 +2776,35 @@
   overflow-wrap: anywhere;
 }
 
-.planner-node__table-wrap {
+/* 表格块 = [滚动区 + 静态 footer] 两段。header/footer 一律不用 position:sticky —
+ * react-flow viewport 是 transform: scale() 的,sticky 元素在缩放/滚动时按旧的
+ * 合成层偏移定位,黑色行会悬浮漂移到表格中部(实测)。footer 挪到滚动区外面,
+ * 不 sticky 也常驻可见;表头随内容滚动,正确性优先。 */
+.planner-node__table-block {
   margin-top: 10px;
   border: 1px solid rgba(168, 165, 155, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(18, 18, 16, 0.34);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.planner-node__table-wrap {
   max-height: 220px;
   overflow: auto;
+}
+
+/* 卡片被拉高(--fill)时表格吃掉多出来的纵向空间:解除 220px 上限,
+ * 滚动区随卡片高度伸缩。 */
+.planner-node--fill .planner-node__table-block {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.planner-node--fill .planner-node__table-wrap {
+  max-height: none;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .planner-node__table {
@@ -2801,12 +2826,9 @@
 }
 
 .planner-node__table th {
-  position: sticky;
-  top: 0;
   background: rgba(28, 28, 25, 0.96);
   color: var(--text-dim);
   font-weight: 600;
-  z-index: 1;
 }
 
 .planner-node__table td {
@@ -2818,13 +2840,32 @@
 }
 
 .planner-node__table-footer {
-  position: sticky;
-  bottom: 0;
+  flex: 0 0 auto;
   padding: 4px 8px;
   background: rgba(28, 28, 25, 0.96);
   color: var(--text-faint);
   font-size: 10px;
   border-top: 1px solid rgba(168, 165, 155, 0.1);
+}
+
+/* Google Sheets tracker tab 的 sheet 样式 view — 绿表头映射 Sheets 品牌色,
+ * 占位行给出「这是张表」的形状感;事实(行数/更新)在 footer。 */
+.planner-node__sheet-head {
+  color: #34a853;
+}
+
+.planner-node__sheet-grid {
+  margin-top: 6px;
+}
+
+.planner-node__sheet-grid th {
+  background: rgba(24, 128, 56, 0.28);
+  color: var(--text);
+  border-bottom: 1px solid rgba(24, 128, 56, 0.4);
+}
+
+.planner-node__sheet-grid td {
+  border-bottom: 1px dashed rgba(168, 165, 155, 0.12);
 }
 
 .planner-node__html-preview {
