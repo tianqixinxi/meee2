@@ -7910,6 +7910,9 @@ final class PlannerStore {
             }
             if let existingSlot = result.first(where: { sameArtifactSlot($0, next) }) {
                 next.id = existingSlot.id
+                if next.views == nil {
+                    next.views = existingSlot.views
+                }
             }
             result.removeAll { existing in
                 existing.id == next.id || sameArtifactSlot(existing, next)

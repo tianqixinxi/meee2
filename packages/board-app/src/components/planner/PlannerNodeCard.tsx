@@ -986,8 +986,11 @@ const NODE_KIND_LABEL: Record<PlanningNodeKind, string> = {
 
 function ArtifactPreview({
   artifact,
+  kind,
+  kanban,
   content,
   error,
+  onOpenKanbanItem,
 }: {
   artifact?: PlannerArtifact
   kind: CanvasArtifactKind
@@ -1001,6 +1004,9 @@ function ArtifactPreview({
   }
   if (error) {
     return <div className="planner-node__artifact-empty">{error}</div>
+  }
+  if (kind === 'kanban' && kanban) {
+    return <KanbanArtifactPreview artifact={artifact} payload={kanban} onOpenItem={onOpenKanbanItem} />
   }
   return <ArtifactViewTabs artifact={artifact} content={content} compact emptyLabel={ARTIFACT_LABELS.empty} />
 }
