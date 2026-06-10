@@ -466,10 +466,46 @@ async function handleAttachArtifactToNode(args) {
   )
 }
 
-// Direct artifact-layer read/write — 账本直改,绕开节点会话生命周期。
-// 不做 assertPlannerToolScope:reference 可能横跨多个节点槽位(共享外部对象),
-// 「绑定会话才能动节点」的 scope 语义不适用;实际权限由服务端按受影响节点
-// 逐个校验(owner 任意 / doer 仅自己的节点)。
+// Direct artifact-layer write 的会话 scope:assertPlannerToolScope 的
+// 「绑定会话只能动自己节点」语义按 reference 翻译 — 绑定会话只能更新
+// **自己节点挂着的 reference**(共享引用照常扇出到其他节点的镜像槽位,
+// 那正是一致性语义);不是自己节点的 artifact 一律拒绝。没有会话上下文
+// (人工 / operator CLI)或会话未绑定任何节点时放行,由服务端按节点权限兜底
+// (Board 请求不带 per-session 身份,本地模式 actor 回落 owner — 没有这层
+// 守卫,绑定会话就能越权改无关节点的账本)。
+async function assertArtifactWriteScope(canvasId, { reference, artifactId }) {
+  const candidates = envSessionCandidates()
+  if (candidates.length === 0) return
+  const graph = await callApi(
+    'GET',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`,
+  )
+  const nodes = graph.nodes || []
+  const matches = (a, b) => a === b || a.endsWith(b) || b.endsWith(a)
+  const ownNodes = nodes.filter(
+    (n) => n.sessionId && candidates.some((c) => matches(n.sessionId, c)),
+  )
+  // env 里有会话但没绑定任何 planner 节点 → 非 planner 执行上下文,放行。
+  if (ownNodes.length === 0) return
+  let targetRef = (reference || '').trim()
+  if (!targetRef && artifactId) {
+    const res = await callApi(
+      'GET',
+      `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/latest?artifactId=${encodeURIComponent(artifactId)}`,
+    )
+    targetRef = (res?.artifacts?.[0]?.reference || '').trim()
+  }
+  if (!targetRef) throw new Error(`artifact not found for scope check: ${artifactId || reference}`)
+  const owned = ownNodes.some((n) =>
+    (n.artifactRefs || []).some((ref) => (ref || '').trim() === targetRef),
+  )
+  if (!owned) {
+    throw new Error(
+      'update_artifact from a bound session may only target references attached to its own node(s)',
+    )
+  }
+}
+
 async function handleGetArtifact(args) {
   const { canvasId, reference, artifactId } = args
   if (!canvasId) throw new Error('canvasId is required')
@@ -487,6 +523,7 @@ async function handleUpdateArtifact(args) {
   const { canvasId } = args
   if (!canvasId) throw new Error('canvasId is required')
   if (!args.reference && !args.artifactId) throw new Error('pass reference or artifactId')
+  await assertArtifactWriteScope(canvasId, { reference: args.reference, artifactId: args.artifactId })
   return await callApi(
     'POST',
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/update`,
