@@ -16,6 +16,7 @@ import type {
   CanvasObject,
   CanvasRelation,
   CanvasRenderProfile,
+  CanvasOrchestrationProfile,
   CanvasRenderObjectValues,
   CanvasRenderRelationValues,
   CanvasSceneSpec,
@@ -714,8 +715,18 @@ export interface CanvasTemplate {
   defaultNodes: CanvasTemplateNodeSpec[]
   sceneSpec?: CanvasSceneSpec | null
   renderProfile?: CanvasRenderProfile | null
+  orchestrationProfile?: CanvasOrchestrationProfile | null
+  templateIntakePolicy?: TemplateIntakePolicy | null
   renderObjects?: CanvasObject[]
   renderRelations?: CanvasRelation[]
+}
+
+export interface TemplateIntakePolicy {
+  version: 1
+  matchPhrases: string[]
+  adaptationTargets: string[]
+  initialStateRefs: string[]
+  outputRefs: string[]
 }
 
 export interface CanvasTemplateCatalog {

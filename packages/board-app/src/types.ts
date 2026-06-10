@@ -589,6 +589,41 @@ export interface CanvasRenderProfileStatus {
   updatedAt?: string | null
 }
 
+export type CanvasOrchestrationKind = 'workflow-graph-v1' | 'monitor-observer-v1' | 'poker-rules-v1'
+
+export interface CanvasOrchestrationStateSlot {
+  nodeId: string
+  reference: string
+}
+
+export interface CanvasOrchestrationActionBinding {
+  id: string
+  capability: string
+  targetSlot?: string | null
+  targetRoleSlot?: string | null
+  payloadSchema?: unknown
+}
+
+export interface CanvasOrchestrationBindings {
+  roleSlots: Record<string, string>
+  stateSlots: Record<string, CanvasOrchestrationStateSlot>
+  actions: CanvasOrchestrationActionBinding[]
+}
+
+export interface CanvasOrchestrationProfile {
+  version: 1
+  kind: CanvasOrchestrationKind
+  policy: Record<string, unknown>
+  bindings: CanvasOrchestrationBindings
+}
+
+export interface CanvasOrchestrationProfileStatus {
+  state: 'valid' | 'missing-migrated' | 'invalid-using-last-valid'
+  path: string
+  error?: string | null
+  updatedAt?: string | null
+}
+
 export interface CanvasRelationEndpoint {
   objectId: string
 }
@@ -1352,7 +1387,28 @@ export type ArtifactSource =
   | { kind: 'canvas-runtime' }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
-export type PlanChangeKind = 'addNode' | 'updateNode' | 'attachArtifact'
+export type PlanChangeKind =
+  | 'addNode'
+  | 'updateNode'
+  | 'removeNode'
+  | 'addDataSource'
+  | 'updateDataSource'
+  | 'setPartitionRule'
+  | 'archiveDataSource'
+  | 'addEdge'
+  | 'updateEdgeMode'
+  | 'removeEdge'
+  | 'setMonitorSpec'
+  | 'addMonitorCard'
+  | 'updateMonitorCard'
+  | 'removeMonitorCard'
+  | 'moveMonitorCard'
+  | 'replaceRenderLogic'
+  | 'replaceOrchestrationProfile'
+  | 'writeSourceVersion'
+  | 'attachExternalArtifact'
+  | 'attachArtifact'
+  | 'refineSessionPrompt'
 
 export interface PlanArtifactDraft {
   nodeId?: string | null
@@ -1411,6 +1467,8 @@ export interface PlanChange {
   /** Node-widget (2026-05-28): proposal-driven update of `PlanningNode.widget`. */
   widget?: Widget | null
   artifact?: PlanArtifactDraft | null
+  renderLogic?: CanvasRenderLogic | null
+  orchestrationProfile?: CanvasOrchestrationProfile | null
 }
 
 export interface PlanProposal {
@@ -1555,6 +1613,8 @@ export type PlannerGraphState = PlannerCanvasState & {
   edges: PlannerGraphEdge[]
   renderProfile?: CanvasRenderProfile | null
   renderProfileStatus?: CanvasRenderProfileStatus | null
+  orchestrationProfile?: CanvasOrchestrationProfile | null
+  orchestrationProfileStatus?: CanvasOrchestrationProfileStatus | null
   renderObjects?: CanvasObject[]
   renderRelations?: CanvasRelation[]
   /**

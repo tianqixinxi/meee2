@@ -268,10 +268,18 @@ final class AssistantAPITests: XCTestCase {
         )
         guard case .success(let payload) = result,
               let dict = payload as? [String: Any],
-              let canvas = dict["canvas"] as? [String: Any] else {
+              let canvas = dict["canvas"] as? [String: Any],
+              let orchestrationProfile = dict["orchestrationProfile"] as? [String: Any],
+              let orchestrationStatus = dict["orchestrationProfileStatus"] as? [String: Any] else {
             return XCTFail("expected canvas context")
         }
         XCTAssertEqual(canvas["id"] as? String, "personal-default")
+        XCTAssertTrue([
+            "workflow-graph-v1",
+            "monitor-observer-v1",
+            "poker-rules-v1"
+        ].contains(orchestrationProfile["kind"] as? String))
+        XCTAssertNotNil(orchestrationStatus["path"])
         XCTAssertNotNil(dict["sessions"])
     }
 }

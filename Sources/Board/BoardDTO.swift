@@ -323,6 +323,8 @@ struct PlannerGraphStateEnvelope: Encodable {
     let edges: [PlannerGraphEdge]
     let renderProfile: CanvasRenderProfile?
     let renderProfileStatus: CanvasRenderProfileStatus?
+    let orchestrationProfile: CanvasOrchestrationProfile?
+    let orchestrationProfileStatus: CanvasOrchestrationProfileStatus?
     let renderObjects: [CanvasObject]
     let renderRelations: [CanvasRelation]
     let nodeAssignments: [NodeAssignmentDTO]
@@ -343,6 +345,8 @@ struct PlannerGraphStateEnvelope: Encodable {
         edges: [PlannerGraphEdge],
         renderProfile: CanvasRenderProfile? = nil,
         renderProfileStatus: CanvasRenderProfileStatus? = nil,
+        orchestrationProfile: CanvasOrchestrationProfile? = nil,
+        orchestrationProfileStatus: CanvasOrchestrationProfileStatus? = nil,
         renderObjects: [CanvasObject] = [],
         renderRelations: [CanvasRelation] = [],
         nodeAssignments: [NodeAssignmentDTO] = [],
@@ -360,6 +364,8 @@ struct PlannerGraphStateEnvelope: Encodable {
         self.edges = edges
         self.renderProfile = renderProfile
         self.renderProfileStatus = renderProfileStatus
+        self.orchestrationProfile = orchestrationProfile
+        self.orchestrationProfileStatus = orchestrationProfileStatus
         self.renderObjects = renderObjects
         self.renderRelations = renderRelations
         self.nodeAssignments = nodeAssignments
@@ -506,6 +512,8 @@ struct CanvasTemplateDTO: Encodable {
     let defaultNodes: [CanvasTemplateNodeSpecDTO]
     let sceneSpec: CanvasSceneSpec?
     let renderProfile: CanvasRenderProfile?
+    let orchestrationProfile: CanvasOrchestrationProfile?
+    let templateIntakePolicy: TemplateIntakePolicy?
     let renderObjects: [CanvasObject]
     let renderRelations: [CanvasRelation]
 }

@@ -595,6 +595,7 @@ public final class BoardServer {
         server.GET["/api/planner/canvases/:id/graph"] = BoardServer.cors(BoardAPI.getPlannerGraphState)
         server.PATCH["/api/planner/canvases/:id/render-profile/values"] = BoardServer.cors(BoardAPI.patchCanvasRenderValues)
         server.POST["/api/planner/canvases/:id/render-profile/reveal"] = BoardServer.cors(BoardAPI.revealCanvasRenderProfile)
+        server.POST["/api/planner/canvases/:id/orchestration-profile/reveal"] = BoardServer.cors(BoardAPI.revealCanvasOrchestrationProfile)
         server.POST["/api/planner/canvases/:id/clear"] = BoardServer.cors(BoardAPI.clearPlannerCanvasContent)
         server.PATCH["/api/planner/canvases/:id/visibility"] = BoardServer.cors(BoardAPI.setPlannerCanvasVisibility)
         server.PATCH["/api/planner/canvases/:id/description"] = BoardServer.cors(BoardAPI.setPlannerCanvasDescription)
