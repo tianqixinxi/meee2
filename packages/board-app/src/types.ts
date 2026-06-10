@@ -879,6 +879,20 @@ export interface PlannerArtifact {
    * shows a pending badge + Promote button when this is 'pending'.
    */
   reviewStatus?: ArtifactReviewStatus
+  views?: PlannerArtifactView[] | null
+}
+
+export type PlannerArtifactViewKind = 'table' | 'list' | 'kanban' | 'raw' | 'json'
+
+export interface PlannerArtifactView {
+  id: string
+  title: string
+  kind: PlannerArtifactViewKind
+  sourcePath?: string | null
+  columns?: string[] | null
+  filter?: unknown
+  sort?: unknown
+  groupBy?: unknown
 }
 
 export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'

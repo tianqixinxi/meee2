@@ -575,6 +575,45 @@ enum PlannerArtifactProducer: String, Codable, Equatable {
     case integration
 }
 
+enum PlannerArtifactViewKind: String, Codable, Equatable, CaseIterable {
+    case table
+    case list
+    case kanban
+    case raw
+    case json
+}
+
+struct PlannerArtifactView: Codable, Equatable {
+    var id: String
+    var title: String
+    var kind: PlannerArtifactViewKind
+    var sourcePath: String?
+    var columns: [String]?
+    var filter: BoardJSONValue?
+    var sort: BoardJSONValue?
+    var groupBy: BoardJSONValue?
+
+    init(
+        id: String,
+        title: String,
+        kind: PlannerArtifactViewKind,
+        sourcePath: String? = nil,
+        columns: [String]? = nil,
+        filter: BoardJSONValue? = nil,
+        sort: BoardJSONValue? = nil,
+        groupBy: BoardJSONValue? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self.sourcePath = sourcePath
+        self.columns = columns
+        self.filter = filter
+        self.sort = sort
+        self.groupBy = groupBy
+    }
+}
+
 struct PlannerArtifact: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -606,6 +645,9 @@ struct PlannerArtifact: Codable, Equatable {
     /// slot chain (chain length). Pairs with `versionIndex` so the UI can show
     /// e.g. `v2 / 3`. Derived at read time; `nil` when unknown.
     var versionCount: Int?
+    /// Artifact-owned named projections over this artifact's data. Views are
+    /// presentation metadata, not artifact data versions.
+    var views: [PlannerArtifactView]?
 
     init(
         id: String,
@@ -621,7 +663,8 @@ struct PlannerArtifact: Codable, Equatable {
         runId: String? = nil,
         reviewStatus: String? = nil,
         versionIndex: Int? = nil,
-        versionCount: Int? = nil
+        versionCount: Int? = nil,
+        views: [PlannerArtifactView]? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -637,6 +680,7 @@ struct PlannerArtifact: Codable, Equatable {
         self.reviewStatus = reviewStatus
         self.versionIndex = versionIndex
         self.versionCount = versionCount
+        self.views = views
     }
 }
 
@@ -6234,6 +6278,87 @@ final class PlannerStore {
         }
     }
 
+    func updateArtifactViews(
+        canvasId: String,
+        artifactId: String? = nil,
+        reference: String? = nil,
+        views: [PlannerArtifactView],
+        deleteViewIds: [String] = [],
+        submittedBy: String? = nil
+    ) throws -> [PlannerArtifact] {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            let targets = matchArtifacts(record.artifacts, artifactId: artifactId, reference: reference)
+            guard !targets.isEmpty else {
+                throw PlannerCoreError.artifactNotFound(artifactId ?? reference ?? "(no selector)")
+            }
+            let normalizedViews = try normalizeArtifactViews(views)
+            let deletes = Set(deleteViewIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+            guard !normalizedViews.isEmpty || !deletes.isEmpty else {
+                throw PlannerCoreError.invalidNodeOutput("updateArtifactViews requires views or deleteViewIds")
+            }
+
+            var updated: [PlannerArtifact] = []
+            for target in targets {
+                guard let idx = record.artifacts.firstIndex(where: { $0.id == target.id }) else { continue }
+                var next = record.artifacts[idx]
+                var byId: [String: PlannerArtifactView] = [:]
+                var order: [String] = []
+                for view in next.views ?? [] {
+                    let id = view.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !id.isEmpty, !deletes.contains(id) else { continue }
+                    if byId[id] == nil { order.append(id) }
+                    byId[id] = view
+                }
+                for view in normalizedViews {
+                    if byId[view.id] == nil { order.append(view.id) }
+                    byId[view.id] = view
+                }
+                let merged = order.compactMap { byId[$0] }
+                next.views = merged.isEmpty ? nil : merged
+                record.artifacts[idx] = next
+                updated.append(next)
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .artifactAttached,
+                nodeId: targets.first?.nodeId,
+                summary: "Artifact views updated",
+                artifactRefs: Array(Set(updated.map(\.reference)))
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return updated
+        }
+    }
+
+    private func normalizeArtifactViews(_ views: [PlannerArtifactView]) throws -> [PlannerArtifactView] {
+        var seen = Set<String>()
+        return try views.map { view in
+            let id = view.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else {
+                throw PlannerCoreError.invalidNodeOutput("Artifact view id cannot be empty.")
+            }
+            guard seen.insert(id).inserted else {
+                throw PlannerCoreError.invalidNodeOutput("Duplicate artifact view id '\(id)'.")
+            }
+            let title = view.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PlannerArtifactView(
+                id: id,
+                title: title.isEmpty ? id : title,
+                kind: view.kind,
+                sourcePath: {
+                    let value = view.sourcePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return value.isEmpty ? nil : value
+                }(),
+                columns: view.columns?.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
+                filter: view.filter,
+                sort: view.sort,
+                groupBy: view.groupBy
+            )
+        }
+    }
+
     private func matchArtifacts(
         _ artifacts: [PlannerArtifact],
         artifactId: String?,
@@ -8646,6 +8771,7 @@ enum PlannerBoardBridge {
             payload: normalizedPayload
         )
         _ = try store.attachArtifact(artifact, canvasId: canvasId)
+        try validateArtifactReadback([artifact])
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
@@ -8707,7 +8833,36 @@ enum PlannerBoardBridge {
                 submittedByKind: submittedByKind
             )
         }
+        try validateArtifactReadback(updated)
         return updated
+    }
+
+    static func updateArtifactViews(
+        artifactId: String? = nil,
+        reference: String? = nil,
+        views: [PlannerArtifactView],
+        deleteViewIds: [String] = [],
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [PlannerArtifact] {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        let targets = try store.findArtifacts(canvasId: canvasId, artifactId: artifactId, reference: reference)
+        guard !targets.isEmpty else {
+            throw PlannerCoreError.artifactNotFound(artifactId ?? reference ?? "(no selector)")
+        }
+        for target in targets {
+            guard let node = state.nodes.first(where: { $0.id == target.nodeId }) else { continue }
+            try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        }
+        return try store.updateArtifactViews(
+            canvasId: canvasId,
+            artifactId: artifactId,
+            reference: reference,
+            views: views,
+            deleteViewIds: deleteViewIds,
+            submittedBy: actorUserId
+        )
     }
 
     static func updateNodeStatus(
@@ -8895,6 +9050,13 @@ enum PlannerBoardBridge {
             submittedByKind: submittedByKind,
             submittedBy: submittedBy
         )
+        try validateArtifactReadback(submitted.record.artifacts.filter { artifact in
+            normalizedOutput.artifacts.contains { outputArtifact in
+                artifact.nodeId == nodeId
+                    && artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+                        == outputArtifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        })
         // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
         // bridge layer so the engine path stays pure (BoardAPI is the place
         // that actually spawns terminals — see `recordPlannerDispatchIntent`
@@ -8947,6 +9109,12 @@ enum PlannerBoardBridge {
             versionIndex: submitted.version?.versionIndex,
             autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
         )
+    }
+
+    private static func validateArtifactReadback(_ artifacts: [PlannerArtifact]) throws {
+        for artifact in artifacts {
+            _ = try PlannerArtifactStorage.content(for: artifact)
+        }
     }
 
     private static func artifactRequirementHint(for node: PlanningNode, artifacts: [PlannerArtifact]) -> String? {

@@ -194,6 +194,40 @@ const TOOLS = [
       required: ['canvasId'],
     },
   },
+  {
+    name: 'update_artifact_views',
+    description:
+      'Update named presentation views for an artifact without changing ' +
+      'artifact data or appending an artifact version. Use this for table/list/' +
+      'kanban/raw/json view tabs; use update_artifact only when data changed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        reference: { type: 'string', description: 'Artifact reference shared by the slots to update.' },
+        artifactId: { type: 'string', description: 'Exact artifact id (alternative to reference).' },
+        views: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              title: { type: 'string' },
+              kind: { type: 'string', enum: ['table', 'list', 'kanban', 'raw', 'json'] },
+              sourcePath: { type: 'string' },
+              columns: { type: 'array', items: { type: 'string' } },
+              filter: { type: 'object' },
+              sort: { type: 'object' },
+              groupBy: { type: 'object' },
+            },
+            required: ['id', 'title', 'kind'],
+          },
+        },
+        deleteViewIds: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['canvasId'],
+    },
+  },
 ]
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
@@ -538,6 +572,23 @@ async function handleUpdateArtifact(args) {
   )
 }
 
+async function handleUpdateArtifactViews(args) {
+  const { canvasId } = args
+  if (!canvasId) throw new Error('canvasId is required')
+  if (!args.reference && !args.artifactId) throw new Error('pass reference or artifactId')
+  await assertArtifactWriteScope(canvasId, { reference: args.reference, artifactId: args.artifactId })
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/views`,
+    {
+      artifactId: args.artifactId,
+      reference: args.reference,
+      views: args.views || [],
+      deleteViewIds: args.deleteViewIds || [],
+    },
+  )
+}
+
 // ─── server plumbing ──────────────────────────────────────────────────────
 
 // `instructions` 是 MCP 协议在 InitializeResult 里返回的 system-level hint
@@ -551,11 +602,13 @@ const INSTRUCTIONS = [
   'interface for reading node contracts and submitting structured canvas output.',
   '',
   'Core tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
-  'get_artifact, update_artifact, read_inbox, list_sessions.',
+  'get_artifact, update_artifact, update_artifact_views, read_inbox, list_sessions.',
   'Artifact rule: get_artifact pulls the latest snapshot of a shared ledger',
   'artifact (by reference); update_artifact refreshes it in place (new version,',
   'node state untouched) — use them when data changed but the node is not',
   'finishing an attempt.',
+  'Artifact view rule: update_artifact_views updates view tabs only. Do not put',
+  'views inside artifact payloads.',
   'Planner rule: first read_node_contract; final state must be submitted through',
   'submit_node_output exactly once per completed/blocked attempt. If the contract',
   'says output.payload_kind=artifact_ref, submit artifacts[] and put the output',
@@ -589,6 +642,9 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'update_artifact':
         result = await handleUpdateArtifact(args)
+        break
+      case 'update_artifact_views':
+        result = await handleUpdateArtifactViews(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)

@@ -9,11 +9,11 @@ The state where meee2 can receive real local AI session activity, show the works
 _Avoid_: Agent Runtime setup, because that only names one part of the readiness chain.
 
 **Readiness Check**:
-A local setup check made of required and optional items. Local Session Readiness requires every installed supported provider and every essential meee2 surface to be ready; unsupported or absent providers may be shown without blocking readiness.
+A local setup check made of required and optional items. Local Session Readiness requires at least one supported local provider runtime to be installed and configured, plus every essential meee2 surface to be ready; other absent providers may be recommended without blocking readiness.
 _Avoid_: Health score, setup percentage
 
 **Supported Provider**:
-A local AI tool integration that meee2 knows how to connect to for session activity. If a Supported Provider is installed on the user's machine, M0 treats it as required for Local Session Readiness.
+A local AI tool integration that meee2 knows how to connect to for session activity. M0 requires one Supported Provider to be ready; additional providers can be configured later unless the user chooses that provider for setup.
 _Avoid_: Optional integration, best-effort provider
 
 **Degraded Entry**:
@@ -167,6 +167,10 @@ _Avoid_: Manual status as truth, done-only workflow state
 **Artifact**:
 Traceable work proof attached to a Canvas Workspace or node, such as file diffs, command results, tool calls, documents, screenshots, pull requests, and node outputs.
 _Avoid_: Canvas Evidence, status without proof, hidden artifact
+
+**Artifact View**:
+A named projection over an Artifact's data, owned by the Artifact and carried with it wherever the Artifact is shown. Canvas cards, Inspector detail, and the Artifacts rail choose and render Artifact Views, but do not own the view definitions.
+_Avoid_: Canvas Render Value, widget-local tab, duplicate artifact data
 
 ## Example Dialogue
 

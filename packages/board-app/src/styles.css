@@ -2517,6 +2517,68 @@ textarea {
 .artifacts-typed-payload__integration-line strong { color: var(--accent); }
 .artifacts-typed-payload__integration-summary { color: var(--text-dim); font-size: 11.5px; margin-top: 4px; }
 
+.artifact-view-tabs {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.artifact-view-tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid rgba(168,165,155,0.12);
+  border-radius: 6px;
+  background: rgba(168,165,155,0.06);
+}
+
+.artifact-view-tabs__list button {
+  height: 24px;
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-view-tabs__list button.is-active {
+  border-color: rgba(168,165,155,0.18);
+  background: rgba(245,244,239,0.09);
+  color: var(--text);
+}
+
+.artifact-view-tabs__body {
+  min-width: 0;
+  overflow: auto;
+}
+
+.artifact-view-tabs[data-compact="true"] {
+  gap: 6px;
+}
+
+.artifact-view-tabs[data-compact="true"] .artifact-view-tabs__list {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+.artifact-view-tabs[data-compact="true"] .artifact-view-tabs__list button {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+
+.artifact-view-tabs .artifacts-preview {
+  max-height: none;
+}
+
 .artifacts-card h3 {
   margin: 0;
   font-size: 14px;

@@ -26,6 +26,7 @@ import type {
   PlanProposal,
   PlannerActivity,
   PlannerArtifact,
+  PlannerArtifactView,
   PlannerArtifactKind,
   PlannerCanvasState,
   PlannerGraphEdge,
@@ -1852,6 +1853,24 @@ export function attachPlannerArtifactToNode(
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function updatePlannerArtifactViews(
+  canvasId: string,
+  input: {
+    artifactId?: string
+    reference?: string
+    views?: PlannerArtifactView[]
+    deleteViewIds?: string[]
+  },
+): Promise<{ updated: PlannerArtifact[] }> {
+  return jsonRequest<{ updated: PlannerArtifact[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/views`,
     {
       method: 'POST',
       body: JSON.stringify(input),
