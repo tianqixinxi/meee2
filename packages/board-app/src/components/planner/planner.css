@@ -2695,15 +2695,9 @@
   background: rgba(45, 42, 36, 0.95);
 }
 
-.planner-node--artifact-kanban {
-  width: 420px;
-}
-
-.planner-node--artifact-html,
-.planner-node--artifact-json,
-.planner-node--artifact-file {
-  width: 360px;
-}
+/* (kanban/html/json/file 的固定宽度规则已删 — 默认宽度由 adapter 的
+ * initialWidth 给到外框,卡片统一 width:100% 跟随,否则 NodeResizer 横向
+ * 调整对这些 kind 仍然无效。) */
 
 .planner-node__artifact-ref {
   margin-top: 8px;

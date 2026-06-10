@@ -1140,9 +1140,12 @@ function GoogleSheetsTabPreview({
     .filter(Boolean)
   const rowCount = Number(scalarField(payload, 'rows') || '0')
   const updated = scalarField(payload, 'updated')
+  // 列数:header 给了列名就数列名;老 payload 只有数值 fields.columns
+  // (无列名,画不出表头格子)时也要保留列数事实,不能比旧通用渲染知道得更少。
+  const columnCount = columns.length > 0 ? columns.length : Number(scalarField(payload, 'columns') || '0')
   const facts = [
     Number.isFinite(rowCount) ? `${rowCount} 行` : '',
-    columns.length > 0 ? `${columns.length} 列` : '',
+    columnCount > 0 ? `${columnCount} 列` : '',
     updated ? `更新 ${updated}` : '',
     rowCount === 0 ? '待写入' : '',
   ].filter(Boolean)
