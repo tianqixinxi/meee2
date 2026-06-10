@@ -21,6 +21,8 @@ import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
 import { GuideOverlay } from './components/GuideOverlay'
+import { Notice } from './components/feedback/Notice'
+import { ToastViewport, type ToastMessage } from './components/feedback/ToastViewport'
 import { useI18n } from './lib/i18n'
 import {
   boardTargetFromPlannerItem,
@@ -229,13 +231,8 @@ function canvasListSignature(list: CanvasList): string {
 
 // -- toast context ---------------------------------------------------------
 
-interface Toast {
-  id: number
-  kind: 'info' | 'error' | 'success'
-  text: string
-}
 interface ToastCtx {
-  push: (kind: Toast['kind'], text: string) => void
+  push: (kind: ToastMessage['kind'], text: string) => void
 }
 const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
@@ -438,7 +435,7 @@ export default function App() {
     if (hydrated) setUnreadSids(hydrated.unreadSids)
   }, [hydrated])
   const prevStatusRef = useRef<Record<string, string>>({})
-  const [toasts, setToasts] = useState<Toast[]>([])
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
   const [plannerClearRevision, setPlannerClearRevision] = useState(0)
   const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(readStoredPlannerPanelCollapsed)
 
@@ -516,10 +513,11 @@ export default function App() {
 
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
-    setToasts((t) => [...t, { id, kind, text }])
+    const timeoutMs = kind === 'error' ? 6000 : 4000
+    setToasts((t) => [...t.filter((toast) => toast.kind !== kind || toast.text !== text), { id, kind, text }])
     setTimeout(() => {
       setToasts((t) => t.filter((x) => x.id !== id))
-    }, 4000)
+    }, timeoutMs)
   }, [])
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
@@ -1207,13 +1205,7 @@ export default function App() {
           onComplete={completeFirstRunOnboarding}
           onDegradedEntry={enterDegradedWorkspace}
         />
-        <div className="toasts">
-          {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.kind}`}>
-              {t.text}
-            </div>
-          ))}
-        </div>
+        <ToastViewport toasts={toasts} />
       </ToastContext.Provider>
     )
   }
@@ -1241,15 +1233,19 @@ export default function App() {
         />
         <div className={`board-area${workspaceMode === 'planner' && activeWorkspaceCanvasKind === 'monitor' ? ' board-area--monitor' : ''}`}>
           {readinessReport && !readinessReport.ready && (
-            <div className="readiness-banner" role="status">
-              <div>
-                <strong>Local session readiness needs setup</strong>
-                <span>{readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.</span>
-              </div>
-              <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
-                Open Settings
-              </button>
-            </div>
+            <Notice
+              tone="warning"
+              placement="canvas"
+              className="readiness-banner"
+              title="Local session readiness needs setup"
+              action={(
+                <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
+                  Open Settings
+                </button>
+              )}
+            >
+              {readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.
+            </Notice>
           )}
           {workspaceMode === 'planner' ? (
             activeWorkspaceCanvasKind === 'monitor' ? (
@@ -1417,13 +1413,7 @@ export default function App() {
           onOpenSession={handlePaletteOpenSession}
         />
         <GuideOverlay />
-        <div className="toasts">
-          {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.kind}`}>
-              {t.text}
-            </div>
-          ))}
-        </div>
+        <ToastViewport toasts={toasts} />
       </div>
     </ToastContext.Provider>
   )

@@ -911,13 +911,18 @@
 
 .planner-banner-stack {
   position: absolute;
-  top: 14px;
+  top: calc(var(--canvas-toolbar-bottom, 72px) + 12px);
   right: 14px;
-  z-index: 24;
+  z-index: var(--z-notice-overlay);
   display: flex;
   width: min(520px, calc(100% - 28px));
   flex-direction: column;
   gap: 8px;
+  pointer-events: none;
+}
+
+.planner-flow--preview .planner-banner-stack {
+  top: max(148px, calc(var(--canvas-toolbar-bottom, 72px) + 92px));
 }
 
 .planner-mcp-banner {
@@ -932,6 +937,7 @@
   background: rgba(43, 35, 27, 0.94);
   color: var(--text);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
 }
 
 .planner-mcp-banner svg {
@@ -6384,7 +6390,7 @@
   }
 
   .planner-banner-stack {
-    top: 52px;
+    top: calc(var(--canvas-toolbar-bottom, 72px) + 12px);
     right: 12px;
     width: min(520px, calc(100% - 32px));
   }

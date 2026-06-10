@@ -63,8 +63,10 @@
   --radius-md: 10px;
   --radius-lg: 14px;
 
-  /* Layering: transient app feedback should sit above menus/recaps/popovers. */
-  --z-toast: 12000;
+  /* Web Board layer order: Dialog > Toast > Notice > ordinary content. */
+  --z-dialog: 10000;
+  --z-toast: 8000;
+  --z-notice-overlay: 700;
 }
 
 :root[data-theme="light"] {
@@ -548,32 +550,8 @@ textarea {
   top: 12px;
   left: 12px;
   right: 12px;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--warning) 34%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-paper) 92%, rgba(0, 0, 0, 0.18));
+  z-index: var(--z-notice-overlay);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
-}
-
-.readiness-banner div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.readiness-banner strong {
-  color: var(--text);
-  font-size: 12px;
-}
-
-.readiness-banner span {
-  color: var(--text-dim);
-  font-size: 11px;
 }
 
 .first-run-runtime {
@@ -6217,6 +6195,10 @@ textarea {
   color: var(--text);
 }
 
+.canvas-toolbar:has(.canvas-toolbar__context.is-positioned) {
+  z-index: var(--z-notice-overlay);
+}
+
 .canvas-toolbar--monitor {
   width: min(940px, calc(100% - var(--planner-chat-width, 0px) - 32px));
 }
@@ -9447,8 +9429,8 @@ html.board-empty-omni .canvas-toolbar__panel {
   }
 }
 
-/* toasts */
-.toasts {
+/* Feedback: Toast */
+.toast-viewport {
   position: fixed;
   top: 18px;
   left: 0;
@@ -9462,6 +9444,7 @@ html.board-empty-omni .canvas-toolbar__panel {
   padding: 0 16px;
   pointer-events: none;
 }
+
 .toast {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -9474,11 +9457,96 @@ html.board-empty-omni .canvas-toolbar__panel {
   max-width: 100%;
   pointer-events: auto;
 }
+
+.toast--error,
 .toast.error {
   border-left-color: var(--danger);
 }
+
+.toast--success,
 .toast.success {
   border-left-color: var(--success);
+}
+
+/* Feedback: Notice */
+.notice {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--info) 28%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--info) 8%, rgba(245, 244, 239, 0.04));
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.notice--success {
+  border-color: color-mix(in srgb, var(--success) 34%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, rgba(245, 244, 239, 0.04));
+}
+
+.notice--warning {
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, rgba(245, 244, 239, 0.04));
+}
+
+.notice--danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, rgba(245, 244, 239, 0.04));
+}
+
+.notice__icon {
+  color: var(--info);
+  line-height: 0;
+  padding-top: 1px;
+}
+
+.notice--success .notice__icon { color: var(--success); }
+.notice--warning .notice__icon { color: var(--warning); }
+.notice--danger .notice__icon { color: var(--danger); }
+
+.notice__copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.notice__copy strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.notice__copy div {
+  min-width: 0;
+  color: var(--text-dim);
+}
+
+.notice__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notice__dismiss {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.notice__dismiss:hover {
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  background: rgba(245, 244, 239, 0.08);
+  color: var(--text);
 }
 
 :root {
@@ -13404,19 +13472,17 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   font-weight: 500;
 }
 
-/* One-click Complete-auth toast — appears after spawn, auto-dismisses
+/* One-click Complete-auth Notice — appears after spawn, auto-dismisses
  * once a re-scan confirms `connected`. */
-.agent-matrix__auth-toast {
+.agent-matrix__auth-notice {
+  margin: 12px 0;
+}
+
+.agent-matrix__auth-notice .notice__copy div {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin: 12px 0;
-  padding: 8px 12px;
-  border: 1px solid rgba(230, 162, 60, 0.4);
-  border-radius: var(--radius-sm);
-  background: rgba(230, 162, 60, 0.08);
-  color: #d4a373;
-  font-size: 12px;
 }
 
 .agent-matrix__auth-link {
@@ -13431,17 +13497,6 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   font-weight: 500;
 }
 .agent-matrix__auth-link:hover { background: rgba(230, 162, 60, 0.2); }
-
-.agent-matrix__auth-dismiss {
-  margin-left: 4px;
-  padding: 2px 4px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.65;
-}
-.agent-matrix__auth-dismiss:hover { opacity: 1; }
 
 .agent-matrix__install {
   padding: 4px 10px;

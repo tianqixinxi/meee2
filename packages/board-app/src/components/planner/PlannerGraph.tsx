@@ -2299,6 +2299,7 @@ function PlannerGraphInner({
           className={[
             'planner-flow',
             renderSceneSpec ? 'planner-flow--scene' : '',
+            showWorkspacePreview && activeProposal ? 'planner-flow--preview' : '',
           ].filter(Boolean).join(' ')}
           data-guide-target="planner-flow"
         >

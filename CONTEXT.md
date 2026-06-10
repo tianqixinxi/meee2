@@ -40,6 +40,30 @@ _Avoid_: All local files, artifact storage
 The product surface where users inspect Readiness Checks and run Recovery Actions. M0 uses the Web Board and Settings as Readiness Surfaces; the Island is not a Readiness Surface.
 _Avoid_: Island setup flow, menu bar checklist
 
+**Web Board**:
+The React-based main workspace surface inside the meee2 app, covering Canvas, Monitor, Settings, Artifacts, Templates, Team, and Integrations. Web Board notification design is separate from native macOS attention surfaces.
+_Avoid_: Native overlay, Dynamic Island, system notification
+
+**Native Attention Surface**:
+A macOS-level meee2 surface such as Dynamic Island, menu bar overlay, NSAlert, or system notification. Native Attention Surfaces are reserved for cross-window or urgent attention and are not the default home for Web Board UI feedback.
+_Avoid_: Web toast, canvas banner, inline form error
+
+**Toast**:
+A temporary Web Board message for non-blocking operation feedback that can disappear without changing the user's next action. Toast must not carry setup work, recovery tasks, or state that the user needs later.
+_Avoid_: Persistent warning, setup task, inline error, action backlog
+
+**Notice**:
+A persistent, non-blocking Web Board message anchored to the surface where the user can understand or act on it. Banners, inline errors, auth prompts, and local warning panels are Notice layouts rather than separate notification concepts.
+_Avoid_: Toast, modal, floating alert taxonomy
+
+**Dialog**:
+A blocking Web Board interaction used when the user must explicitly confirm, repair, or choose before the action continues.
+_Avoid_: Banner, toast, passive warning
+
+**Web Board Layer Order**:
+The fixed stacking relationship for Web Board feedback and overlays: Dialog appears above Toast, Toast appears above Notice, and Notice appears above ordinary content only when its surface requires an overlay layout.
+_Avoid_: Component-local z-index ladders, toast above dialog
+
 **Doctor**:
 The command-line view of the same Readiness Checks shown in the Web Board and Settings. Doctor is an auxiliary diagnostics path, not the primary M0 onboarding path.
 _Avoid_: Separate health-check logic, shell-only setup
