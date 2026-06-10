@@ -813,8 +813,13 @@ function ArtifactRenderedContent({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const typedPayload = resolvedArtifactPayload(artifact, content)
-  if (!content) return <div className="artifacts-preview">{t('artifacts.openDetailsPrompt')}</div>
-  if (content.type === 'html' && !artifact.views?.length) {
+  // typedPayload 在手时不需要 content 也能渲染(openContentPreview 对带
+  // typedPayload 的 artifact 会跳过 loadContent 直接开 modal)— 只有真的
+  // 什么都没有才提示去加载。
+  if (!content && !typedPayload && artifact.payload == null) {
+    return <div className="artifacts-preview">{t('artifacts.openDetailsPrompt')}</div>
+  }
+  if (content?.type === 'html' && !artifact.views?.length) {
     return (
       <iframe
         className="artifacts-html-preview"

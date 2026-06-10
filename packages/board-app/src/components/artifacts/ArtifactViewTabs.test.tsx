@@ -48,6 +48,28 @@ describe('ArtifactViewTabs', () => {
     expect(views[0].view.title).toBe('Table')
   })
 
+  it('derives an integration view (not raw dump) for integration payloads', () => {
+    const tracker = artifact({
+      reference: 'gsheet://venture-tracker/Pipeline',
+      payload: {
+        type: 'integration',
+        connector: 'google-sheets',
+        externalId: 'sheet#gid=0',
+        summary: 'Pipeline tab',
+        fields: { tab: 'Pipeline', columns: 13, rows: 0, header: 'Company, Industry' },
+      },
+    })
+    const views = resolveArtifactViews(tracker)
+    // 默认投影是 integration view,raw 是第二个 tab — 不能直接落 JSON dump
+    expect(views[0].view.kind).toBe('integration')
+    expect(views.map((item) => item.view.kind)).toContain('raw')
+
+    render(<ArtifactViewTabs artifact={tracker} />)
+    // google-sheets 实体渲染成 sheet 格子(绿表头列名),而非 <pre> JSON
+    expect(screen.getByText('Company')).toBeTruthy()
+    expect(screen.getByText(/Google Sheets/)).toBeTruthy()
+  })
+
   it('renders saved view tabs once on artifact surfaces', () => {
     render(
       <ArtifactViewTabs

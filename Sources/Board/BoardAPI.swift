@@ -2426,7 +2426,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
         guard let body = decodeJSONBody(req, as: UpdateArtifactViewsRequest.self),
-              (body.artifactId?.isEmpty == false || body.reference?.isEmpty == false) else {
+              body.artifactId?.isEmpty == false || body.reference?.isEmpty == false else {
             return errorResponse("invalid_json", "body must carry artifactId or reference plus views/deleteViewIds", status: 400)
         }
         do {
