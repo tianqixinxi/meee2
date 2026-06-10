@@ -28,6 +28,7 @@ const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
 const FEATURED_INTEGRATION_IDS: ReadonlySet<string> = new Set([
   'github', 'linear', 'slack', 'notion',
   'figma', 'supabase', 'sentry', 'postgres',
+  'google-sheets',
 ])
 
 /** 哪些 integrationId 已经有 canvas view-schema(可拖进 canvas 用),
@@ -168,7 +169,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     const featured = visibleRows.filter((r) => FEATURED_INTEGRATION_IDS.has(r.id))
     const other = visibleRows.filter((r) => !FEATURED_INTEGRATION_IDS.has(r.id))
     // Featured 区按 PRD 顺序排,而不是字母序 / category 序
-    const order = ['github', 'linear', 'slack', 'notion', 'figma', 'supabase', 'sentry', 'postgres']
+    const order = ['github', 'linear', 'slack', 'notion', 'figma', 'supabase', 'sentry', 'postgres', 'google-sheets']
     featured.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
     return { featuredRows: featured, otherRows: other }
   }, [visibleRows])

@@ -115,26 +115,31 @@ export function TabularArtifactPreview({ data, caption }: { data: TabularData; c
     data.droppedColumns > 0 ? `${data.droppedColumns} 列收起` : '',
     caption ?? '',
   ].filter(Boolean)
+  // footer 在滚动区(.planner-node__table-wrap)外面 — 不靠 position:sticky
+  // 常驻可见。sticky 在 react-flow 的 transform: scale() viewport 里会按过期
+  // 的合成层偏移漂移(黑色行悬浮在表格中部),见 planner.css 的结构注释。
   return (
-    <div className="planner-node__table-wrap">
-      <table className="planner-node__table">
-        <thead>
-          <tr>
-            {data.columns.map((column) => (
-              <th key={column}>{column}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.rows.map((row, rowIndex) => (
-            <tr key={rowIndex}>
-              {row.map((cell, cellIndex) => (
-                <td key={cellIndex} title={cell}>{cell}</td>
+    <div className="planner-node__table-block">
+      <div className="planner-node__table-wrap">
+        <table className="planner-node__table">
+          <thead>
+            <tr>
+              {data.columns.map((column) => (
+                <th key={column}>{column}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex} title={cell}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="planner-node__table-footer">{stats.join(' · ')}</div>
     </div>
   )

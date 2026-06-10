@@ -25,6 +25,8 @@ import {
   UserRound,
 } from 'lucide-react'
 import type {
+  IntegrationEntity,
+  IntegrationViewSchema,
   NodeAssignment,
   PlannerArtifactContent,
   PlannerArtifactVersion,
@@ -144,7 +146,7 @@ function runStateClass(runState: PlannerWorkflowRunState): string {
   }
 }
 
-export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>) {
+export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGraphNode>) {
   const [artifactInputDraft, setArtifactInputDraft] = useState(data.inputReference ?? '')
   useEffect(() => {
     setArtifactInputDraft(data.inputReference ?? '')
@@ -216,6 +218,10 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     const kanban = renderKind === 'kanban'
       ? (contentKanban && (inlineKanban?.items.length ?? 0) === 0 ? contentKanban : inlineKanban ?? contentKanban ?? (artifact ? emptyKanbanPayload(node.title) : null))
       : null
+    // 虚拟 artifact 节点不落库 layout(派生节点),「被用户拉高过」的信号
+    // 只能取 react-flow 的显式 height(NodeResizer 写进 node.height,经
+    // NodeProps 传进来)。有显式高度 → --fill,表格滚动区吃掉多出的纵向空间。
+    const artifactHasExplicitHeight = typeof height === 'number' && height > 0
     return (
       <div
         className={[
@@ -223,6 +229,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           'planner-node--artifact-node',
           `planner-node--artifact-${renderKind}`,
           `planner-node--artifact-${data.artifactDirection ?? 'output'}`,
+          artifactHasExplicitHeight ? 'planner-node--fill' : '',
           selected ? 'is-selected' : '',
           data.guided ? 'is-guided' : '',
         ].filter(Boolean).join(' ')}
@@ -1056,6 +1063,12 @@ function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerAr
   // 投影不出来(未注册的 connector / 裸 URL)退回原 provider/summary/url 简版。
   const entity = artifactToIntegrationEntity(artifact)
   const schema = entity ? viewSchemaOf(entity.schemaId) : undefined
+  if (entity && schema && schema.integrationId === 'google-sheets') {
+    // Google Sheets 实体不走通用「一行明细文本」— 渲染成 sheet 样式的格子
+    // (绿表头 + 列名 + 占位行),这才是 tracker 的 view 层。列名由 attach 时
+    // 的 fields.header(逗号串)带进来;行级真实数据仍在表本体,这里只有形状。
+    return <GoogleSheetsTabPreview entity={entity} schema={schema} reference={artifact.reference} />
+  }
   if (entity && schema) {
     const entityPayload = objectPayload(entity.payload)
     // 只认投影产出的 url(artifactToIntegrationEntity 已滤掉 gsheet:// 等内部
@@ -1099,6 +1112,81 @@ function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerAr
         </a>
       ) : (
         <code>{artifact.reference}</code>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Google Sheets tracker tab 的 sheet 样式 view:绿表头格子 + 列名 + 占位行。
+ * integration 层只有 schema+view(无 fetch)— 格子是 tab 的「形状」,事实
+ * (行数/更新时间)在 footer 文案里,行格子只是占位纹理,不伪造数据。
+ */
+function GoogleSheetsTabPreview({
+  entity,
+  schema,
+  reference,
+}: {
+  entity: IntegrationEntity
+  schema: IntegrationViewSchema
+  reference: string
+}) {
+  const payload = objectPayload(entity.payload)
+  const url = stringField(payload, 'url')
+  const tab = scalarField(payload, 'tab') || scalarField(payload, 'secondary')
+  const columns = scalarField(payload, 'header')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const rowCount = Number(scalarField(payload, 'rows') || '0')
+  const updated = scalarField(payload, 'updated')
+  // 列数:header 给了列名就数列名;老 payload 只有数值 fields.columns
+  // (无列名,画不出表头格子)时也要保留列数事实,不能比旧通用渲染知道得更少。
+  const columnCount = columns.length > 0 ? columns.length : Number(scalarField(payload, 'columns') || '0')
+  const facts = [
+    Number.isFinite(rowCount) ? `${rowCount} 行` : '',
+    columnCount > 0 ? `${columnCount} 列` : '',
+    updated ? `更新 ${updated}` : '',
+    rowCount === 0 ? '待写入' : '',
+  ].filter(Boolean)
+  return (
+    <div className="planner-node__integration-preview planner-node__sheet">
+      <strong className="planner-node__sheet-head">
+        Google Sheets{schema.entityKind === 'tab' && tab ? ` · ${tab}` : ''}
+      </strong>
+      {columns.length > 0 ? (
+        <div className="planner-node__table-block planner-node__sheet-grid">
+          <div className="planner-node__table-wrap">
+            <table className="planner-node__table">
+              <thead>
+                <tr>
+                  {columns.map((column) => (
+                    <th key={column}>{column}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 3 }, (_, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {columns.map((column) => (
+                      <td key={column}>&nbsp;</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="planner-node__table-footer">{facts.join(' · ')}</div>
+        </div>
+      ) : (
+        facts.length > 0 && <span>{facts.join(' · ')}</span>
+      )}
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+          在 Google Sheets 打开
+        </a>
+      ) : (
+        <code>{reference}</code>
       )}
     </div>
   )
