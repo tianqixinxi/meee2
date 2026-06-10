@@ -6,6 +6,7 @@ import type {
   PlannerArtifactView,
 } from '../../types'
 import { resolvedArtifactPayload } from '../../lib/artifactPayload'
+import { IntegrationArtifactView } from '../../integrations/IntegrationArtifactView'
 import {
   TabularArtifactPreview,
   parseArtifactJSON,
@@ -59,7 +60,7 @@ export function ArtifactViewTabs({
         </div>
       )}
       <div className="artifact-view-tabs__body" role="tabpanel">
-        <ArtifactViewBody item={active} emptyLabel={emptyLabel} />
+        <ArtifactViewBody item={active} artifact={artifact} content={content} emptyLabel={emptyLabel} />
       </div>
     </div>
   )
@@ -87,15 +88,39 @@ export function resolveArtifactViews(
   })
 }
 
-function ArtifactViewBody({ item, emptyLabel }: { item: ResolvedArtifactView; emptyLabel: string }) {
+function ArtifactViewBody({
+  item,
+  artifact,
+  content,
+  emptyLabel,
+}: {
+  item: ResolvedArtifactView
+  artifact: PlannerArtifact
+  content?: PlannerArtifactContent | null
+  emptyLabel: string
+}) {
   if ((item.view.kind === 'table' || item.view.kind === 'list') && item.table) {
     return <TabularArtifactPreview data={item.table} />
   }
   if (item.view.kind === 'kanban' && item.payload?.type === 'kanban') {
     return <TypedPayloadPreview payload={item.payload} />
   }
+  // integration 投影体:经 integration view-schema 渲染(Sheets 格子 /
+  // badge + detail 行)。需要整个 artifact(投影靠 reference/typedPayload),
+  // 不是 payload 单独能表达的。
+  if (item.view.kind === 'integration') {
+    return <IntegrationArtifactView artifact={artifact} content={content} />
+  }
+  if (item.view.kind === 'payload' && item.payload) {
+    return <TypedPayloadPreview payload={item.payload} />
+  }
   if (item.view.kind === 'json' || item.view.kind === 'raw') {
-    return item.raw ? <pre className="artifacts-preview">{item.raw}</pre> : <div className="artifacts-preview">{emptyLabel}</div>
+    if (item.raw) return <pre className="artifacts-preview">{item.raw}</pre>
+    // 派生 raw view 但拿不到原文(artifact 只有 typedPayload、没有 legacy
+    // payload / content)→ 回落 typed 预览,否则 prd/check-result 这类
+    // 结构化产物在索引里渲染成空标签。
+    if (item.payload) return <TypedPayloadPreview payload={item.payload} />
+    return <div className="artifacts-preview">{emptyLabel}</div>
   }
   if (item.payload) return <TypedPayloadPreview payload={item.payload} />
   return item.raw ? <pre className="artifacts-preview">{item.raw}</pre> : <div className="artifacts-preview">{emptyLabel}</div>
@@ -123,6 +148,12 @@ function deriveDefaultViews(
   content?: PlannerArtifactContent | null,
 ): PlannerArtifactView[] {
   if (payload?.type === 'kanban') return [view('kanban', 'Kanban', 'kanban')]
+  // integration payload 的默认投影是 integration view(view-schema 渲染:
+  // Sheets 格子 / badge+detail),raw 留作第二个 tab。直接落 raw 的话,
+  // tracker 这类账本 artifact 在卡片上就是一坨 JSON dump。
+  if (payload?.type === 'integration') {
+    return [view('integration', 'Integration', 'integration'), view('raw', 'Raw', 'raw')]
+  }
   const table = parseTabular(rawData)
   if (table) {
     const hasMultipleColumns = table.columns.length > 1
@@ -132,7 +163,10 @@ function deriveDefaultViews(
     return [...views, view('raw', 'Raw', 'raw')]
   }
   if (payload?.type === 'json' || content?.type === 'json') return [view('json', 'JSON', 'json')]
-  if (payload) return [view(payload.type, labelForPayload(payload.type), 'raw')]
+  // typed payload 的默认投影是结构化预览(payload kind),不是 raw —
+  // 标成 raw 的话,一旦 content 带了原文就吐原文,prd tldr / check 统计
+  // 这些结构化语义全被遮掉。
+  if (payload) return [view(payload.type, labelForPayload(payload.type), 'payload')]
   return [view('raw', 'Raw', 'raw')]
 }
 

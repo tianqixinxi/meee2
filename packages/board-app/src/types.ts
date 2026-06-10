@@ -882,7 +882,11 @@ export interface PlannerArtifact {
   views?: PlannerArtifactView[] | null
 }
 
-export type PlannerArtifactViewKind = 'table' | 'list' | 'kanban' | 'raw' | 'json'
+/** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /
+ *  badge+detail 行)。`payload`:typed payload 的结构化预览(prd tldr /
+ *  check-result 统计…)。两者缺位时,这些 artifact 的派生默认 view 只能标成
+ *  raw → 渲染成 JSON dump / 原文,结构化语义全丢。 */
+export type PlannerArtifactViewKind = 'table' | 'list' | 'kanban' | 'raw' | 'json' | 'integration' | 'payload'
 
 export interface PlannerArtifactView {
   id: string

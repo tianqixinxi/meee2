@@ -581,6 +581,13 @@ enum PlannerArtifactViewKind: String, Codable, Equatable, CaseIterable {
     case kanban
     case raw
     case json
+    /// integration payload 的投影体(前端经 integration view-schema 渲染:
+    /// Sheets 格子 / badge + detail 行)。缺这个 kind 时 integration artifact
+    /// 只能派生 raw view → JSON dump。
+    case integration
+    /// typed payload 的结构化预览(prd tldr / check-result 统计…)。派生默认
+    /// view 用 — 否则结构化产物被标成 raw,有原文时直接吐原文丢掉语义。
+    case payload
 }
 
 struct PlannerArtifactView: Codable, Equatable {
