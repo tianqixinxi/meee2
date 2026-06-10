@@ -138,8 +138,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let key = "meee2.hasLaunchedBefore"
         let defaults = UserDefaults.standard
         if defaults.bool(forKey: key) { return false }
+        // 升级守卫:这个 key 是新引入的 — 老用户升上来没有它,不能把升级当
+        // 首装强弹 Board(只想用菜单栏的人会被惊扰)。~/.meee2 下已有持久化
+        // 状态(会话/画布/planner)即视为老装机,补打标后按非首次处理。
+        let meee2Dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meee2", isDirectory: true)
+        let priorInstallMarkers = ["sessions", "board-canvases.json", "planner"]
+        let hasPriorInstall = priorInstallMarkers.contains { marker in
+            FileManager.default.fileExists(atPath: meee2Dir.appendingPathComponent(marker).path)
+        }
         defaults.set(true, forKey: key)
-        return true
+        return !hasPriorInstall
     }
 
     private func schedulePostLaunchStartup(launchStartedAt: Date) {
