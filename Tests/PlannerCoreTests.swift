@@ -4441,6 +4441,72 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(pruned.first?.views?.map(\.id), ["table"])
     }
 
+    func testSubmitNodeOutputPreservesArtifactViewsOnSlotReplacement() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeId = "canvas-a-node-1"
+        let reference = "artifact://ideas"
+
+        _ = try PlannerBoardBridge.attachArtifact(
+            nodeId: nodeId,
+            kind: .generic,
+            title: "Ideas",
+            reference: reference,
+            status: "attached",
+            payload: .object([
+                "type": .string("json"),
+                "json": .string(#"[{"title":"A"}]"#)
+            ]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.updateArtifactViews(
+            reference: reference,
+            views: [
+                PlannerArtifactView(
+                    id: "table",
+                    title: "Table",
+                    kind: .table,
+                    columns: ["title"]
+                )
+            ],
+            deleteViewIds: [],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: nodeId,
+            output: PlannerNodeOutput(
+                nodeId: nodeId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Ideas refreshed", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .generic,
+                        title: "Ideas refreshed",
+                        reference: reference,
+                        payload: .object([
+                            "type": .string("json"),
+                            "json": .string(#"[{"title":"B"}]"#)
+                        ]),
+                        routeTo: []
+                    )
+                ],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let updated = try XCTUnwrap(result.graph.artifacts.first { $0.reference == reference })
+        XCTAssertEqual(updated.title, "Ideas refreshed")
+        XCTAssertEqual(updated.views?.map(\.id), ["table"])
+    }
+
     func testArtifactViewUpdatesRejectDuplicateIds() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
