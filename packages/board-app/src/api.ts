@@ -1627,14 +1627,16 @@ export function ensurePlannerNodeInternalSession(
 export interface PlannerArtifactSyncResult {
   ok: boolean
   sessionId: string
-  nodeId: string
   reference: string
+  /** created = 新派发专属同步会话;reused = 指令打进已有专属会话;
+   *  pending = 专属会话还在启动,本次点击已去重。 */
+  action: 'created' | 'reused' | 'pending'
   detail: string
 }
 
-/** Direct artifact-layer manual sync — 给 artifact 所在节点的绑定会话投递
- *  「写穿」指令(operator → session),由会话用 MCP get_artifact/update_artifact
- *  刷新快照。409 no_bound_session = 节点还没起过会话。 */
+/** Direct artifact-layer manual sync — 派发该 reference 的专属轻量同步会话
+ *  (不绑节点、不进节点工作账本),由它用 MCP get_artifact/update_artifact
+ *  核对外部对象并刷新快照。不需要节点先有绑定会话。 */
 export function syncPlannerArtifact(
   canvasId: string,
   input: { reference?: string; artifactId?: string; hint?: string },

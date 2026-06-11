@@ -497,16 +497,7 @@ enum BoardAPI {
         canvasId: String?,
         nodeId: String?,
         initialPrompt: String?,
-        preferredSessionId: String? = nil,
-        // 默认 resume 丢弃 initialPrompt(恢复的对话已有上下文,不应重打
-        // dispatch prompt)。artifact sync 这类「指令必须立刻送达」的调用方
-        // 显式置 true:resume 同样是新建 pane,就绪门控投递(trust 弹窗 /
-        // TUI ready 检测)照常生效 — 这是 idle 内部会话唯一可靠的即时投递,
-        // inbox 注入要等下一轮 Stop hook,纯 resume 闲置等输入永远等不到。
-        allowPromptOnResume: Bool = false,
-        // 就绪门控硬上限:大会话 resume 的 TUI 加载可超 20s 默认值,盲打会
-        // 丢 prompt — resume 投递场景应给 90s 耐心(settle 优先,上限兜底)。
-        promptSettleCeiling: TimeInterval? = nil
+        preferredSessionId: String? = nil
     ) throws -> TerminalSessionSnapshot {
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
@@ -529,8 +520,8 @@ enum BoardAPI {
                 command: launchCommand,
                 canvasId: canvasId,
                 nodeId: nodeId,
-                initialPrompt: resumeSessionId == nil || allowPromptOnResume ? initialPrompt : nil,
-                initialPromptSettleCeiling: promptSettleCeiling,
+                // resume 丢弃 initialPrompt:恢复的对话已有上下文,不应重打 dispatch prompt。
+                initialPrompt: resumeSessionId == nil ? initialPrompt : nil,
                 preferredSessionId: reusablePreferredSessionId
             )
         )
@@ -2113,31 +2104,18 @@ enum BoardAPI {
             || surface.status == InternalTerminalLifecycle.running.rawValue
     }
 
-    /// operator → session 的同步指令投递(ops channel)。
-    private static func sendSyncInstruction(_ instruction: String, toInboxSessionId inboxId: String) throws {
-        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: inboxId)
-        _ = try MessageRouter.shared.send(
-            channel: channelName,
-            fromAlias: "operator",
-            toAlias: "session",
-            content: instruction,
-            injectedByHuman: true
-        )
-    }
-
     /// 死会话自愈(owner 决策 2026-06-01):能拿到 provider resume id 就
     /// `--resume` 找回原对话上下文;拿不到就在同 cwd fresh recreate(优雅降级)。
     /// recreate 出新 id 时把节点重绑到活 surface(allowReplace:死会话的
     /// runState 可能还停在 .running,不放行会被 hasActiveSession 拦成
-    /// activeSessionExists、节点永久卡死)。「打开会话」(ensure)与「同步快照」
-    /// (artifact sync)共用 — 任何需要节点会话活着的入口都走同一条复活路径。
+    /// activeSessionExists、节点永久卡死)。任何需要节点会话活着的入口都走
+    /// 同一条复活路径。
     private static func reviveNodeSessionSurface(
         canvasId: String,
         node: PlanningNode,
         deadSessionId: String,
         explicitCwd: String?,
-        access: PlannerAccess,
-        promptOverride: String? = nil
+        access: PlannerAccess
     ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool, providerSessionId: String?) {
         try PlannerPermission.requireNodeUpdate(on: node, access: access)
         let cwd = try explicitSessionCwd(explicitCwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
@@ -2156,14 +2134,9 @@ enum BoardAPI {
             createIfMissing: true,
             canvasId: canvasId,
             nodeId: node.id,
-            // 开场 prompt 可被调用方覆盖(artifact sync 用同步指令直接开场 —
-            // 打进终端,完全不依赖 inbox 投递,resume / recreate 同样适用;
-            // idle 内部会话的 inbox 注入要等下一轮 Stop hook,纯 resume 等不到)。
-            // 无覆盖时保持原行为:recreate 用 dispatch prompt,resume 不打扰。
-            initialPrompt: promptOverride ?? (canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)),
-            preferredSessionId: preferredSessionId,
-            allowPromptOnResume: promptOverride != nil,
-            promptSettleCeiling: promptOverride != nil ? 90 : nil
+            // recreate 用 dispatch prompt 开场;resume 的对话已有上下文,不打扰。
+            initialPrompt: canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
+            preferredSessionId: preferredSessionId
         )
         if canResume {
             _ = PlannerSessionRunStateBridge.observeBound(
@@ -2451,11 +2424,15 @@ enum BoardAPI {
         }
     }
 
-    /// Direct artifact-layer manual sync — 把写穿契约做成一键。app 自己不碰
-    /// 外部系统(无凭证,integration 层 schema+view 边界),执行归 session:
-    /// 给 artifact 所在节点的绑定会话发一条 operator 指令,让它用已有 MCP
-    /// (get_artifact → 核对外部对象 → update_artifact)刷新快照。会话暂时
-    /// 不活时消息进 inbox 排队,resume 后照常 drain — 不在这里 spawn 会话。
+    /// Direct artifact-layer manual sync — 把写穿契约的手动触发做成一键。
+    /// 快照刷新是 reference 级的 sync 动作,不是节点工作(2026-06-11 定,PRD
+    /// slug `google-sheets-tracker-template`「刷新路径」):不路由进任何节点的
+    /// 工作会话 — 节点 transcript 是该节点的工作账本,簿记式刷新会污染它,还受
+    /// 节点会话生命周期与节点级权限面牵制。改为派发**专属轻量 sync 会话**:
+    /// 每 reference 至多一条,活着复用、死了重建,不绑节点;节点变更工具在
+    /// 命令层禁用(--disallowedTools),「不动节点」靠结构不靠会话自觉。
+    /// app 自己仍不碰外部系统(无凭证,integration 层 schema+view 边界),
+    /// 核对与回写归 session(get_artifact → 核对外部对象 → update_artifact)。
     static func syncPlannerArtifact(_ req: HttpRequest) -> HttpResponse {
         struct SyncRequest: Decodable {
             let artifactId: String?
@@ -2466,8 +2443,10 @@ enum BoardAPI {
         struct SyncResponse: Encodable {
             let ok: Bool
             let sessionId: String
-            let nodeId: String
             let reference: String
+            /// created = 新派发专属会话;reused = 指令打进已有专属会话;
+            /// pending = 专属会话仍在启动并执行开场指令,本次点击去重未投递。
+            let action: String
             let detail: String
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
@@ -2493,82 +2472,138 @@ enum BoardAPI {
             guard let reference = targets.first?.reference else {
                 throw PlannerCoreError.artifactNotFound(body.artifactId ?? body.reference ?? "(no selector)")
             }
-            // 选会话:共享引用的槽位里,优先活 surface 的绑定;退而求其次任何
-            // 绑定(死会话的 inbox 消息在 resume 后 drain)。
-            var fallback: (node: PlanningNode, sessionId: String)?
-            var chosen: (node: PlanningNode, sessionId: String)?
-            for target in targets {
-                guard let node = state.nodes.first(where: { $0.id == target.nodeId }),
-                      let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      !sessionId.isEmpty else { continue }
-                if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
-                   isReusableInternalSurface(surface) {
-                    chosen = (node, sessionId)
-                    break
+            // 同步是 artifact 执行面的动作,权限对齐 attach/update:owner 直通;
+            // doer 需要共享该 reference 的槽位里有授权给自己的节点。会话路由
+            // 本身不再依赖任何节点。
+            if state.access.role != .owner {
+                let slotNodes = targets.compactMap { target in
+                    state.nodes.first(where: { $0.id == target.nodeId })
                 }
-                if fallback == nil { fallback = (node, sessionId) }
-            }
-            guard let picked = chosen ?? fallback else {
-                return errorResponse(
-                    "no_bound_session",
-                    "该 artifact 的节点没有绑定会话 — 先在节点上起会话(开干)再同步。",
-                    status: 409
-                )
-            }
-            // 同步是节点执行面的动作,权限对齐 attach/update。
-            try PlannerPermission.requireNodeUpdate(on: picked.node, access: state.access)
-
-            let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            // 单行指令:recreate 场景会作为 initialPrompt 打进终端,多行文本会被
-            // 首个换行截断提交;inbox 投递也不需要多行。
-            let instruction = "[Artifact 同步请求] 请刷新账本快照:reference = \(reference)(canvasId \(canvasId))。步骤:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。这是写穿契约的手动触发 — 只刷新 artifact 快照,不要改节点状态,也不要 submit_node_output。"
-
-            // 投递矩阵 — 指令必须落在「会被消费」的路径上,绝不投到没人 flush
-            // 的 surface-id inbox(那会静默滞留):
-            //   活会话        → hook 身份的 inbox(下一轮 Stop hook 注入;detail 如实说明)
-            //   复活(resume/recreate)→ 指令作开场 prompt 直接打进终端,立即执行,
-            //                  不依赖 inbox(idle 会话的 inbox 等不到下一轮)
-            //   解析不到身份  → 409,诚实失败优于静默滞留
-            var targetSessionId = picked.sessionId
-            let detail: String
-            if chosen != nil {
-                guard let session = resolvePluginSession(picked.sessionId) else {
-                    return errorResponse(
-                        "session_not_tracked",
-                        "绑定会话不在 meee2 追踪列表里,无法投递同步指令。",
-                        status: 409
+                let authorized = slotNodes.contains { node in
+                    (try? PlannerPermission.requireNodeUpdate(on: node, access: state.access)) != nil
+                }
+                guard authorized else {
+                    throw PlannerCoreError.permissionDenied(
+                        action: PlannerPermissionAction.updateAssignedNode.rawValue,
+                        role: state.access.role
                     )
                 }
-                try sendSyncInstruction(instruction, toInboxSessionId: inboxSessionId(for: session))
-                detail = "同步指令已投递给活动会话(随它下一轮对话执行;想立即执行可打开会话说一句话)。"
-            } else {
-                let revival = try reviveNodeSessionSurface(
-                    canvasId: canvasId,
-                    node: picked.node,
-                    deadSessionId: picked.sessionId,
-                    explicitCwd: nil,
-                    access: state.access,
-                    promptOverride: instruction
-                )
-                targetSessionId = revival.surface.sessionId
-                detail = revival.resumed
-                    ? "已自动恢复原会话并直接下达同步指令,完成后卡片自动更新。"
-                    : "原会话无法恢复,已重建会话并直接下达同步指令,完成后卡片自动更新。"
             }
-            NSLog("[ArtifactSync] reference=\(reference) -> session=\(targetSessionId.prefix(12)) node=\(picked.node.id) live=\(chosen != nil)")
+
+            let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // 单行指令:fresh spawn 作 initialPrompt、复用会话作 PTY 输入,两条
+            // 路径都是「打字 + 回车」,多行文本会被首个换行截断提交。
+            let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
+
+            // 投递矩阵 — 专属会话每 reference 至多一条:
+            //   活着且已被 hook 追踪 → 指令直接打进它的 PTY(空闲立即执行,
+            //                          忙碌则排成下一轮输入)
+            //   活着但尚未注册       → 刚派发还在启动,开场指令在就绪门控队列里,
+            //                          此刻再打字会落进半渲染的 TUI 而丢失 → 去重
+            //   死了 / 从没有过      → fresh spawn,指令作开场 prompt(就绪门控投递)
+            // 「死」有两种:pane 活着但里面的 claude 已退出(.dead,只剩
+            // shell — 往裸 shell 打指令等于执行乱码命令);以及 spawn 后超时
+            // 仍未注册 hook(启动即崩的僵尸 pane,放着会让每次点击都误判
+            // pending)。两种都收掉旧 pane 重建。
+            let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
+            let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
+            let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
+            let trackedPluginSession = trackedSessionId.flatMap(resolvePluginSession)
+            let bootTimeout: TimeInterval = 120
+            let isZombieBoot = trackedPluginSession == nil
+                && (liveSurface.map { Date().timeIntervalSince($0.createdAt) > bootTimeout } ?? false)
+            let surfaceUsable = trackedPluginSession?.status != .dead && !isZombieBoot
+            if let trackedSessionId, liveSurface != nil, !surfaceUsable {
+                _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+            }
+            let response: SyncResponse
+            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), surfaceUsable {
+                if trackedPluginSession != nil {
+                    guard TerminalSessionBackendRegistry.shared.writeInput(
+                        id: trackedSessionId,
+                        data: Data((instruction + "\n").utf8)
+                    ) else {
+                        return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
+                    }
+                    response = SyncResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        reference: reference,
+                        action: "reused",
+                        detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
+                    )
+                } else {
+                    response = SyncResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        reference: reference,
+                        action: "pending",
+                        detail: "专属同步会话正在启动并执行同步指令,无需重复触发。"
+                    )
+                }
+            } else {
+                let surface = try createInternalSessionSurface(
+                    provider: "claude",
+                    cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
+                    command: artifactSyncLaunchCommand(),
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    // 专属 sync 会话不绑节点:进不了节点账本、不挂节点会话三态,
+                    // 也不参与 planner run-state(不调 observe)。
+                    nodeId: nil,
+                    initialPrompt: instruction
+                )
+                recordArtifactSyncSession(surface.sessionId, forKey: registryKey)
+                response = SyncResponse(
+                    ok: true,
+                    sessionId: surface.sessionId,
+                    reference: reference,
+                    action: "created",
+                    detail: "已派发专属同步会话,完成后卡片自动更新。"
+                )
+            }
+            NSLog("[ArtifactSync] reference=\(reference) -> session=\(response.sessionId.prefix(12)) action=\(response.action)")
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(SyncResponse(
-                ok: true,
-                sessionId: targetSessionId,
-                nodeId: picked.node.id,
-                reference: reference,
-                detail: detail
-            ))
+            return jsonResponse(response)
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    // MARK: - Artifact sync 专属会话注册表
+
+    /// (canvasId, reference) → 专属 sync 会话 id。进程内存即可:app 重启后旧
+    /// surface 已不在,下一次同步自然 fresh spawn,无需持久化。
+    private static let artifactSyncSessionsLock = NSLock()
+    private static var artifactSyncSessions: [String: String] = [:]
+
+    private static func artifactSyncSessionKey(canvasId: String, reference: String) -> String {
+        "\(canvasId)|\(reference)"
+    }
+
+    private static func artifactSyncSessionId(forKey key: String) -> String? {
+        artifactSyncSessionsLock.lock()
+        defer { artifactSyncSessionsLock.unlock() }
+        return artifactSyncSessions[key]
+    }
+
+    private static func recordArtifactSyncSession(_ sessionId: String, forKey key: String) {
+        artifactSyncSessionsLock.lock()
+        defer { artifactSyncSessionsLock.unlock() }
+        artifactSyncSessions[key] = sessionId
+    }
+
+    /// sync 会话的启动命令:full-access 基础上在命令层禁用节点变更工具。两套
+    /// 同名 MCP 注册(meee2 插件 / app 自注册)都要覆盖,漏一套等于没禁。
+    private static func artifactSyncLaunchCommand() -> String {
+        let banned = ["submit_node_output", "attach_artifact_to_node", "update_artifact_views"]
+        let rules = banned
+            .flatMap { ["mcp__meee2__\($0)", "mcp__plugin_meee2_meee2__\($0)"] }
+            .map { "\"\($0)\"" }
+            .joined(separator: " ")
+        return AgentLaunchCommand.fullAccessCommand(forProvider: "claude") + " --disallowedTools \(rules)"
     }
 
     static func updatePlannerArtifactViews(_ req: HttpRequest) -> HttpResponse {

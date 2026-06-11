@@ -26,10 +26,11 @@ import { getViewSchema } from './viewSchemas'
 import { syncPlannerArtifact } from '../api'
 
 /**
- * 手动同步按钮 — 写穿契约的一键触发:让 artifact 所在节点的绑定会话用已有
- * MCP(get_artifact → 核对外部对象 → update_artifact)刷新快照。按钮自带
- * 内联状态反馈(不依赖外层 toast 管道,这个 view 在卡片/inspector/rail 多处
- * 复用)。
+ * 手动同步按钮 — 写穿契约的一键触发:派发该 reference 的专属轻量同步会话
+ * (不绑节点、不进节点工作账本),由它用 MCP(get_artifact → 核对外部对象 →
+ * update_artifact)刷新快照;每 reference 至多一条,活着复用、死了重建。
+ * 按钮自带内联状态反馈(不依赖外层 toast 管道,这个 view 在卡片/inspector/
+ * rail 多处复用)。
  */
 function SyncSnapshotButton({ artifact }: { artifact: PlannerArtifact }) {
   const [state, setState] = useState<'idle' | 'busy' | 'sent' | 'error'>('idle')
@@ -43,13 +44,9 @@ function SyncSnapshotButton({ artifact }: { artifact: PlannerArtifact }) {
         setState('sent')
         setDetail(result.detail)
       })
-      .catch((err: Error & { code?: string }) => {
+      .catch((err: Error) => {
         setState('error')
-        setDetail(
-          err.code === 'no_bound_session'
-            ? '节点还没绑定会话 — 先在节点上「开干 · 起会话」再同步'
-            : err.message || '同步指令投递失败',
-        )
+        setDetail(err.message || '同步会话派发失败')
       })
   }
   return (
@@ -60,7 +57,7 @@ function SyncSnapshotButton({ artifact }: { artifact: PlannerArtifact }) {
         onClick={run}
         onPointerDown={(event) => event.stopPropagation()}
         disabled={state === 'busy'}
-        title="让绑定会话核对外部对象并刷新快照(get_artifact → update_artifact)"
+        title="派发专属同步会话核对外部对象并刷新快照(get_artifact → update_artifact)"
       >
         {state === 'busy' ? '同步中…' : '同步快照'}
       </button>
