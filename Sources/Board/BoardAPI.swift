@@ -2103,6 +2103,18 @@ enum BoardAPI {
             || surface.status == InternalTerminalLifecycle.running.rawValue
     }
 
+    /// operator → session 的同步指令投递(ops channel)。
+    private static func sendSyncInstruction(_ instruction: String, toInboxSessionId inboxId: String) throws {
+        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: inboxId)
+        _ = try MessageRouter.shared.send(
+            channel: channelName,
+            fromAlias: "operator",
+            toAlias: "session",
+            content: instruction,
+            injectedByHuman: true
+        )
+    }
+
     /// 死会话自愈(owner 决策 2026-06-01):能拿到 provider resume id 就
     /// `--resume` 找回原对话上下文;拿不到就在同 cwd fresh recreate(优雅降级)。
     /// recreate 出新 id 时把节点重绑到活 surface(allowReplace:死会话的
@@ -2114,8 +2126,9 @@ enum BoardAPI {
         node: PlanningNode,
         deadSessionId: String,
         explicitCwd: String?,
-        access: PlannerAccess
-    ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool) {
+        access: PlannerAccess,
+        recreatePromptOverride: String? = nil
+    ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool, providerSessionId: String?) {
         try PlannerPermission.requireNodeUpdate(on: node, access: access)
         let cwd = try explicitSessionCwd(explicitCwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
         let resumeSessionId = providerResumeSessionId(forPlannerSessionId: deadSessionId)
@@ -2133,7 +2146,10 @@ enum BoardAPI {
             createIfMissing: true,
             canvasId: canvasId,
             nodeId: node.id,
-            initialPrompt: canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
+            // recreate 的开场 prompt 可被调用方覆盖(artifact sync 用同步指令
+            // 直接开场 — 打进终端,完全不依赖 inbox 投递);resume 不收
+            // initialPrompt(createInternalSessionSurface 对 resume 强制丢弃)。
+            initialPrompt: canResume ? nil : (recreatePromptOverride ?? plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)),
             preferredSessionId: preferredSessionId
         )
         if canResume {
@@ -2159,7 +2175,7 @@ enum BoardAPI {
             )
         }
         BoardServer.shared.broadcastStateChanged()
-        return (surface, canResume)
+        return (surface, canResume, resumeSessionId)
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -2489,55 +2505,49 @@ enum BoardAPI {
             // 同步是节点执行面的动作,权限对齐 attach/update。
             try PlannerPermission.requireNodeUpdate(on: picked.node, access: state.access)
 
-            // 绑定会话已死 → 自动复活(与「打开会话」同一条自愈路径),同步
-            // 真正一键到底,不再需要用户手动打开会话来触发入队指令的执行。
-            // 复活失败不挡投递:指令仍发往原会话的 inbox,detail 说明降级。
-            var targetSessionId = picked.sessionId
-            var revivalNote: String?
-            if chosen == nil {
-                do {
-                    let revival = try reviveNodeSessionSurface(
-                        canvasId: canvasId,
-                        node: picked.node,
-                        deadSessionId: picked.sessionId,
-                        explicitCwd: nil,
-                        access: state.access
-                    )
-                    targetSessionId = revival.surface.sessionId
-                    revivalNote = revival.resumed ? "已自动恢复原会话" : "原会话无法恢复,已重建新会话"
-                } catch {
-                    revivalNote = "自动恢复失败(\(error.localizedDescription)),指令已入队,打开会话后执行"
-                }
-            }
-
             let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let instruction = """
-            [Artifact 同步请求] 请刷新账本快照:reference = \(reference)(canvasId \(canvasId))。
-            步骤:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。
-            这是写穿契约的手动触发 — 只刷新 artifact 快照,不要改节点状态,也不要 submit_node_output。
-            """
-            // 刚复活的会话可能还没回 hook、不在 PluginManager 列表 — 直接用
-            // planner session id 建 ops channel,AgentInboxShell 会在 native id
-            // 就绪后 flush(deferred 重试是既有行为)。
-            let inboxId = resolvePluginSession(targetSessionId).map { inboxSessionId(for: $0) } ?? targetSessionId
-            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: inboxId)
-            _ = try MessageRouter.shared.send(
-                channel: channelName,
-                fromAlias: "operator",
-                toAlias: "session",
-                content: instruction,
-                injectedByHuman: true
-            )
-            NSLog("[ArtifactSync] reference=\(reference) -> session=\(targetSessionId.prefix(12)) node=\(picked.node.id) revived=\(revivalNote != nil)")
-            BoardServer.shared.broadcastStateChanged()
+            // 单行指令:recreate 场景会作为 initialPrompt 打进终端,多行文本会被
+            // 首个换行截断提交;inbox 投递也不需要多行。
+            let instruction = "[Artifact 同步请求] 请刷新账本快照:reference = \(reference)(canvasId \(canvasId))。步骤:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。这是写穿契约的手动触发 — 只刷新 artifact 快照,不要改节点状态,也不要 submit_node_output。"
+
+            // 投递矩阵 — 指令必须落在「会被消费」的身份上,绝不投到没人 flush
+            // 的 surface-id inbox(那会静默滞留):
+            //   活会话      → PluginManager 里的 hook 身份(inboxSessionId)
+            //   复活-resume → provider resume id(hook 注册后 flush 正是按它找 inbox)
+            //   复活-recreate → 指令作 initialPrompt 直接打进终端,不走 inbox
+            //   解析不到身份 → 409,诚实失败优于静默滞留
+            var targetSessionId = picked.sessionId
             let detail: String
             if chosen != nil {
+                guard let session = resolvePluginSession(picked.sessionId) else {
+                    return errorResponse(
+                        "session_not_tracked",
+                        "绑定会话不在 meee2 追踪列表里,无法投递同步指令。",
+                        status: 409
+                    )
+                }
+                try sendSyncInstruction(instruction, toInboxSessionId: inboxSessionId(for: session))
                 detail = "同步指令已投递给活动会话,完成后卡片自动更新。"
-            } else if let revivalNote {
-                detail = "\(revivalNote);同步指令已投递,完成后卡片自动更新。"
             } else {
-                detail = "同步指令已投递。"
+                let revival = try reviveNodeSessionSurface(
+                    canvasId: canvasId,
+                    node: picked.node,
+                    deadSessionId: picked.sessionId,
+                    explicitCwd: nil,
+                    access: state.access,
+                    recreatePromptOverride: instruction
+                )
+                targetSessionId = revival.surface.sessionId
+                if revival.resumed, let providerId = revival.providerSessionId {
+                    try sendSyncInstruction(instruction, toInboxSessionId: providerId)
+                    detail = "已自动恢复原会话,同步指令已投递,完成后卡片自动更新。"
+                } else {
+                    // recreate:指令已作为开场 prompt 打进终端。
+                    detail = "原会话无法恢复,已重建会话并直接下达同步指令,完成后卡片自动更新。"
+                }
             }
+            NSLog("[ArtifactSync] reference=\(reference) -> session=\(targetSessionId.prefix(12)) node=\(picked.node.id) live=\(chosen != nil)")
+            BoardServer.shared.broadcastStateChanged()
             return jsonResponse(SyncResponse(
                 ok: true,
                 sessionId: targetSessionId,
