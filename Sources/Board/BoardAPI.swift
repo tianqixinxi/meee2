@@ -2496,52 +2496,56 @@ enum BoardAPI {
             let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
 
             // 投递矩阵 — 专属会话每 reference 至多一条:
-            //   活着且已被 hook 追踪 → 指令直接打进它的 PTY(空闲立即执行,
-            //                          忙碌则排成下一轮输入)
-            //   活着但尚未注册       → 刚派发还在启动,开场指令在就绪门控队列里,
-            //                          此刻再打字会落进半渲染的 TUI 而丢失 → 去重
-            //   死了 / 从没有过      → fresh spawn,指令作开场 prompt(就绪门控投递)
-            // 「死」有两种:pane 活着但里面的 claude 已退出(.dead,只剩
-            // shell — 往裸 shell 打指令等于执行乱码命令);以及 spawn 后超时
-            // 仍未注册 hook(启动即崩的僵尸 pane,放着会让每次点击都误判
-            // pending)。两种都收掉旧 pane 重建。
+            //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY
+            //                          (空闲立即执行,忙碌则排成下一轮输入)
+            //   surface 活着但 hook 未链接(启动窗口内)→ 刚派发还在启动,开场
+            //                          指令在就绪门控队列里,此刻再打字会落进
+            //                          半渲染的 TUI 而丢失 → 去重
+            //   其余 → 收掉旧 pane(如还在),fresh spawn,指令作开场 prompt
+            // 「claude 活着」不能用 resolvePluginSession(surfaceId) 判:surface
+            // 一建立 recordManagedSession 就造出 .active 的合成 SessionData,
+            // 解析得到不证明 hook 注册过。真正的注册证据是 hook 事件把 provider
+            // session id 链到 surface(providerResumeSessionIdForManagedSurface),
+            // 活着的证据是该 provider 会话未走到 .dead(进程没了)/.completed
+            // (sessionEnd,REPL 已退出只剩 shell — 此时打字等于执行乱码命令)。
             let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
             let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
             let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
-            let trackedPluginSession = trackedSessionId.flatMap(resolvePluginSession)
+            let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
+            let providerSession = providerSessionId.flatMap(resolvePluginSession)
+            let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+            // spawn 后超时仍未链接 hook = 启动即崩的僵尸 pane;放着会让每次
+            // 点击都误判「启动中」,必须收掉重建。
             let bootTimeout: TimeInterval = 120
-            let isZombieBoot = trackedPluginSession == nil
-                && (liveSurface.map { Date().timeIntervalSince($0.createdAt) > bootTimeout } ?? false)
-            let surfaceUsable = trackedPluginSession?.status != .dead && !isZombieBoot
-            if let trackedSessionId, liveSurface != nil, !surfaceUsable {
-                _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
-            }
+            let stillBooting = providerSessionId == nil
+                && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
             let response: SyncResponse
-            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), surfaceUsable {
-                if trackedPluginSession != nil {
-                    guard TerminalSessionBackendRegistry.shared.writeInput(
-                        id: trackedSessionId,
-                        data: Data((instruction + "\n").utf8)
-                    ) else {
-                        return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
-                    }
-                    response = SyncResponse(
-                        ok: true,
-                        sessionId: trackedSessionId,
-                        reference: reference,
-                        action: "reused",
-                        detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
-                    )
-                } else {
-                    response = SyncResponse(
-                        ok: true,
-                        sessionId: trackedSessionId,
-                        reference: reference,
-                        action: "pending",
-                        detail: "专属同步会话正在启动并执行同步指令,无需重复触发。"
-                    )
+            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
+                guard TerminalSessionBackendRegistry.shared.writeInput(
+                    id: trackedSessionId,
+                    data: Data((instruction + "\n").utf8)
+                ) else {
+                    return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
                 }
+                response = SyncResponse(
+                    ok: true,
+                    sessionId: trackedSessionId,
+                    reference: reference,
+                    action: "reused",
+                    detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
+                )
+            } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
+                response = SyncResponse(
+                    ok: true,
+                    sessionId: trackedSessionId,
+                    reference: reference,
+                    action: "pending",
+                    detail: "专属同步会话正在启动并执行同步指令,无需重复触发。"
+                )
             } else {
+                if let trackedSessionId, liveSurface != nil {
+                    _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+                }
                 let surface = try createInternalSessionSurface(
                     provider: "claude",
                     cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
