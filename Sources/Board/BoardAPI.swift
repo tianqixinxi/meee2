@@ -2022,67 +2022,16 @@ enum BoardAPI {
                     // dispatch meee2:open-session 把终端拉到前台）。
                     surface = existingSurface
                 } else {
-                    // 绑定的会话已死。早前 BUG 1.2 在 openOnly 时直接报 session_ended
-                    // 让用户手动重新派发,但那是个死胡同(toast 无动作,卡片当下也没有
-                    // 重新派发入口)。owner 决策(2026-06-01):「打开会话查看进展」点到
-                    // 死会话应当直接续上 —— 能拿到 provider resume id 就 `--resume`
-                    // 找回原对话上下文(ClaudePlugin 在 hook 回来时已把真实 claude
-                    // session id 链进 SessionTerminalStore);拿不到就在同 cwd fresh
-                    // recreate(优雅降级,遗留 ghostty 绑定没存底层 session id 时走这条)。
-                    // openOnly 不再是死胡同,与 create/replace 在 dead 分支上汇合。
-                    try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
-                    let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
-                    let command = resumeSessionId.map {
-                        plannerResumeCommand(for: existingNode, sessionId: $0)
-                    }
-                        ?? plannerFreshCommand(for: existingNode)
-                    let canResume = resumeSessionId != nil
-                    action = canResume ? "resume" : "recreate"
-                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
-                    let provider = AgentLaunchCommand.provider(forCommand: command)
-                    surface = try createInternalSessionSurface(
-                        provider: provider,
-                        cwd: cwd,
-                        command: command,
-                        createIfMissing: true,
+                    // 绑定的会话已死 → 自愈复活(见 reviveNodeSessionSurface)。
+                    let revival = try reviveNodeSessionSurface(
                         canvasId: canvasId,
-                        nodeId: nodeId,
-                        initialPrompt: canResume ? nil : plannerDispatchPrompt(for: existingNode, canvasId: canvasId, cwd: cwd),
-                        preferredSessionId: preferredSessionId
+                        node: existingNode,
+                        deadSessionId: sessionId,
+                        explicitCwd: body?.cwd,
+                        access: state.access
                     )
-                    if canResume {
-                        _ = PlannerSessionRunStateBridge.observeBound(
-                            sessionId: surface.sessionId,
-                            status: .active
-                        )
-                    } else {
-                        _ = PlannerSessionRunStateBridge.observe(
-                            sessionId: surface.sessionId,
-                            purpose: "planner:\(nodeId)",
-                            status: .active
-                        )
-                    }
-                    // recreate/resume 出新 surface 后,必须把节点 sessionId 重绑到
-                    // 这个活 surface —— 否则节点仍指向旧的死 id,下次「打开会话」又
-                    // 查不到活会话、再 recreate,表现为「每次点都新建一个 session」。
-                    // 重绑后下次 open 命中上面 isReusableInternalSurface 分支直接复用
-                    // /聚焦。resume 时 surface.sessionId 即旧 id,这里跳过(no-op)。
-                    if surface.sessionId != sessionId {
-                        // allowReplace: 我们就在「绑定会话已死」分支里,这次重绑是
-                        // 自愈式替换死 surface。死会话的 runState 可能还停在 .running
-                        // (death 未及时写回),不放行会被 hasActiveSession 守卫拦成
-                        // activeSessionExists,导致节点永久卡死、每次点都 recreate。
-                        _ = try PlannerBoardBridge.bindSession(
-                            nodeId: nodeId,
-                            sessionId: surface.sessionId,
-                            for: canvasId,
-                            snapshot: BoardLayoutStore.shared.snapshot(),
-                            actorUserId: PlannerPermission.currentActorId(),
-                            allowReplace: true
-                        )
-                    }
-                    BoardServer.shared.broadcastStateChanged()
+                    surface = revival.surface
+                    action = revival.resumed ? "resume" : "recreate"
                     state = try PlannerBoardBridge.graphState(
                         for: canvasId,
                         snapshot: BoardLayoutStore.shared.snapshot(),
@@ -2152,6 +2101,65 @@ enum BoardAPI {
     private static func isReusableInternalSurface(_ surface: TerminalSessionSnapshot) -> Bool {
         surface.status == InternalTerminalLifecycle.starting.rawValue
             || surface.status == InternalTerminalLifecycle.running.rawValue
+    }
+
+    /// 死会话自愈(owner 决策 2026-06-01):能拿到 provider resume id 就
+    /// `--resume` 找回原对话上下文;拿不到就在同 cwd fresh recreate(优雅降级)。
+    /// recreate 出新 id 时把节点重绑到活 surface(allowReplace:死会话的
+    /// runState 可能还停在 .running,不放行会被 hasActiveSession 拦成
+    /// activeSessionExists、节点永久卡死)。「打开会话」(ensure)与「同步快照」
+    /// (artifact sync)共用 — 任何需要节点会话活着的入口都走同一条复活路径。
+    private static func reviveNodeSessionSurface(
+        canvasId: String,
+        node: PlanningNode,
+        deadSessionId: String,
+        explicitCwd: String?,
+        access: PlannerAccess
+    ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool) {
+        try PlannerPermission.requireNodeUpdate(on: node, access: access)
+        let cwd = try explicitSessionCwd(explicitCwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        let resumeSessionId = providerResumeSessionId(forPlannerSessionId: deadSessionId)
+        let command = resumeSessionId.map {
+            plannerResumeCommand(for: node, sessionId: $0)
+        }
+            ?? plannerFreshCommand(for: node)
+        let canResume = resumeSessionId != nil
+        let preferredSessionId = isProviderResumeSessionId(deadSessionId) || canResume ? deadSessionId : nil
+        let provider = AgentLaunchCommand.provider(forCommand: command)
+        let surface = try createInternalSessionSurface(
+            provider: provider,
+            cwd: cwd,
+            command: command,
+            createIfMissing: true,
+            canvasId: canvasId,
+            nodeId: node.id,
+            initialPrompt: canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
+            preferredSessionId: preferredSessionId
+        )
+        if canResume {
+            _ = PlannerSessionRunStateBridge.observeBound(
+                sessionId: surface.sessionId,
+                status: .active
+            )
+        } else {
+            _ = PlannerSessionRunStateBridge.observe(
+                sessionId: surface.sessionId,
+                purpose: "planner:\(node.id)",
+                status: .active
+            )
+        }
+        if surface.sessionId != deadSessionId {
+            _ = try PlannerBoardBridge.bindSession(
+                nodeId: node.id,
+                sessionId: surface.sessionId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId(),
+                allowReplace: true
+            )
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return (surface, canResume)
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -2480,21 +2488,39 @@ enum BoardAPI {
             }
             // 同步是节点执行面的动作,权限对齐 attach/update。
             try PlannerPermission.requireNodeUpdate(on: picked.node, access: state.access)
-            guard let session = resolvePluginSession(picked.sessionId) else {
-                return errorResponse(
-                    "session_not_tracked",
-                    "绑定会话不在 meee2 追踪列表里,无法投递同步指令。",
-                    status: 409
-                )
+
+            // 绑定会话已死 → 自动复活(与「打开会话」同一条自愈路径),同步
+            // 真正一键到底,不再需要用户手动打开会话来触发入队指令的执行。
+            // 复活失败不挡投递:指令仍发往原会话的 inbox,detail 说明降级。
+            var targetSessionId = picked.sessionId
+            var revivalNote: String?
+            if chosen == nil {
+                do {
+                    let revival = try reviveNodeSessionSurface(
+                        canvasId: canvasId,
+                        node: picked.node,
+                        deadSessionId: picked.sessionId,
+                        explicitCwd: nil,
+                        access: state.access
+                    )
+                    targetSessionId = revival.surface.sessionId
+                    revivalNote = revival.resumed ? "已自动恢复原会话" : "原会话无法恢复,已重建新会话"
+                } catch {
+                    revivalNote = "自动恢复失败(\(error.localizedDescription)),指令已入队,打开会话后执行"
+                }
             }
+
             let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let instruction = """
             [Artifact 同步请求] 请刷新账本快照:reference = \(reference)(canvasId \(canvasId))。
             步骤:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。
             这是写穿契约的手动触发 — 只刷新 artifact 快照,不要改节点状态,也不要 submit_node_output。
             """
-            let targetSessionId = inboxSessionId(for: session)
-            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
+            // 刚复活的会话可能还没回 hook、不在 PluginManager 列表 — 直接用
+            // planner session id 建 ops channel,AgentInboxShell 会在 native id
+            // 就绪后 flush(deferred 重试是既有行为)。
+            let inboxId = resolvePluginSession(targetSessionId).map { inboxSessionId(for: $0) } ?? targetSessionId
+            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: inboxId)
             _ = try MessageRouter.shared.send(
                 channel: channelName,
                 fromAlias: "operator",
@@ -2502,16 +2528,22 @@ enum BoardAPI {
                 content: instruction,
                 injectedByHuman: true
             )
-            NSLog("[ArtifactSync] reference=\(reference) -> session=\(picked.sessionId.prefix(12)) node=\(picked.node.id)")
+            NSLog("[ArtifactSync] reference=\(reference) -> session=\(targetSessionId.prefix(12)) node=\(picked.node.id) revived=\(revivalNote != nil)")
             BoardServer.shared.broadcastStateChanged()
+            let detail: String
+            if chosen != nil {
+                detail = "同步指令已投递给活动会话,完成后卡片自动更新。"
+            } else if let revivalNote {
+                detail = "\(revivalNote);同步指令已投递,完成后卡片自动更新。"
+            } else {
+                detail = "同步指令已投递。"
+            }
             return jsonResponse(SyncResponse(
                 ok: true,
-                sessionId: picked.sessionId,
+                sessionId: targetSessionId,
                 nodeId: picked.node.id,
                 reference: reference,
-                detail: chosen != nil
-                    ? "同步指令已投递给活动会话,完成后卡片自动更新。"
-                    : "绑定会话当前不活,指令已入队 — 打开会话(自动恢复)后会执行。"
+                detail: detail
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
