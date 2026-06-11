@@ -2523,19 +2523,31 @@ enum BoardAPI {
             if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
                 // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
                 // composer 里是插入换行不是提交,指令会一直躺在输入框里。
-                guard TerminalSessionBackendRegistry.shared.deliverPrompt(
+                switch TerminalSessionBackendRegistry.shared.deliverPrompt(
                     id: trackedSessionId,
                     text: instruction
-                ) else {
+                ) {
+                case .delivered:
+                    response = SyncResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        reference: reference,
+                        action: "reused",
+                        detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
+                    )
+                case .busy:
+                    // 上一条同步指令还在提交窗口里 — 连点去重,不能再打字
+                    // (两条文本会被同一个 Return 拼成一条畸形请求)。
+                    response = SyncResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        reference: reference,
+                        action: "pending",
+                        detail: "上一条同步指令正在提交,本次点击已去重。"
+                    )
+                case .sessionNotFound:
                     return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
                 }
-                response = SyncResponse(
-                    ok: true,
-                    sessionId: trackedSessionId,
-                    reference: reference,
-                    action: "reused",
-                    detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
-                )
             } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
                 response = SyncResponse(
                     ok: true,
