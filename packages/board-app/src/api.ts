@@ -1624,6 +1624,30 @@ export function ensurePlannerNodeInternalSession(
   )
 }
 
+export interface PlannerArtifactSyncResult {
+  ok: boolean
+  sessionId: string
+  nodeId: string
+  reference: string
+  detail: string
+}
+
+/** Direct artifact-layer manual sync — 给 artifact 所在节点的绑定会话投递
+ *  「写穿」指令(operator → session),由会话用 MCP get_artifact/update_artifact
+ *  刷新快照。409 no_bound_session = 节点还没起过会话。 */
+export function syncPlannerArtifact(
+  canvasId: string,
+  input: { reference?: string; artifactId?: string; hint?: string },
+): Promise<PlannerArtifactSyncResult> {
+  return jsonRequest<PlannerArtifactSyncResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/sync`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
 export function updatePlannerNodeGate(
   canvasId: string,
   nodeId: string,
