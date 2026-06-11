@@ -1361,6 +1361,30 @@ export interface PlanningNode {
    * `artifactDataSource` / `artifactConfig.dataSource` lookup.
    */
   artifactSource?: ArtifactSource | null
+  /**
+   * Teams — 多人增量贡献 (2026-06-11). Absent/null = closed (不收贡献).
+   * `policy: 'team'` opens the node's shared contribution ledger to every
+   * team member; entries live cloud-side with per-item attribution and never
+   * ride the canvas state. `itemLabel` names one entry ("startup", "候选人").
+   */
+  contribution?: NodeContributionConfig | null
+}
+
+/** Teams — node contribution opt-in. Mirrors the Swift `NodeContributionConfig`. */
+export interface NodeContributionConfig {
+  policy: string
+  itemLabel?: string | null
+}
+
+/** One entry in a node's shared contribution ledger (cloud-side, attributed). */
+export interface NodeContribution {
+  id: string
+  title: string
+  note?: string | null
+  url?: string | null
+  /** Contributor user id — resolve display name via the team directory. */
+  submittedBy?: string | null
+  createdAt: string
 }
 
 /** Unified artifact data origin (canvas-spec §7). Mirrors the Zod + Swift twins. */

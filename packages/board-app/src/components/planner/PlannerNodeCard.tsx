@@ -23,9 +23,11 @@ import {
   Trash2,
   UserPlus,
   UserRound,
+  Users,
 } from 'lucide-react'
 import type {
   NodeAssignment,
+  NodeContribution,
   PlannerArtifactContent,
   PlannerArtifactVersion,
   KanbanArtifactPayload,
@@ -38,7 +40,7 @@ import type {
   RunNextAction,
 } from '../../types'
 import { loadSpawnProvider, spawnProviderLabel } from '../../preferences'
-import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
+import { fetchPlannerNodeContributions, getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
 import { getWidgetComponent } from './widgets'
 import { resolveWidgetData } from './widgetDataResolver'
@@ -801,6 +803,18 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
           </div>
         )
       })()}
+
+      {/* Teams · 多人增量贡献 —— 节点开放共建(contribution.policy === 'team')
+       *  时,卡片上挂一条轻量账本摘要:条数 + 最新几条标题。完整列表、逐条
+       *  归属(谁交的)和添加表单都在 inspector「团队共建」段;这里只是让
+       *  画布上能看见列表在长。 */}
+      {nodeKind === 'step' && !data.virtual && node.contribution?.policy === 'team' && data.canvasId && (
+        <NodeContributionStrip
+          canvasId={data.canvasId}
+          nodeId={node.id}
+          itemLabel={node.contribution?.itemLabel ?? null}
+        />
+      )}
 
       {/* 简略进展 —— 卡片放大到一定程度(isExpandedEnough)后,在「成果」下面追加
        *  一条「最近 AI 回复」。数据和 inspector「进展」段同源(boardState.sessions,
@@ -1653,6 +1667,55 @@ function pickLatestArtifactForVersions(artifacts: PlannerArtifact[]): PlannerArt
     const tb = Date.parse(String(b.createdAt))
     return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
   })[0]
+}
+
+// Teams · 多人增量贡献 — 卡片上的轻量账本摘要。挂载时拉一次,之后 30s 轮询
+// (只有开放共建的节点才渲染本组件,一个画布上这类节点很少,轮询成本可忽略)。
+// 完整列表 + 逐条归属 + 添加表单在 inspector「团队共建」段。
+function NodeContributionStrip({
+  canvasId,
+  nodeId,
+  itemLabel,
+}: {
+  canvasId: string
+  nodeId: string
+  itemLabel: string | null
+}) {
+  const [items, setItems] = useState<NodeContribution[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      fetchPlannerNodeContributions(canvasId, nodeId)
+        .then((res) => {
+          if (alive) setItems(res.contributions ?? [])
+        })
+        .catch(() => {
+          // 静默:卡片摘要是 best-effort,错误细节在 inspector 里有完整呈现。
+        })
+    }
+    load()
+    const timer = window.setInterval(load, 30_000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [canvasId, nodeId])
+
+  const label = itemLabel?.trim() || '条目'
+  const recent = items === null ? [] : items.slice(-2).reverse()
+  return (
+    <div className="planner-node__contrib nodrag" onPointerDown={(e) => e.stopPropagation()}>
+      <span className="planner-node__contrib-head">
+        <Users size={11} aria-hidden /> 团队共建
+        <em>{items === null ? '…' : `${items.length} 条${label}`}</em>
+      </span>
+      {recent.map((item) => (
+        <p key={item.id} className="planner-node__contrib-item" title={item.note ?? item.title}>
+          {item.title}
+        </p>
+      ))}
+    </div>
+  )
 }
 
 function NodeModeBadge({ mode, scheduleInterval }: { mode: NodeMode; scheduleInterval: string | null }) {

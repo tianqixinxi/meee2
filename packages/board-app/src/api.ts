@@ -31,6 +31,7 @@ import type {
   PlannerCanvasState,
   PlannerGraphEdge,
   PlannerGraphState,
+  NodeContribution,
   WorkflowRun,
   PlannerMonitorState,
   PlannerNodeContract,
@@ -1660,6 +1661,45 @@ export function updatePlannerNodeGate(
     {
       method: 'PATCH',
       body: JSON.stringify({ executionMode }),
+    },
+  )
+}
+
+// Teams · 多人增量贡献 — collect-list step 的共享账本。policy 是本地节点
+// 字段(graph envelope 返回);贡献条目走云端,带 submittedBy 归属。
+export function updatePlannerNodeContribution(
+  canvasId: string,
+  nodeId: string,
+  input: { policy: 'team' | 'closed'; itemLabel?: string | null },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ policy: input.policy, itemLabel: input.itemLabel ?? undefined }),
+    },
+  )
+}
+
+export function fetchPlannerNodeContributions(
+  canvasId: string,
+  nodeId: string,
+): Promise<{ contributions: NodeContribution[] }> {
+  return jsonRequest<{ contributions: NodeContribution[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+  )
+}
+
+export function submitPlannerNodeContribution(
+  canvasId: string,
+  nodeId: string,
+  input: { title: string; note?: string; url?: string },
+): Promise<{ ok: boolean; contribution: NodeContribution }> {
+  return jsonRequest<{ ok: boolean; contribution: NodeContribution }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
     },
   )
 }

@@ -507,6 +507,35 @@ struct PlannerNodeGate: Codable, Equatable {
     var onFailGotoNodeId: String?
 }
 
+/// Teams — multi-user incremental contribution (2026-06-11). A step node can
+/// opt in to a shared contribution ledger ("collect startup list" 类收集型
+/// step):节点保持单 owner,贡献是多写者往云端 `meee2_artifact_versions` 的
+/// `contrib` slot append 版本,每条带 `submitted_by` 归属。该配置随 team canvas
+/// state 同步给所有成员;贡献本身永远不进 canvas state(只有 owner 推 state,
+/// 走 state 会把别人的贡献冲掉)。
+struct NodeContributionConfig: Codable, Equatable {
+    /// 谁能写:`closed`(默认,等价于 nil 配置)/ `team`(全体 team 成员)。
+    /// Stored as String for forward-compat (e.g. future `invited`).
+    var policy: String
+    /// UI 上"一条贡献"的业务名(如「startup」「候选人」),空 = 通用文案。
+    var itemLabel: String?
+
+    enum CodingKeys: String, CodingKey { case policy, itemLabel }
+
+    init(policy: String = "closed", itemLabel: String? = nil) {
+        self.policy = policy
+        self.itemLabel = itemLabel
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        policy = try c.decodeIfPresent(String.self, forKey: .policy) ?? "closed"
+        itemLabel = try c.decodeIfPresent(String.self, forKey: .itemLabel)
+    }
+
+    var acceptsTeamContributions: Bool { policy == "team" }
+}
+
 enum PlannerDispatchRunner: String, Codable, Equatable {
     /// Spawns a local Claude session (the BYOA default).
     case claude
@@ -1072,6 +1101,9 @@ struct PlanningNode: Codable, Equatable {
     /// Part D — 可配置节点状态(spec §5)。nil = 默认 schema(三态+done 门控)。
     /// 用户可经 planner 给节点定义自定义状态集;读 `effectiveStateSchema`。
     var stateSchema: NodeStateSchema?
+    /// Teams — 多人增量贡献配置(2026-06-11)。nil = closed(不收贡献)。
+    /// 随 team canvas state 同步;贡献账本在云端,见 `NodeContributionConfig`。
+    var contribution: NodeContributionConfig?
 
     /// Derived upstream-staleness signal — set ONLY by `canvasState`'s read
     /// projection (`injectUpstreamFreshness`). Optional ⇒ implicit nil default,
@@ -1129,7 +1161,8 @@ struct PlanningNode: Codable, Equatable {
         widget: Widget? = nil,
         artifactDataSource: String? = nil,
         artifactSource: ArtifactSource? = nil,
-        stateSchema: NodeStateSchema? = nil
+        stateSchema: NodeStateSchema? = nil,
+        contribution: NodeContributionConfig? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -1164,6 +1197,7 @@ struct PlanningNode: Codable, Equatable {
         self.artifactDataSource = artifactDataSource
         self.artifactSource = artifactSource
         self.stateSchema = stateSchema
+        self.contribution = contribution
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -1190,6 +1224,8 @@ struct PlanningNode: Codable, Equatable {
         case artifactSource
         // Part D — 可配置节点状态(2026-06-01). nil = 默认三态+done schema.
         case stateSchema
+        // Teams — 多人增量贡献(2026-06-11). nil = closed.
+        case contribution
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -1235,6 +1271,7 @@ struct PlanningNode: Codable, Equatable {
         artifactDataSource = try container.decodeIfPresent(String.self, forKey: .artifactDataSource)
         artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
         stateSchema = try container.decodeIfPresent(NodeStateSchema.self, forKey: .stateSchema)
+        contribution = try container.decodeIfPresent(NodeContributionConfig.self, forKey: .contribution)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1272,6 +1309,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(widget, forKey: .widget)
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
         try container.encodeIfPresent(stateSchema, forKey: .stateSchema)
+        try container.encodeIfPresent(contribution, forKey: .contribution)
         // Emit the unified source (resolved from legacy if unset) so the
         // board-app reads one canonical `artifactSource`. Legacy
         // `artifactDataSource` is still emitted above for one-release compat.
@@ -6464,6 +6502,42 @@ final class PlannerStore {
         }
     }
 
+    /// Teams · 多人增量贡献 — set / clear the node's contribution config.
+    /// Execution-layer mutation (direct effect, like gate / schedule). The
+    /// canvas owner opt-in syncs to teammates through the team canvas state
+    /// (`save` → `plannerCanvasChanged` → pusher marks dirty → cloud).
+    func updateNodeContribution(
+        canvasId: String,
+        nodeId: String,
+        contribution: NodeContributionConfig?
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let nodeKind = record.nodes[nodeIndex].nodeKind ?? .step
+            guard nodeKind == .step else {
+                throw PlannerCoreError.invalidNodeOutput("Only step nodes can collect contributions.")
+            }
+            var node = record.nodes[nodeIndex]
+            node.contribution = contribution
+            record.nodes[nodeIndex] = node
+            let summary = contribution?.acceptsTeamContributions == true
+                ? "\(node.title) 开放团队贡献"
+                : "\(node.title) 关闭团队贡献"
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: summary
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
     /// canvas-spec §8 / §11 · Confirm a node parked at「待确认」(awaiting-review,
     /// `workflowRunState == .gateWait` after a needs-review `done`). This is the
     /// human "approve / sign-off" action: the node transitions to `.done`, and
@@ -8913,6 +8987,34 @@ enum PlannerBoardBridge {
         }
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         _ = try store.updateNodeGate(canvasId: canvasId, nodeId: nodeId, executionMode: executionMode)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    /// Teams · 多人增量贡献 — owner-only toggle of a step node's contribution
+    /// policy. Stricter than `requireNodeUpdate`: opening a node to team-wide
+    /// writes is a write-gate change, so a doer may NOT flip it on their own
+    /// node.
+    static func updateNodeContribution(
+        nodeId: String,
+        contribution: NodeContributionConfig?,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        guard (node.nodeKind ?? .step) == .step else {
+            throw PlannerCoreError.invalidNodeOutput("Only step nodes can collect contributions.")
+        }
+        guard state.access.role == .owner else {
+            throw PlannerCoreError.permissionDenied(
+                action: "update contribution policy",
+                role: state.access.role
+            )
+        }
+        _ = try store.updateNodeContribution(canvasId: canvasId, nodeId: nodeId, contribution: contribution)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 

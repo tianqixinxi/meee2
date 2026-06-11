@@ -3584,6 +3584,164 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Teams · 多人增量贡献 (collect-list step)
+
+    /// PATCH /api/planner/canvases/:id/nodes/:nodeId/contribution
+    /// Body: {"policy": "team"|"closed", "itemLabel"?: String}
+    /// Owner-only. `closed` clears the config back to nil (默认不收贡献)。
+    static func updatePlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateContributionRequest: Decodable {
+            let policy: String
+            let itemLabel: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateContributionRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"policy\":\"team\"|\"closed\",\"itemLabel\"?:String}", status: 400)
+        }
+        guard body.policy == "team" || body.policy == "closed" else {
+            return errorResponse("bad_request", "policy must be \"team\" or \"closed\"", status: 400)
+        }
+        let trimmedLabel = body.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let contribution: NodeContributionConfig? = body.policy == "team"
+            ? NodeContributionConfig(
+                policy: "team",
+                itemLabel: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel
+            )
+            : nil
+        do {
+            let state = try PlannerBoardBridge.updateNodeContribution(
+                nodeId: nodeId,
+                contribution: contribution,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// GET /api/planner/canvases/:id/nodes/:nodeId/contributions
+    /// Proxies the cloud contribution ledger (oldest-first). Any team member
+    /// may read; the cloud route re-checks membership against the caller's
+    /// own access token.
+    static func listPlannerNodeContributions(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        switch OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions",
+            query: [
+                URLQueryItem(name: "teamId", value: settings.teamId),
+                URLQueryItem(name: "canvasId", value: remoteCanvasId)
+            ],
+            settings: settings
+        ) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contributions
+    /// Body: {"title": String, "note"?: String, "url"?: String}
+    /// 轻量贡献写入 — 不开工作 session、不动节点状态机。本地先按已同步的
+    /// 节点 policy 预检(owner 豁免),云端按 state 再硬校验一次。
+    static func submitPlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
+        struct SubmitContributionRequest: Decodable {
+            let title: String
+            let note: String?
+            let url: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: SubmitContributionRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"title\":String,\"note\"?:String,\"url\"?:String}", status: 400)
+        }
+        let title = body.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            return errorResponse("bad_request", "title is required", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        do {
+            let actorId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorId
+            )
+            guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            let acceptsTeam = node.contribution?.acceptsTeamContributions == true
+            guard acceptsTeam || state.access.role == .owner else {
+                return errorResponse("forbidden", "node does not accept team contributions", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        var payload: [String: Any] = [
+            "teamId": settings.teamId,
+            "canvasId": remoteCanvasId,
+            "title": title
+        ]
+        if let note = body.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            payload["note"] = note
+        }
+        if let url = body.url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
+            payload["url"] = url
+        }
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
+            return errorResponse("bad_request", "failed to encode contribution payload", status: 400)
+        }
+        switch OnlineProxy.callOnlineAPI(
+            method: "POST",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions",
+            body: bodyData,
+            settings: settings
+        ) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
     /// UI-2 · proxy `fetchOwnedCanvases` to the meee2-online team API.
     static func proxyListOwnedCanvases(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()
