@@ -34,6 +34,7 @@ import { useToast } from '../../App'
 import { resolvedArtifactPayload } from '../../lib/artifactPayload'
 import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
 import { getViewSchema } from '../../integrations/viewSchemas'
+import { stableId } from './plannerGraphAdapter'
 import { ArtifactViewTabs, resolveArtifactViews } from '../artifacts/ArtifactViewTabs'
 import type {
   ArtifactPayload,
@@ -231,6 +232,29 @@ export function isOutputArtifactNode(node: PlanningNode): boolean {
   return hasUpstreamProducers || hasDeclaredInputs
 }
 
+/**
+ * 从虚拟 io-artifact 节点 id 反推生产节点 id。
+ * id 形如 `io-artifact-<producerId>-<direction>-<stableId(ref)>`,producerId
+ * 与 ref slug 都含连字符,不能盲目正则切 — 用节点自己声明的 artifactRefs 逐个
+ * 算出 slug 后从尾部精确剥离。非虚拟节点 / 剥离失败返回 null。
+ */
+export function virtualArtifactProducerId(node: PlanningNode): string | null {
+  const prefix = 'io-artifact-'
+  if (!node.id.startsWith(prefix)) return null
+  const rest = node.id.slice(prefix.length)
+  for (const ref of node.artifactRefs ?? []) {
+    const slug = stableId(ref)
+    for (const direction of ['output', 'input'] as const) {
+      const suffix = `-${direction}-${slug}`
+      if (rest.endsWith(suffix)) {
+        const producerId = rest.slice(0, rest.length - suffix.length)
+        if (producerId) return producerId
+      }
+    }
+  }
+  return null
+}
+
 export function InspectorArtifactBody({
   node,
   canvasId,
@@ -260,20 +284,26 @@ export function InspectorArtifactBody({
   //
   // 虚拟 io-artifact 节点(「查看输出」展开)的 id 是派生 id(io-artifact-…),
   // 而 artifact 挂在生产节点的 id 上 — 直接按 node.id 过滤永远是空,inspector
-  // 退化成「手填空白编辑器 + 版本链还没产生」的假象。回退用节点声明的
-  // artifactRefs 按 reference 匹配。
+  // 退化成「手填空白编辑器 + 版本链还没产生」的假象。回退按 (生产节点 id +
+  // reference) 匹配 — 槽位键本来就是二元组,只按 reference 全画布捞会让共享
+  // 通用引用(report.md / output)的两个生产者互相串台。生产节点 id 从虚拟
+  // id 精确剥离(用节点声明的 refs 反推 slug,见 virtualArtifactProducerId);
+  // 剥不出来就不回退,宁可空也不串。
   const nodeArtifacts = useMemo(() => {
     const byNodeId = artifacts.filter((art) => art.nodeId === node.id)
     const refs = node.artifactRefs ?? []
+    const producerId = virtualArtifactProducerId(node)
     const pool = byNodeId.length > 0
       ? byNodeId
-      : artifacts.filter((art) => refs.includes(art.reference))
+      : producerId
+        ? artifacts.filter((art) => art.nodeId === producerId && refs.includes(art.reference))
+        : []
     return [...pool].sort((a, b) => {
       const ta = Date.parse(String(a.createdAt))
       const tb = Date.parse(String(b.createdAt))
       return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
     })
-  }, [artifacts, node.id, node.artifactRefs])
+  }, [artifacts, node])
   const latestArtifact = nodeArtifacts[0] ?? null
   // 经 refs 回退匹配到的产物 = 由别的节点产出 → 这是执行产物的可视化面,
   // 数据来源配置器 / 手填编辑器一律不该出现(canvas-spec §7.4 的虚拟节点版)。
