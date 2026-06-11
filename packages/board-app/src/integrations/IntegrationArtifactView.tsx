@@ -14,6 +14,7 @@
  *   3. 投影不出来(未注册 connector / 裸 URL)→ provider/summary/url 简版。
  */
 
+import { useState } from 'react'
 import type {
   IntegrationEntity,
   IntegrationViewSchema,
@@ -22,6 +23,55 @@ import type {
 } from '../types'
 import { artifactToIntegrationEntity } from './artifactEntity'
 import { getViewSchema } from './viewSchemas'
+import { syncPlannerArtifact } from '../api'
+
+/**
+ * 手动同步按钮 — 写穿契约的一键触发:让 artifact 所在节点的绑定会话用已有
+ * MCP(get_artifact → 核对外部对象 → update_artifact)刷新快照。按钮自带
+ * 内联状态反馈(不依赖外层 toast 管道,这个 view 在卡片/inspector/rail 多处
+ * 复用)。
+ */
+function SyncSnapshotButton({ artifact }: { artifact: PlannerArtifact }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'sent' | 'error'>('idle')
+  const [detail, setDetail] = useState('')
+  const run = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (state === 'busy') return
+    setState('busy')
+    syncPlannerArtifact(artifact.canvasId, { reference: artifact.reference })
+      .then((result) => {
+        setState('sent')
+        setDetail(result.detail)
+      })
+      .catch((err: Error & { code?: string }) => {
+        setState('error')
+        setDetail(
+          err.code === 'no_bound_session'
+            ? '节点还没绑定会话 — 先在节点上「开干 · 起会话」再同步'
+            : err.message || '同步指令投递失败',
+        )
+      })
+  }
+  return (
+    <span className="planner-node__integration-sync">
+      <button
+        type="button"
+        className="planner-node__integration-sync-btn nodrag"
+        onClick={run}
+        onPointerDown={(event) => event.stopPropagation()}
+        disabled={state === 'busy'}
+        title="让绑定会话核对外部对象并刷新快照(get_artifact → update_artifact)"
+      >
+        {state === 'busy' ? '同步中…' : '同步快照'}
+      </button>
+      {detail && (
+        <small className={state === 'error' ? 'planner-node__integration-sync-err' : undefined}>
+          {detail}
+        </small>
+      )}
+    </span>
+  )
+}
 
 export function IntegrationArtifactView({
   artifact,
@@ -35,7 +85,12 @@ export function IntegrationArtifactView({
   const entity = artifactToIntegrationEntity(artifact)
   const schema = entity ? viewSchemaOf(entity.schemaId) : undefined
   if (entity && schema && schema.integrationId === 'google-sheets') {
-    return <GoogleSheetsTabPreview entity={entity} schema={schema} reference={artifact.reference} />
+    return (
+      <>
+        <GoogleSheetsTabPreview entity={entity} schema={schema} reference={artifact.reference} />
+        <SyncSnapshotButton artifact={artifact} />
+      </>
+    )
   }
   if (entity && schema) {
     const entityPayload = objectPayload(entity.payload)
@@ -65,6 +120,7 @@ export function IntegrationArtifactView({
         ) : (
           <code>{artifact.reference}</code>
         )}
+        <SyncSnapshotButton artifact={artifact} />
       </div>
     )
   }

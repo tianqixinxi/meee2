@@ -632,6 +632,9 @@ public final class BoardServer {
         // session(MCP get_artifact/update_artifact)与人工同走这两个端点。
         server.GET["/api/planner/canvases/:id/artifacts/latest"] = BoardServer.cors(BoardAPI.getLatestPlannerArtifacts)
         server.POST["/api/planner/canvases/:id/artifacts/update"] = BoardServer.cors(BoardAPI.updatePlannerArtifact)
+        // 手动同步:给 artifact 所在节点的绑定会话投递「写穿」指令(operator
+        // → session inbox),由会话用 MCP get_artifact/update_artifact 刷新快照。
+        server.POST["/api/planner/canvases/:id/artifacts/sync"] = BoardServer.cors(BoardAPI.syncPlannerArtifact)
         server.POST["/api/planner/canvases/:id/artifacts/views"] = BoardServer.cors(BoardAPI.updatePlannerArtifactViews)
         // UI-1 (ENG-3) — artifact version chain read API.
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/artifact-versions"] = BoardServer.cors(BoardAPI.listPlannerArtifactVersions)

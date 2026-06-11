@@ -2414,6 +2414,112 @@ enum BoardAPI {
         }
     }
 
+    /// Direct artifact-layer manual sync — 把写穿契约做成一键。app 自己不碰
+    /// 外部系统(无凭证,integration 层 schema+view 边界),执行归 session:
+    /// 给 artifact 所在节点的绑定会话发一条 operator 指令,让它用已有 MCP
+    /// (get_artifact → 核对外部对象 → update_artifact)刷新快照。会话暂时
+    /// 不活时消息进 inbox 排队,resume 后照常 drain — 不在这里 spawn 会话。
+    static func syncPlannerArtifact(_ req: HttpRequest) -> HttpResponse {
+        struct SyncRequest: Decodable {
+            let artifactId: String?
+            let reference: String?
+            /// 可选的人工补充(如「真表现在 12 行」),拼进指令帮会话少跑一步。
+            let hint: String?
+        }
+        struct SyncResponse: Encodable {
+            let ok: Bool
+            let sessionId: String
+            let nodeId: String
+            let reference: String
+            let detail: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: SyncRequest.self),
+              body.artifactId?.isEmpty == false || body.reference?.isEmpty == false else {
+            return errorResponse("invalid_json", "body must carry artifactId or reference", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.canvasState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            let targets = try PlannerBoardBridge.findArtifacts(
+                artifactId: body.artifactId,
+                reference: body.reference,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let reference = targets.first?.reference else {
+                throw PlannerCoreError.artifactNotFound(body.artifactId ?? body.reference ?? "(no selector)")
+            }
+            // 选会话:共享引用的槽位里,优先活 surface 的绑定;退而求其次任何
+            // 绑定(死会话的 inbox 消息在 resume 后 drain)。
+            var fallback: (node: PlanningNode, sessionId: String)?
+            var chosen: (node: PlanningNode, sessionId: String)?
+            for target in targets {
+                guard let node = state.nodes.first(where: { $0.id == target.nodeId }),
+                      let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !sessionId.isEmpty else { continue }
+                if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
+                   isReusableInternalSurface(surface) {
+                    chosen = (node, sessionId)
+                    break
+                }
+                if fallback == nil { fallback = (node, sessionId) }
+            }
+            guard let picked = chosen ?? fallback else {
+                return errorResponse(
+                    "no_bound_session",
+                    "该 artifact 的节点没有绑定会话 — 先在节点上起会话(开干)再同步。",
+                    status: 409
+                )
+            }
+            // 同步是节点执行面的动作,权限对齐 attach/update。
+            try PlannerPermission.requireNodeUpdate(on: picked.node, access: state.access)
+            guard let session = resolvePluginSession(picked.sessionId) else {
+                return errorResponse(
+                    "session_not_tracked",
+                    "绑定会话不在 meee2 追踪列表里,无法投递同步指令。",
+                    status: 409
+                )
+            }
+            let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let instruction = """
+            [Artifact 同步请求] 请刷新账本快照:reference = \(reference)(canvasId \(canvasId))。
+            步骤:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。
+            这是写穿契约的手动触发 — 只刷新 artifact 快照,不要改节点状态,也不要 submit_node_output。
+            """
+            let targetSessionId = inboxSessionId(for: session)
+            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
+            _ = try MessageRouter.shared.send(
+                channel: channelName,
+                fromAlias: "operator",
+                toAlias: "session",
+                content: instruction,
+                injectedByHuman: true
+            )
+            NSLog("[ArtifactSync] reference=\(reference) -> session=\(picked.sessionId.prefix(12)) node=\(picked.node.id)")
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(SyncResponse(
+                ok: true,
+                sessionId: picked.sessionId,
+                nodeId: picked.node.id,
+                reference: reference,
+                detail: chosen != nil
+                    ? "同步指令已投递给活动会话,完成后卡片自动更新。"
+                    : "绑定会话当前不活,指令已入队 — 打开会话(自动恢复)后会执行。"
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func updatePlannerArtifactViews(_ req: HttpRequest) -> HttpResponse {
         struct UpdateArtifactViewsRequest: Decodable {
             let artifactId: String?

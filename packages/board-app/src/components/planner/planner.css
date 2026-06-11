@@ -2862,6 +2862,44 @@
   border-bottom: 1px dashed rgba(168, 165, 155, 0.12);
 }
 
+/* 手动同步(写穿契约一键触发)— 按钮 + 内联结果反馈。 */
+.planner-node__integration-sync {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.planner-node__integration-sync-btn {
+  font-size: 10px;
+  padding: 3px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(28, 28, 25, 0.5);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.planner-node__integration-sync-btn:hover:not(:disabled) {
+  border-color: #34a853;
+  color: var(--text);
+}
+
+.planner-node__integration-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.planner-node__integration-sync small {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.planner-node__integration-sync small.planner-node__integration-sync-err {
+  color: var(--danger, #c4554d);
+}
+
 .planner-node__html-preview {
   width: 100%;
   height: 210px;
