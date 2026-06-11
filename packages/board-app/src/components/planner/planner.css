@@ -2862,6 +2862,43 @@
   border-bottom: 1px dashed rgba(168, 165, 155, 0.12);
 }
 
+/* artifact inspector「数据源」绑定卡片 — connector / 关键事实 / 链接,只读。 */
+.planner-artifact-binding {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(18, 18, 16, 0.25);
+  font-size: 12px;
+}
+
+.planner-artifact-binding__connector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.planner-artifact-binding__facts {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.planner-artifact-binding a {
+  color: var(--accent, #34a853);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.planner-artifact-binding code {
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
 /* 手动同步(写穿契约一键触发)— 按钮 + 内联结果反馈。 */
 .planner-node__integration-sync {
   display: flex;
