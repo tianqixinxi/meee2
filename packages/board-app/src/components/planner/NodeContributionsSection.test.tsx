@@ -76,6 +76,30 @@ describe('NodeContributionsSection', () => {
     expect(screen.queryByText('关闭共建')).toBeNull()
   })
 
+  it('renders http(s) urls as links but never unsafe schemes (stored XSS guard)', async () => {
+    apiMocks.fetchPlannerNodeContributions.mockResolvedValue({
+      contributions: [
+        { id: 'c1', title: 'SafeCo', url: 'https://safe.example.com', submittedBy: 'u-alice', createdAt: new Date().toISOString() },
+        { id: 'c2', title: 'EvilCo', url: 'javascript:alert(1)', submittedBy: 'u-bob', createdAt: new Date().toISOString() },
+      ],
+    })
+    const { container } = render(
+      <NodeContributionsSection
+        canvasId="canvas-1"
+        node={makeNode({ policy: 'team' })}
+        isOwner={false}
+        teamMembers={TEAM}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('SafeCo')).toBeTruthy()
+    })
+    const links = Array.from(container.querySelectorAll('a'))
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['https://safe.example.com'])
+    // EvilCo 仍渲染标题,但绝不渲染成 javascript: 链接。
+    expect(screen.getByText('EvilCo').closest('a')).toBeNull()
+  })
+
   it('submits a contribution and refreshes the list', async () => {
     apiMocks.fetchPlannerNodeContributions.mockResolvedValue({ contributions: [] })
     apiMocks.submitPlannerNodeContribution.mockResolvedValue({

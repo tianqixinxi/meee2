@@ -25,6 +25,13 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
 }
 
+// 只放行 http(s) 链接。账本 url 是别的成员提交的,javascript:/data: scheme
+// 渲染成 href 会变成存储型 XSS;服务端同样校验,这里是渲染层的第二道闸。
+function safeHttpUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  return /^https?:\/\//i.test(url) ? url : null
+}
+
 function relativeTime(iso: string): string {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ''
@@ -193,6 +200,7 @@ export function NodeContributionsSection({
                   const member = item.submittedBy ? memberById.get(item.submittedBy) : undefined
                   const who = member?.displayName
                     ?? (item.submittedBy ? `${item.submittedBy.slice(0, 8)}…` : '未知成员')
+                  const href = safeHttpUrl(item.url)
                   return (
                     <li key={item.id} className="planner-contrib__item">
                       <span className="planner-contrib__avatar" title={who}>
@@ -202,8 +210,8 @@ export function NodeContributionsSection({
                       </span>
                       <span className="planner-contrib__body">
                         <strong>
-                          {item.url
-                            ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
+                          {href
+                            ? <a href={href} target="_blank" rel="noreferrer">{item.title}</a>
                             : item.title}
                         </strong>
                         {item.note && <em>{item.note}</em>}
