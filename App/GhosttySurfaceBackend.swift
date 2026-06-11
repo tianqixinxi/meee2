@@ -52,6 +52,12 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
         }
     }
 
+    func deliverPrompt(id: String, text: String) {
+        try? runOnMain {
+            resolveSession(id: id)?.deliverPrompt(text)
+        }
+    }
+
     func snapshot(id: String) -> TerminalSessionSnapshot? {
         try? runOnMain {
             resolveSession(id: id)?.snapshot()
@@ -385,6 +391,26 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         terminalView.sendText(text)
         touch()
         logPerf("write_input", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
+    }
+
+    /// 打字 + 提交。writeInput 的裸 "\n" 在 agent TUI 的 composer 里是插入
+    /// 换行而非提交(实测:artifact sync 复用投递的指令一直躺在输入框里,
+    /// 会话纹丝不动);真正的提交是 Return 键。复刻 initial-prompt 投递的
+    /// 提交节奏:打字后 400ms 按 Return,150ms 后补一次(首次可能被渲染吞)。
+    func deliverPrompt(_ text: String) {
+        guard !detached else { return }
+        let startedAt = Date()
+        terminalView.sendText(text)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
+            guard let self, !self.detached else { return }
+            self.pressReturnKey(reason: "deliver_prompt_submit")
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+                guard let self, !self.detached else { return }
+                self.pressReturnKey(reason: "deliver_prompt_submit_retry")
+            }
+        }
+        touch()
+        logPerf("deliver_prompt", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
     }
 
     func fitToCurrentSize() {

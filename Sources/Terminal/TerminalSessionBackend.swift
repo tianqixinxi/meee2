@@ -109,6 +109,11 @@ public protocol TerminalSessionBackend {
     func resizeSession(id: String, cols: UInt16, rows: UInt16)
     func focusSession(id: String)
     func writeInput(id: String, data: Data)
+    /// 向已就绪的 agent REPL 投递一条要**提交执行**的 prompt。和 writeInput
+    /// 的区别:writeInput 是裸字节,文本里的 "\n" 在 TUI composer 里是插入
+    /// 换行而非提交;deliverPrompt 负责「打字 + 按 Return 键」的完整提交
+    /// 动作(节奏与 initialPrompt 的就绪门控投递一致)。
+    func deliverPrompt(id: String, text: String)
     func snapshot(id: String) -> TerminalSessionSnapshot?
     func listSnapshots() -> [TerminalSessionSnapshot]
 }
@@ -282,6 +287,13 @@ public final class TerminalSessionBackendRegistry {
     public func writeInput(id: String, data: Data) -> Bool {
         guard let backend = backendForExistingSession(id: id) else { return false }
         backend.writeInput(id: id, data: data)
+        return true
+    }
+
+    @discardableResult
+    public func deliverPrompt(id: String, text: String) -> Bool {
+        guard let backend = backendForExistingSession(id: id) else { return false }
+        backend.deliverPrompt(id: id, text: text)
         return true
     }
 

@@ -2491,8 +2491,8 @@ enum BoardAPI {
             }
 
             let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            // 单行指令:fresh spawn 作 initialPrompt、复用会话作 PTY 输入,两条
-            // 路径都是「打字 + 回车」,多行文本会被首个换行截断提交。
+            // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
+            // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
             let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
 
             // 投递矩阵 — 专属会话每 reference 至多一条:
@@ -2521,9 +2521,11 @@ enum BoardAPI {
                 && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
             let response: SyncResponse
             if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
-                guard TerminalSessionBackendRegistry.shared.writeInput(
+                // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
+                // composer 里是插入换行不是提交,指令会一直躺在输入框里。
+                guard TerminalSessionBackendRegistry.shared.deliverPrompt(
                     id: trackedSessionId,
-                    data: Data((instruction + "\n").utf8)
+                    text: instruction
                 ) else {
                     return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
                 }
