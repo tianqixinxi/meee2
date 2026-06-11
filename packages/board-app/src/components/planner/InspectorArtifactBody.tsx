@@ -1,14 +1,13 @@
 // UI-simplification — artifact-mode Inspector body.
 //
-// 当 nodeKind === 'artifact' 时,NodeInspectorModal 走这个分支:
-//   - Header(state badge + title) — 由调用方渲染 modal shell
-//   - 产物预览/编辑区 (PayloadBodySwitch,按 ArtifactPayload.type 分发)
-//   - 状态行(state badge + blockers)
-//   - 版本(VersionTimeline,横向 chip)
+// 当 nodeKind === 'artifact' 时,NodeInspectorModal 走这个分支,按
+// 数据源 → 视图 → 预览 → 版本 → 来源 → 操作 的顺序渲染:
+//   - 数据源(绑定事实,seed/mirrored 可配,执行产物只读)
+//   - 视图(命名/派生 view 清单)
+//   - 预览(ArtifactViewTabs / PayloadBodySwitch;版本行可把预览切到历史 snapshot)
+//   - 版本(VersionChainList,真实 version 链 + snapshot 成因 + 上游会话链接)
 //   - 来源(SourceLineagePanel,只读 lineage)
-//   - 卡片样式(widget chip popover,artifact 节点收窄 allowed chips)
 //   - 操作(ArtifactActionsBar,artifact-only 动作)
-//   - 版本与足迹(FootprintTimeline,version chain + 上游 session 链接)
 //
 // step / session / subCanvas 路径走 NodeInspectorModal 主体不变,这里彻底隔离。
 
@@ -24,7 +23,6 @@ import {
   Plug,
   RefreshCw,
   Route,
-  Settings2,
   Sparkles,
   Trash2,
 } from 'lucide-react'
@@ -47,8 +45,6 @@ import type {
   PlannerArtifactContent,
   PlannerArtifactVersion,
   PlanningNode,
-  Widget,
-  WidgetKind,
 } from '../../types'
 
 interface Props {
@@ -71,33 +67,6 @@ interface Props {
   onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
 }
 
-// artifact 节点上,卡片样式 popover 收窄到三个有意义的 widget(design 约定)。
-const ARTIFACT_WIDGET_OPTIONS: ReadonlyArray<{
-  kind: WidgetKind | 'standard'
-  label: string
-  tooltip: string
-}> = [
-  {
-    kind: 'standard',
-    label: '标准',
-    tooltip: '不渲染 widget,显示节点本身(标题 / 状态)',
-  },
-  {
-    kind: 'artifact-preview',
-    label: '产物预览',
-    tooltip: '内嵌预览(markdown / 文件),适合 PRD / PR / 报告',
-  },
-  {
-    kind: 'kanban',
-    label: '看板',
-    tooltip: '把上游数据 / 子画板按 status 分成列',
-  },
-  {
-    kind: 'inbox',
-    label: '收件箱',
-    tooltip: '把数据扁平展开,按最近活动倒序',
-  },
-]
 
 // design spec ui_surface §dataSource — artifact 二模 enum (2026-05-28 简化).
 // 与 widget.source 正交并行: artifact.dataSource 决定 payload 权威来源 (data 层),
@@ -362,6 +331,33 @@ export function InspectorArtifactBody({
     }
   }, [activeArtifact, canvasId])
 
+  // 版本回放 — 点版本行把「预览」切到那一版的 snapshot(payload_inline),
+  // 再点一次或点「回到最新」复位。切换主产物(多槽位 chip)时也复位。
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
+  useEffect(() => {
+    setSelectedVersionId(null)
+  }, [activeArtifact?.id])
+  const selectedVersion = useMemo(
+    () => versionChain?.find((v) => v.version_id === selectedVersionId) ?? null,
+    [versionChain, selectedVersionId],
+  )
+  const selectedVersionNumber = useMemo(() => {
+    if (!selectedVersion || !versionChain) return null
+    const idx = versionChain.findIndex((v) => v.version_id === selectedVersion.version_id)
+    return idx >= 0 ? versionChain.length - idx : null
+  }, [selectedVersion, versionChain])
+  // 历史回放体:payload_inline 盖掉 head 的 payload/typedPayload。content(blob
+  // 全文)属于 head,回放时不沿用 — 否则新内容串进旧版本。inline 缺失(纯 blob
+  // 引用)时回放不出来,预览区给提示并继续显示最新。
+  const selectedVersionHasInline = selectedVersion ? selectedVersion.payload_inline != null : false
+  const previewArtifact = useMemo(() => {
+    if (!activeArtifact || !selectedVersion || selectedVersion.payload_inline == null) {
+      return activeArtifact
+    }
+    return { ...activeArtifact, payload: selectedVersion.payload_inline, typedPayload: null }
+  }, [activeArtifact, selectedVersion])
+  const previewingHistory = Boolean(selectedVersion) && selectedVersionHasInline
+
   // 视图清单 — 产物自带的命名视图(update_artifact_views 固化)或按 payload
   // 形状派生的默认视图。预览区(ArtifactViewTabs)渲染的就是这一组。
   const artifactViews = useMemo(
@@ -457,23 +453,6 @@ export function InspectorArtifactBody({
       })
   }
 
-  // 卡片样式(widget chip)popover。
-  const [widgetDraft, setWidgetDraft] = useState<Widget | null>(node.widget ?? null)
-  const [widgetSaving, setWidgetSaving] = useState(false)
-  const [widgetError, setWidgetError] = useState<string | null>(null)
-  const [widgetPopoverOpen, setWidgetPopoverOpen] = useState(false)
-  const widgetPopoverRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!widgetPopoverOpen) return
-    const onMouseDown = (event: MouseEvent) => {
-      const ref = widgetPopoverRef.current
-      if (!ref) return
-      if (event.target instanceof Node && ref.contains(event.target)) return
-      setWidgetPopoverOpen(false)
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [widgetPopoverOpen])
 
   // dataSource picker — design spec ui_surface.inspector_picker (chip 3-option, auto-save).
   // 默认值: 旧节点缺省 → 'authored' (rollout 兼容)。
@@ -516,40 +495,6 @@ export function InspectorArtifactBody({
       .catch((err) => {
         setDataSourceSaving(false)
         setDataSourceError((err as Error).message || '保存失败')
-      })
-  }
-
-  const handlePickWidgetKind = (kind: WidgetKind | 'standard') => {
-    setWidgetError(null)
-    const next: Widget | null =
-      kind === 'standard'
-        ? null
-        : {
-            kind,
-            // artifact 节点的智能默认 source — 自己的 payload 就是数据,
-            // upstream artifact 也是合理的(被聚合)。
-            source: widgetDraft?.source ?? { inputKind: 'upstream', inputIndex: 0 },
-            mapping: widgetDraft?.mapping,
-          }
-    setWidgetDraft(next)
-    setWidgetSaving(true)
-    proposePlannerGraphChange(canvasId, {
-      summary: next
-        ? `Set widget to ${next.kind} on ${node.title}`
-        : `Clear widget on ${node.title}`,
-      changes: [{ kind: 'updateNode', nodeId: node.id, widget: next }],
-    })
-      .then((proposal) => {
-        setWidgetSaving(false)
-        if (!proposal) {
-          setWidgetError('服务端没返回提议')
-          return
-        }
-        onProposalCreated?.(proposal)
-      })
-      .catch((err) => {
-        setWidgetSaving(false)
-        setWidgetError((err as Error).message || '保存失败')
       })
   }
 
@@ -821,7 +766,7 @@ export function InspectorArtifactBody({
       <div className="planner-node-modal__section planner-node-modal__artifact-body">
         <h3>
           <Eye size={13} aria-hidden /> 预览
-          {canEditPayload && (
+          {canEditPayload && !previewingHistory && (
             <button
               type="button"
               className="planner-node-modal__artifact-edit-toggle"
@@ -832,11 +777,31 @@ export function InspectorArtifactBody({
             </button>
           )}
         </h3>
-        {activeArtifact && (
+        {/* 版本回放横幅 — 预览正显示历史 snapshot,提醒 + 一键回到最新。 */}
+        {previewingHistory && (
+          <div className="planner-node-modal__version-replay-banner">
+            <span>
+              正在回放历史版本{selectedVersionNumber != null ? ` v${selectedVersionNumber}` : ''} 的快照
+            </span>
+            <button type="button" onClick={() => setSelectedVersionId(null)}>
+              回到最新
+            </button>
+          </div>
+        )}
+        {/* 选了版本但没有内联快照(payload 只剩 blob 引用)— 回放不出来,如实说。 */}
+        {selectedVersion && !selectedVersionHasInline && (
+          <div className="planner-node-modal__version-replay-banner is-missing">
+            <span>这一版没有内联快照,无法回放 — 下面显示的仍是最新内容</span>
+            <button type="button" onClick={() => setSelectedVersionId(null)}>
+              知道了
+            </button>
+          </div>
+        )}
+        {previewArtifact && (
           <PayloadBodySwitch
-            artifact={activeArtifact}
-            content={activeArtifactContent}
-            editMode={editMode && canEditPayload}
+            artifact={previewArtifact}
+            content={previewingHistory ? undefined : activeArtifactContent}
+            editMode={editMode && canEditPayload && !previewingHistory}
           />
         )}
         {/* authored 模式编辑器:不论是否已有产物,都保留(2026-05-29 fix Q3)。
@@ -898,6 +863,8 @@ export function InspectorArtifactBody({
             fallbackArtifacts={nodeArtifacts}
             sessionId={node.sessionId ?? null}
             nodeId={node.id}
+            selectedVersionId={selectedVersionId}
+            onSelectVersion={setSelectedVersionId}
             onOpenSession={onOpenSession}
             onClose={onClose}
           />
@@ -913,64 +880,6 @@ export function InspectorArtifactBody({
           <SourceLineagePanel upstreamNodeIds={upstreamNodeIds} />
         </div>
       )}
-
-      {/* 卡片样式 — widget chip popover(收窄 allowed chips) */}
-      <div className="planner-node-modal__group-label" ref={widgetPopoverRef}>
-        <span>卡片样式</span>
-        <small>artifact 节点的画板呈现</small>
-        <span className="planner-node-modal__widget-summary">
-          {describeArtifactWidget(widgetDraft)}
-        </span>
-        <button
-          type="button"
-          className={`planner-node-modal__widget-toggle${widgetPopoverOpen ? ' is-open' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            setWidgetPopoverOpen((open) => !open)
-          }}
-          aria-expanded={widgetPopoverOpen}
-          aria-label="调整卡片样式"
-          title="调整卡片样式"
-        >
-          <Settings2 size={12} aria-hidden />
-        </button>
-        {widgetPopoverOpen && (
-          <div className="planner-node-modal__widget-popover" role="dialog" aria-label="卡片样式">
-            <div className="planner-node-modal__widget-popover-header">
-              <Eye size={12} aria-hidden /> 样式
-              {widgetSaving && <em className="planner-node-modal__view-saving">保存中…</em>}
-              {widgetError && (
-                <em className="planner-node-modal__view-error" title={widgetError}>
-                  !
-                </em>
-              )}
-            </div>
-            <div className="planner-node-modal__widget-kind-chips">
-              {ARTIFACT_WIDGET_OPTIONS.map((option) => {
-                const selected =
-                  option.kind === 'standard'
-                    ? widgetDraft == null
-                    : widgetDraft?.kind === option.kind
-                return (
-                  <button
-                    key={option.kind}
-                    type="button"
-                    className={`planner-node-modal__widget-kind-chip${selected ? ' is-selected' : ''}`}
-                    disabled={widgetSaving}
-                    onClick={() => handlePickWidgetKind(option.kind)}
-                    title={option.tooltip}
-                  >
-                    {option.label}
-                  </button>
-                )
-              })}
-            </div>
-            <div className="planner-node-modal__view-hint">
-              {describeArtifactWidget(widgetDraft)}
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* 操作 (ArtifactActionsBar) */}
       <div className="planner-node-modal__section">
@@ -1108,14 +1017,35 @@ function bindingUrl(entity: { payload: unknown }): string | null {
   return typeof url === 'string' && url.trim() ? url : null
 }
 
+// snapshot 成因 — 这一版是怎么来的。判定优先级:
+//   1. metadata.source === 'updateArtifact' → 直接写入(update_artifact MCP /
+//      同步快照按钮派发的同步会话都走这条路)
+//   2. metadata 带 title/kind/status(submit 路径随提交写的展示元数据)→ 节点提交
+//   3. 兜底按提交方:integration → 外部同步;human → 人工提交;其余 → 节点提交
+function versionCauseLabel(
+  meta: Record<string, unknown> | null,
+  submittedByKind: string,
+): string {
+  const source = typeof meta?.source === 'string' ? meta.source : null
+  if (source === 'updateArtifact') return '直接更新(update_artifact / 同步)'
+  if (source) return source
+  if (meta && ('title' in meta || 'kind' in meta || 'status' in meta)) return '节点提交'
+  if (submittedByKind === 'integration') return '外部同步'
+  if (submittedByKind === 'human') return '人工提交'
+  return '节点提交'
+}
+
 // 版本链列表 — 真实 version 行(submit / update_artifact 各追加一条)。
 // 链还没回来(null)显示加载;空链回退显示 latest-per-slot head(老画布的
 // attach 不写 version 行,head 至少证明产物存在)。
+// 每行可点 — 点了把「预览」切到那一版的 snapshot,再点一次取消回放。
 function VersionChainList({
   versions,
   fallbackArtifacts,
   sessionId,
   nodeId,
+  selectedVersionId,
+  onSelectVersion,
   onOpenSession,
   onClose,
 }: {
@@ -1123,6 +1053,8 @@ function VersionChainList({
   fallbackArtifacts: PlannerArtifact[]
   sessionId: string | null
   nodeId: string
+  selectedVersionId: string | null
+  onSelectVersion: (versionId: string | null) => void
   onOpenSession?: (sessionId: string, nodeId: string) => void
   onClose: () => void
 }) {
@@ -1172,14 +1104,30 @@ function VersionChainList({
         const meta = version.metadata && typeof version.metadata === 'object' && !Array.isArray(version.metadata)
           ? version.metadata as Record<string, unknown>
           : null
-        const source = typeof meta?.source === 'string' ? meta.source : null
+        const isSelected = version.version_id === selectedVersionId
+        const hasInline = version.payload_inline != null
         return (
-          <li key={version.version_id} title={version.version_id}>
-            <Archive size={11} aria-hidden />
-            <em>v{versions.length - idx}</em>
-            <strong>{submitterLabel[version.submitted_by_kind] ?? version.submitted_by_kind}</strong>
-            {source && <span className="planner-artifact-binding__facts">{source}</span>}
-            <span>{formatDateShort(version.created_at)}</span>
+          <li key={version.version_id}>
+            <button
+              type="button"
+              className={`planner-node-modal__version-row${isSelected ? ' is-active' : ''}`}
+              onClick={() => onSelectVersion(isSelected ? null : version.version_id)}
+              title={
+                isSelected
+                  ? '取消回放,回到最新'
+                  : hasInline
+                    ? '把预览切到这一版的快照'
+                    : '这一版没有内联快照,无法回放预览'
+              }
+            >
+              <Archive size={11} aria-hidden />
+              <em>v{versions.length - idx}</em>
+              <strong>{submitterLabel[version.submitted_by_kind] ?? version.submitted_by_kind}</strong>
+              <span className="planner-artifact-binding__facts">
+                {versionCauseLabel(meta, version.submitted_by_kind)}
+              </span>
+              <span>{formatDateShort(version.created_at)}</span>
+            </button>
           </li>
         )
       })}
@@ -1507,19 +1455,6 @@ function describeDataSourceMode(mode: ArtifactDataSourceMode): string {
   }
 }
 
-function describeArtifactWidget(widget: Widget | null): string {
-  if (!widget) return '标准 · 显示节点本身(标题 / 状态)'
-  switch (widget.kind) {
-    case 'artifact-preview':
-      return '产物预览 · 内嵌渲染产物正文'
-    case 'kanban':
-      return '看板 · 按列分组展示'
-    case 'inbox':
-      return '收件箱 · 按活动倒序'
-    default:
-      return widget.kind
-  }
-}
 
 function positionTagLabel(tag: string): string {
   switch (tag) {
