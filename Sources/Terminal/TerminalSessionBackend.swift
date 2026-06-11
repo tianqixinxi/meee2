@@ -13,6 +13,11 @@ public struct TerminalSessionRequest: Equatable {
     public let canvasId: String?
     public let nodeId: String?
     public let initialPrompt: String?
+    /// initialPrompt 就绪门控的硬上限(秒)。nil = 后端默认(20s,适合 fresh
+    /// session 的快速启动)。大会话 `--resume` 的 TUI 加载可能远超 20s —
+    /// 上限到点的「盲打」会把 prompt 敲进还没渲染好的界面而丢失;这类调用方
+    /// 应给更长的耐心(settle 检测在加载安静后自然触发,上限只是最后兜底)。
+    public let initialPromptSettleCeiling: TimeInterval?
     public let preferredSessionId: String?
     public let cols: UInt16
     public let rows: UInt16
@@ -24,6 +29,7 @@ public struct TerminalSessionRequest: Equatable {
         canvasId: String?,
         nodeId: String?,
         initialPrompt: String?,
+        initialPromptSettleCeiling: TimeInterval? = nil,
         preferredSessionId: String? = nil,
         cols: UInt16 = 120,
         rows: UInt16 = 30
@@ -34,6 +40,7 @@ public struct TerminalSessionRequest: Equatable {
         self.canvasId = canvasId
         self.nodeId = nodeId
         self.initialPrompt = initialPrompt
+        self.initialPromptSettleCeiling = initialPromptSettleCeiling
         self.preferredSessionId = preferredSessionId
         self.cols = cols
         self.rows = rows

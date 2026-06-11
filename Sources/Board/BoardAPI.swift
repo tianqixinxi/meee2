@@ -503,7 +503,10 @@ enum BoardAPI {
         // 显式置 true:resume 同样是新建 pane,就绪门控投递(trust 弹窗 /
         // TUI ready 检测)照常生效 — 这是 idle 内部会话唯一可靠的即时投递,
         // inbox 注入要等下一轮 Stop hook,纯 resume 闲置等输入永远等不到。
-        allowPromptOnResume: Bool = false
+        allowPromptOnResume: Bool = false,
+        // 就绪门控硬上限:大会话 resume 的 TUI 加载可超 20s 默认值,盲打会
+        // 丢 prompt — resume 投递场景应给 90s 耐心(settle 优先,上限兜底)。
+        promptSettleCeiling: TimeInterval? = nil
     ) throws -> TerminalSessionSnapshot {
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
@@ -527,6 +530,7 @@ enum BoardAPI {
                 canvasId: canvasId,
                 nodeId: nodeId,
                 initialPrompt: resumeSessionId == nil || allowPromptOnResume ? initialPrompt : nil,
+                initialPromptSettleCeiling: promptSettleCeiling,
                 preferredSessionId: reusablePreferredSessionId
             )
         )
@@ -2158,7 +2162,8 @@ enum BoardAPI {
             // 无覆盖时保持原行为:recreate 用 dispatch prompt,resume 不打扰。
             initialPrompt: promptOverride ?? (canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)),
             preferredSessionId: preferredSessionId,
-            allowPromptOnResume: promptOverride != nil
+            allowPromptOnResume: promptOverride != nil,
+            promptSettleCeiling: promptOverride != nil ? 90 : nil
         )
         if canResume {
             _ = PlannerSessionRunStateBridge.observeBound(

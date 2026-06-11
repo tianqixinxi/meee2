@@ -90,6 +90,7 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
             canvasId: request.canvasId,
             nodeId: request.nodeId,
             initialPrompt: request.initialPrompt,
+            initialPromptSettleCeiling: request.initialPromptSettleCeiling,
             onExit: { [weak self] surfaceId in
                 self?.markExited(surfaceId: surfaceId)
             },
@@ -222,6 +223,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private let terminalView: TerminalView
     private let terminalController: GhosttyTerminal.TerminalController
     private let initialPrompt: String?
+    private let initialPromptSettleCeiling: TimeInterval?
     private let onExit: @MainActor (String) -> Void
     private let onStatusChange: @MainActor (String, String) -> Void
     private let createdAt = Date()
@@ -263,6 +265,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         canvasId: String?,
         nodeId: String?,
         initialPrompt: String?,
+        initialPromptSettleCeiling: TimeInterval? = nil,
         onExit: @escaping @MainActor (String) -> Void,
         onStatusChange: @escaping @MainActor (String, String) -> Void
     ) throws {
@@ -275,6 +278,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         self.canvasId = canvasId
         self.nodeId = nodeId
         self.initialPrompt = Self.normalizedPromptForPaste(initialPrompt)
+        self.initialPromptSettleCeiling = initialPromptSettleCeiling
         self.onExit = onExit
         self.onStatusChange = onStatusChange
         self.terminalController = Self.makeTerminalController()
@@ -434,7 +438,10 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         // the TUI as "ready". Hard ceiling delivers anyway even if no signal ever
         // arrives.
         let settleWindow: TimeInterval = 0.8
-        let ceiling: TimeInterval = 20.0
+        // 默认 20s 兜底适合 fresh session;大会话 --resume 的加载远超 20s,
+        // 调用方(artifact sync 等)可放宽 — settle 在加载安静后自然触发,
+        // 上限只防"永远没有活动信号"的极端情况。
+        let ceiling: TimeInterval = initialPromptSettleCeiling ?? 20.0
         let firstProbe: DispatchTimeInterval = .milliseconds(700)
 
         func probe() {
