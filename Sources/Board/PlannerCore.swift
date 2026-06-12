@@ -2865,6 +2865,13 @@ enum PlannerPermissionAction: String {
 }
 
 enum PlannerPermission {
+    /// 本地 planner RBAC 的行动者身份。
+    ///
+    /// 故意 **不看** `authExpired`：nil 在下游（`access(for:)` 等）的语义是
+    /// 「纯本地模式 → owner 全权」，token 过期时返回 nil 会把 team 成员在
+    /// 本地镜像画布上提权成 owner。过期窗口内保留最后已知身份反而是权限
+    /// 最小的选择 —— 人没换，重新登录拿回的还是同一个 userId；身份只在
+    /// 显式断开（disconnect 清空 settings.json）时清除。
     static func currentActorId() -> String? {
         let defaults = UserDefaults.standard
         let onlineSettings = OnlineProxy.loadSettings()
