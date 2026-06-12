@@ -106,6 +106,8 @@ export function artifactToIntegrationEntity(
       // payload,view-schema 的 preview detail 行按 label 取值。标准字段在后,
       // 不会被 fields 覆盖。
       ...(typed?.fields ?? {}),
+      // 表格类对象的真实行值快照(normalize 已提升+封顶),sheet 预览画表体用。
+      ...(typed?.values ? { values: typed.values } : {}),
       id: artifact.id,
       title: artifact.title || typed?.summary || schemaId,
       status,
