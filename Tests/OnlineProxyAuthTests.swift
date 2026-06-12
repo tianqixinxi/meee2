@@ -15,10 +15,14 @@ final class OnlineProxyAuthTests: XCTestCase {
     private var tempDir: URL!
     private var settingsFile: URL!
     private var testDefaults: UserDefaults!
-    private let suiteName = "OnlineProxyAuthTests"
+    // suite 名必须每个用例唯一：UserDefaults suite 是跨进程持久域,CI 的
+    // --parallel 多进程并发跑本类时,固定名会被别的用例 setUp 里的
+    // removePersistentDomain 中途擦掉
+    private var suiteName: String!
 
     override func setUp() {
         super.setUp()
+        suiteName = "OnlineProxyAuthTests-\(UUID().uuidString)"
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("online-proxy-auth-tests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
