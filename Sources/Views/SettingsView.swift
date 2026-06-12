@@ -567,7 +567,12 @@ public struct SettingsView: View {
 
     private func updateMeee2OnlineSyncActivation() {
         writeMeee2OnlineSettings()
-        Meee2OnlinePusher.shared.refreshActivation()
+        // 文件重写排在串行队列上异步落盘；activation 刷新必须跟在同一队列
+        // 之后 —— pusher 的强制快照读 settings.json（文件优先），先刷会读到
+        // 上一个账号/团队的残留（连接码重连、切团队场景）
+        OnlineProxy.settingsFileWriteQueue.async {
+            Meee2OnlinePusher.shared.refreshActivation()
+        }
     }
 
     private func normalizedMeee2OnlineSupabaseUrl(_ value: String) -> String {
