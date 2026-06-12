@@ -542,6 +542,34 @@ async function handleAttachArtifactToNode(args) {
   )
 }
 
+// propose_add_node 的会话 scope:比 assertPlannerToolScope 更严。后者对未绑定
+// session 的节点放行(执行类工具的兜底语义),但提案带 provenance 归属
+// (originNodeId/originSessionId),放行未绑定节点等于允许会话冒用任意空节点
+// 当 origin(codex review P2)。有会话上下文时,发起节点必须绑定到当前会话;
+// 没有会话上下文(operator / 人工)放行,由服务端按节点权限兜底。
+async function assertProposeAddNodeScope(canvasId, nodeId) {
+  const candidates = envSessionCandidates()
+  if (candidates.length === 0) return
+  const graph = await callApi(
+    'GET',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`,
+  )
+  const node = (graph.nodes || []).find((n) => n.id === nodeId)
+  if (!node) throw new Error(`planner node not found: ${nodeId}`)
+  const boundSessionId = node.sessionId
+  if (!boundSessionId) {
+    throw new Error(
+      'propose_add_node requires the origin node to be bound to the current session — bind or dispatch it first',
+    )
+  }
+  const allowed = candidates.some((candidate) =>
+    boundSessionId === candidate || boundSessionId.endsWith(candidate) || candidate.endsWith(boundSessionId),
+  )
+  if (!allowed) {
+    throw new Error('propose_add_node can only propose from the node bound to the current session')
+  }
+}
+
 // proposal 子功能:节点会话从自己的节点发起 addNode 提案。产物是 pending
 // proposal,owner 在 UI approve+apply 后才落图 —— 本工具不直接改图。校验 /
 // 权限错误由 callApi 原样抛回,MCP 透传给 agent 自纠。来源会话经 env 解析
@@ -550,7 +578,7 @@ async function handleProposeAddNode(args) {
   const { canvasId, nodeId } = args
   if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
   if (!args.title || !String(args.title).trim()) throw new Error('title is required')
-  await assertPlannerToolScope(canvasId, nodeId)
+  await assertProposeAddNodeScope(canvasId, nodeId)
   let sessionId = null
   try {
     const state = await callApi('GET', '/api/state')
