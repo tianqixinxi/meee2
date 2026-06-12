@@ -3800,6 +3800,50 @@ enum BoardAPI {
         }
     }
 
+    /// proposal 子功能 · propose_add_node:节点工作会话经 MCP 提议新增 step。
+    /// 产物是 pending 提案(走既有 approve/apply/reject 管线),不直接落图。
+    /// 校验/权限错误原样回给调用方 —— MCP 把错误体透传给 agent 自纠。
+    static func proposePlannerAddNode(_ req: HttpRequest) -> HttpResponse {
+        struct ProposeAddNodeRequest: Decodable {
+            let title: String?
+            let goal: String?
+            let summary: String?
+            let dependsOnNodeIds: [String]?
+            let sessionId: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: ProposeAddNodeRequest.self)
+        guard let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return errorResponse(
+                "invalid_proposal",
+                "propose_add_node requires a non-empty `title` for the new step; optional: `goal`, `summary`, `dependsOnNodeIds` (defaults to the proposing node)",
+                status: 400
+            )
+        }
+        do {
+            let proposal = try PlannerBoardBridge.proposeAddNode(
+                originNodeId: nodeId,
+                originSessionId: body?.sessionId,
+                title: title,
+                goal: body?.goal,
+                summary: body?.summary,
+                dependsOnNodeIds: body?.dependsOnNodeIds,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func openKanbanItemSubCanvas(_ req: HttpRequest) -> HttpResponse {
         struct OpenKanbanItemRequest: Decodable {
             let title: String?

@@ -625,6 +625,9 @@ public final class BoardServer {
         server.DELETE["/api/planner/canvases/:id/nodes/:nodeId"] = BoardServer.cors(BoardAPI.deletePlannerNode)
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)
+        // proposal 子功能 · propose_add_node:节点会话提议新增 step(产物 pending,
+        // 走既有 approve/apply/reject 管线;MCP propose_add_node 调这里)。
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/propose-add-node"] = BoardServer.cors(BoardAPI.proposePlannerAddNode)
         server.POST["/api/planner/canvases/:id/scene/actions"] = BoardServer.cors(BoardAPI.runCanvasSceneAction)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
         server.GET["/api/planner/canvases/:id/artifacts/:artifactId/content"] = BoardServer.cors(BoardAPI.getPlannerArtifactContent)
