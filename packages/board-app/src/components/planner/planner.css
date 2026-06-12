@@ -5696,6 +5696,11 @@
   font-size: 12px;
 }
 
+/* propose_add_node · 来源归属行:节点会话发起的提案在审批模态标出来源 */
+.planner-proposal-modal__header p.planner-proposal-modal__origin {
+  color: var(--accent-hover);
+}
+
 .planner-proposal-modal__body {
   min-height: 0;
   display: grid;

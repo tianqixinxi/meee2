@@ -1437,6 +1437,10 @@ export interface PlanProposal {
   summary: string
   changes: PlanChange[]
   status: PlanProposalStatus
+  /** propose_add_node · 提案来源归属:节点工作会话经 MCP 发起时携带,
+   *  缺省 ⇒ owner / planner-agent 渠道。UI 据此显示「来自节点 X 的提议」。 */
+  originNodeId?: string
+  originSessionId?: string
 }
 
 export type NodeRunState = 'draft' | 'ready' | 'working' | 'blocked' | 'done'
