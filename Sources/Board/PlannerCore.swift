@@ -1935,6 +1935,11 @@ struct PlanProposal: Codable, Equatable {
     /// initialization (`PlanProposal(id:canvasId:summary:changes:status:)`)
     /// still type-checks.
     var warnings: [String]?
+    /// propose_add_node · 提案来源归属:发起方是哪个节点的工作会话。nil ⇒ owner /
+    /// planner-agent 渠道(既有提案)。权限按发起节点的 requireNodeUpdate 门控
+    /// (doer 只能从自己的节点发起),UI 据此显示「来自节点 X 的提议」。
+    var originNodeId: String?
+    var originSessionId: String?
 }
 
 enum NodeRunState: String, Codable, Equatable {
@@ -8583,6 +8588,75 @@ enum PlannerBoardBridge {
             changes: changes,
             status: .pending
         )
+        return try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+    }
+
+    /// proposal 子功能 · propose_add_node:运行节点的工作会话提议新增一个 step。
+    ///
+    /// 与 `graphChangeProposal`(owner-only `.createProposal`)不同,这里按
+    /// **发起节点** 做 `requireNodeUpdate` 门控 —— doer 可从自己的节点发起
+    /// (职责≡权限),但产物仍是 pending 提案,必须 owner approve+apply 才落图。
+    /// 校验失败往上抛,MCP 层原样透传给 agent 自纠
+    /// (meee2-ai-is-claude-harness-self-correct)。
+    ///
+    /// 新节点默认 `dependsOnNodeIds = [originNodeId]`(画布上呈现 主→子 边,
+    /// 调用方可显式传 `[]` 表示无依赖),执行皮肤(executionMode / executorType /
+    /// doer)继承发起节点 —— triage 类主节点孵化出的子 step 默认同一执行形态。
+    static func proposeAddNode(
+        originNodeId: String,
+        originSessionId: String?,
+        title: String,
+        goal: String?,
+        summary: String?,
+        dependsOnNodeIds: [String]?,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let origin = state.nodes.first(where: { $0.id == originNodeId }) else {
+            throw PlannerCoreError.nodeNotFound(originNodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: origin, access: state.access)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            throw PlannerCoreError.invalidNodeOutput("propose_add_node requires a non-empty title for the new step")
+        }
+        let trimmedGoal = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposalUUID = UUID().uuidString.lowercased()
+        let node = PlanningNode(
+            id: "\(canvasId)-node-\(proposalUUID)",
+            canvasId: canvasId,
+            title: trimmedTitle,
+            schema: NodeSchema(
+                inputs: [origin.title],
+                outputs: ["\(trimmedTitle) output"],
+                goal: (trimmedGoal?.isEmpty == false ? trimmedGoal! : trimmedTitle)
+            ),
+            contextSources: [],
+            executionMode: origin.executionMode,
+            executorType: origin.executorType,
+            doerId: origin.doerId,
+            status: .ready,
+            source: .session,
+            dependsOnNodeIds: dependsOnNodeIds ?? [originNodeId],
+            nodeKind: .step
+        )
+        let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var proposal = PlanProposal(
+            id: "proposal-\(canvasId)-node-\(proposalUUID)",
+            canvasId: canvasId,
+            summary: (trimmedSummary?.isEmpty == false ? trimmedSummary! : "Add step \"\(trimmedTitle)\" (proposed from node \(origin.title))"),
+            changes: [.addNode(node)],
+            status: .pending
+        )
+        proposal.originNodeId = originNodeId
+        proposal.originSessionId = originSessionId
         return try proposal.saved(
             in: store,
             canvas: state.canvas,

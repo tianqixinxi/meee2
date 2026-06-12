@@ -21,6 +21,8 @@ interface Props {
   canvasName: string
   canvasTask?: string
   proposal: PlanProposal | null
+  /** propose_add_node · 来源归属:节点工作会话发起的提案显示来源节点标题。 */
+  proposalOriginTitle?: string | null
   variant?: 'board' | 'template'
   previewGraph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
   busy: boolean
@@ -110,6 +112,7 @@ export function PlannerProposalPanel({
   canvasName,
   canvasTask = '',
   proposal,
+  proposalOriginTitle = null,
   variant = 'board',
   previewGraph,
   busy,
@@ -591,6 +594,9 @@ export function PlannerProposalPanel({
               <div className="planner-dialog__message-meta">
                 <span>{proposal.status}</span>
                 <span>{proposal.changes.length} changes</span>
+                {proposalOriginTitle && (
+                  <span>{t('planner.proposedFromNode', { node: proposalOriginTitle })}</span>
+                )}
               </div>
               <MarkdownMessage markdown={proposalChatMarkdown(proposal)} collapsible />
               <div className="planner-dialog__actions planner-dialog__actions--single">
@@ -697,6 +703,11 @@ export function PlannerProposalPanel({
             <div className="planner-proposal-modal__header">
               <span>{proposal.status}</span>
               <h2>{proposal.summary}</h2>
+              {proposalOriginTitle && (
+                <p className="planner-proposal-modal__origin">
+                  {t('planner.proposedFromNode', { node: proposalOriginTitle })}
+                </p>
+              )}
               <p>{t('planner.previewOnly')}. {t('planner.previewOnlyDetail')}</p>
             </div>
             <div className="planner-proposal-modal__body">

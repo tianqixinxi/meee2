@@ -1447,6 +1447,13 @@ function PlannerGraphInner({
     teamDirectory,
   ])
   const activeProposal = proposal && (proposal.status === 'pending' || proposal.status === 'approved') ? proposal : null
+  // propose_add_node · 来源归属:节点工作会话发起的提案,面板与审批模态显示
+  // 「来自节点 X 的提议」。节点已被删时回落显示原始 id。
+  const proposalOriginTitle = useMemo(() => {
+    const originId = proposal?.originNodeId
+    if (!originId) return null
+    return plannerState?.nodes.find((node) => node.id === originId)?.title ?? originId
+  }, [plannerState, proposal])
   const emptyCanvasMode = Boolean(
     plannerState
     && plannerState.canvas.id === canvasId
@@ -2220,6 +2227,7 @@ function PlannerGraphInner({
             canvasName={plannerState?.canvas.title ?? canvasName}
             canvasTask={plannerState?.canvas.plannerContext ?? ''}
             proposal={proposal}
+            proposalOriginTitle={proposalOriginTitle}
             variant={variant}
             previewGraph={reviewGraph}
             busy={busy}
@@ -2259,6 +2267,7 @@ function PlannerGraphInner({
               canvasName={plannerState?.canvas.title ?? canvasName}
               canvasTask={plannerState?.canvas.plannerContext ?? ''}
               proposal={proposal}
+              proposalOriginTitle={proposalOriginTitle}
               variant={variant}
               previewGraph={reviewGraph}
               busy={busy}
