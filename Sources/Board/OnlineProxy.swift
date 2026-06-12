@@ -258,14 +258,22 @@ enum OnlineProxy {
     static func refreshAccessToken(stale: Settings) -> Settings? {
         refreshLock.lock()
         defer { refreshLock.unlock() }
-        return withCrossProcessRefreshLock {
+        return withCredentialFileLock {
             refreshHoldingLocks(stale: stale)
         }
     }
 
-    /// 围绕共享凭证文件的跨进程互斥。锁文件建不出来 / flock 失败时退化为
-    /// 仅进程内互斥（比拒绝刷新好——单进程场景本就不需要文件锁）。
-    private static func withCrossProcessRefreshLock<T>(_ body: () -> T) -> T {
+    /// settings.json 的「凭证锁」：进程内 NSLock + 跨进程 flock。
+    ///
+    /// **所有** settings.json 的写入（refresh 轮换、登录回调、SettingsView /
+    /// BoardAPI 整文件重写、断开清理）都必须在这把锁内完成读-改-写 ——
+    /// 任何不持锁的 read-then-write 都可能把并发刷新刚轮换的凭证冲回
+    /// 已吊销的旧 token family。锁内禁止再嵌套本函数（flock 不可重入）；
+    /// refresh 内部用 *Locked 变体。锁文件建不出来 / flock 失败时退化为
+    /// 仅进程内互斥（比拒绝写入好——单进程场景本就不需要文件锁）。
+    static func withCredentialFileLock<T>(_ body: () -> T) -> T {
+        fileMutationLock.lock()
+        defer { fileMutationLock.unlock() }
         let lockURL = settingsFileURL().appendingPathExtension("lock")
         try? FileManager.default.createDirectory(
             at: lockURL.deletingLastPathComponent(),
@@ -277,6 +285,33 @@ enum OnlineProxy {
         guard flock(fd, LOCK_EX) == 0 else { return body() }
         defer { flock(fd, LOCK_UN) }
         return body()
+    }
+
+    private static let fileMutationLock = NSLock()
+
+    /// 主线程发起的 settings.json 重写走这条串行队列：刷新在飞时凭证锁
+    /// 可能被持有 30s+，主线程不能同步等；串行保证多次重写按提交顺序落盘。
+    static let settingsFileWriteQueue = DispatchQueue(label: "meee2.online.settings-write", qos: .utility)
+
+    /// 在凭证锁内整文件重写 settings.json：token / authExpired 以锁内重读的
+    /// 文件现值为准（通过参数交给 compose 拼装），杜绝旧凭证回写。
+    static func rewriteSettingsFile(
+        compose: ((accessToken: String, refreshToken: String, authExpired: Bool)) -> [String: Any]
+    ) {
+        withCredentialFileLock {
+            let meee2 = compose(persistedCredentialState())
+            let root: [String: Any] = ["meee2": meee2]
+            guard JSONSerialization.isValidJSONObject(root),
+                  let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else {
+                return
+            }
+            let file = settingsFileURL()
+            try? FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     private static func refreshHoldingLocks(stale: Settings) -> Settings? {
@@ -300,8 +335,10 @@ enum OnlineProxy {
         if persisted.authExpired, envRefreshToken.isEmpty {
             return nil
         }
-        let refreshToken = !persisted.refreshToken.isEmpty ? persisted.refreshToken
-            : (!envRefreshToken.isEmpty ? envRefreshToken : stale.refreshToken)
+        // 只认文件 / env 里现存的 token：caller 缓存的 stale.refreshToken 不作
+        // 兜底——文件已被并发清空（断开）时，拿缓存 token 刷新会把凭证复活
+        // 写回已断开的文件
+        let refreshToken = !persisted.refreshToken.isEmpty ? persisted.refreshToken : envRefreshToken
         if refreshToken.isEmpty {
             return nil
         }
@@ -339,7 +376,7 @@ enum OnlineProxy {
                 return superseded
             }
             let rotatedRefreshToken = (object["refresh_token"] as? String) ?? refreshToken
-            persistTokens(accessToken: accessToken, refreshToken: rotatedRefreshToken)
+            persistTokensLocked(accessToken: accessToken, refreshToken: rotatedRefreshToken)
             lastRefreshFailureAt = nil
             MInfo("[OnlineProxy] refresh ok — rotated token persisted to settings.json")
             return withTokens(stale, accessToken: accessToken, refreshToken: rotatedRefreshToken)
@@ -353,7 +390,7 @@ enum OnlineProxy {
             // AUTH_INVALID:refresh token 已被吊销,本地凭证作废。清掉并显式
             // 进入「需要重新登录」态,而不是让 app 顶着旧凭证持续 401。
             MWarn("[OnlineProxy] refresh rejected (\(status)) — credentials revoked, reconnect required")
-            markAuthExpired()
+            markAuthExpiredLocked()
             lastRefreshFailureAt = Date()
             return nil
         case .failure(let error):
@@ -395,7 +432,15 @@ enum OnlineProxy {
 
     /// 登录成功（浏览器回调之外的路径，如连接码验证）或刷新成功后落盘新凭证。
     /// settings.json 为唯一真相；同时清掉历史版本写进当前偏好域的 token 缓存。
+    /// 持凭证锁串行 —— 登录写与在飞刷新互斥，谁后落盘谁是真相。
     static func persistTokens(accessToken: String, refreshToken: String) {
+        withCredentialFileLock {
+            persistTokensLocked(accessToken: accessToken, refreshToken: refreshToken)
+        }
+    }
+
+    /// 仅限已持有凭证锁的调用方（refresh 临界区）。
+    private static func persistTokensLocked(accessToken: String, refreshToken: String) {
         let file = settingsFileURL()
         var root: [String: Any] = [:]
         if let data = try? Data(contentsOf: file),
@@ -426,6 +471,13 @@ enum OnlineProxy {
     /// token 并打上 authExpired。所有形态的二进制读同一份文件，下一次调用
     /// 都会短路到重新登录态，不再拿旧凭证去撞 reuse-detection。
     static func markAuthExpired() {
+        withCredentialFileLock {
+            markAuthExpiredLocked()
+        }
+    }
+
+    /// 仅限已持有凭证锁的调用方（refresh 临界区）。
+    private static func markAuthExpiredLocked() {
         let file = settingsFileURL()
         if let data = try? Data(contentsOf: file),
            var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

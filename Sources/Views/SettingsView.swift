@@ -459,9 +459,12 @@ public struct SettingsView: View {
         UserDefaults.standard.removeObject(forKey: "meee2EnabledSessionIds")
         UserDefaults.standard.removeObject(forKey: "meee2DisabledSessionIds")
         // settings.json 是凭证唯一真相,断开必须把文件里的 token 一并清掉,
-        // 否则其它二进制形态(读同一份文件)会继续带旧凭证调用
-        BoardAPI.clearMeee2OnlineSettings()
-        Meee2OnlinePusher.shared.refreshActivation()
+        // 否则其它二进制形态(读同一份文件)会继续带旧凭证调用。文件清理
+        // 要等凭证锁(在飞刷新可能持有 30s+),排到后台,不卡断开按钮。
+        OnlineProxy.settingsFileWriteQueue.async {
+            BoardAPI.clearMeee2OnlineSettings()
+            Meee2OnlinePusher.shared.refreshActivation()
+        }
     }
 
     private var meee2DashboardUrl: URL? {
@@ -521,52 +524,44 @@ public struct SettingsView: View {
     private func writeMeee2OnlineSettings() {
         guard meee2Connected else { return }
         let normalizedSupabaseUrl = normalizedMeee2OnlineSupabaseUrl(meee2SupabaseUrl)
-        // token / authExpired 从 settings.json 读回保留：本视图没有 token 的
-        // 内存副本（凭证唯一真相是文件），整文件重写不能把它们冲掉
-        let credentials = OnlineProxy.persistedCredentialState()
-
-        let settings: [String: Any] = [
-                "meee2": [
-                "enabled": meee2Connected,
-                "online": meee2Connected,
-                "supabaseUrl": normalizedSupabaseUrl,
-                "supabaseKey": meee2SupabaseKey,
-                "onlineBaseUrl": meee2OnlineBaseUrl,
-                "accessToken": credentials.accessToken,
-                "refreshToken": credentials.refreshToken,
-                "authExpired": credentials.authExpired,
-                "teamId": meee2TeamId,
-                "userId": meee2UserId,
-                "userName": meee2UserName,
-                "userEmail": meee2UserEmail,
-                "userAvatarUrl": meee2UserAvatarUrl,
-                "teams": meee2Teams.map { team in
-                    [
-                        "id": team.id,
-                        "name": team.name,
-                        "role": team.role ?? ""
-                    ]
-                },
-                "sessionTeamIds": [:],
-                "defaultSyncEnabled": false,
-                "enabledSessionIds": [],
-                "disabledSessionIds": [],
-                "machineId": Meee2Identity.machineId,
-                "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
-            ]
+        // 主线程只做快照；token / authExpired 必须在凭证锁内重读 settings.json
+        // 合并（本视图没有 token 内存副本）—— 锁可能被在飞刷新持有 30s+，
+        // 所以落盘排到串行队列后台执行，不阻塞 UI 也不会乱序。
+        let base: [String: Any] = [
+            "enabled": meee2Connected,
+            "online": meee2Connected,
+            "supabaseUrl": normalizedSupabaseUrl,
+            "supabaseKey": meee2SupabaseKey,
+            "onlineBaseUrl": meee2OnlineBaseUrl,
+            "teamId": meee2TeamId,
+            "userId": meee2UserId,
+            "userName": meee2UserName,
+            "userEmail": meee2UserEmail,
+            "userAvatarUrl": meee2UserAvatarUrl,
+            "teams": meee2Teams.map { team in
+                [
+                    "id": team.id,
+                    "name": team.name,
+                    "role": team.role ?? ""
+                ]
+            },
+            "sessionTeamIds": [:],
+            "defaultSyncEnabled": false,
+            "enabledSessionIds": [],
+            "disabledSessionIds": [],
+            "machineId": Meee2Identity.machineId,
+            "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
         ]
 
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-
-        // Ensure directory exists
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
-        // Write JSON
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
-            NSLog("[Settings] Wrote meee2 settings to \(file.path)")
+        OnlineProxy.settingsFileWriteQueue.async {
+            OnlineProxy.rewriteSettingsFile { credentials in
+                var meee2 = base
+                meee2["accessToken"] = credentials.accessToken
+                meee2["refreshToken"] = credentials.refreshToken
+                meee2["authExpired"] = credentials.authExpired
+                return meee2
+            }
+            NSLog("[Settings] Wrote meee2 settings")
         }
     }
 

@@ -168,15 +168,18 @@ public struct Meee2OnlineCallbackAPI {
         // 确保目录存在
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // 写入 JSON
+        // 写入 JSON —— 持凭证锁与在飞的 token 刷新串行：登录写是「最新真相」,
+        // 但落盘顺序必须确定(刷新若后落盘,其 superseded guard 会让位于这里)
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            do {
-                try data.write(to: file, options: .atomic)
-                MInfo("[Meee2OnlineCallback] Saved config to \(file.path)")
-                return true
-            } catch {
-                MError("[Meee2OnlineCallback] Failed to write config: \(error)")
-                return false
+            return OnlineProxy.withCredentialFileLock {
+                do {
+                    try data.write(to: file, options: .atomic)
+                    MInfo("[Meee2OnlineCallback] Saved config to \(file.path)")
+                    return true
+                } catch {
+                    MError("[Meee2OnlineCallback] Failed to write config: \(error)")
+                    return false
+                }
             }
         }
         return false

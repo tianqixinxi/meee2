@@ -239,6 +239,85 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertEqual(result?.refreshToken, "rt-2")
     }
 
+    func testWholeFileRewriteCannotClobberInFlightRefresh() {
+        // codex P2：整文件重写（SettingsView / BoardAPI 路径）若不与刷新
+        // 串行，会读到旧凭证、在轮换落盘后整体覆盖 —— 把新 token 冲回
+        // 已吊销的旧 family。rewriteSettingsFile 必须等凭证锁，并以锁内
+        // 重读的文件现值合并 token。
+        writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-1"))
+        let stale = OnlineProxy.loadSettings()
+        let transportStarted = DispatchSemaphore(value: 0)
+        let transportGate = DispatchSemaphore(value: 0)
+        OnlineProxy.refreshTransportOverride = { _ in
+            transportStarted.signal()
+            transportGate.wait()
+            return .success(self.refreshSuccessBody(access: "rotated-a", refresh: "rt-2"))
+        }
+
+        let refreshDone = expectation(description: "refresh")
+        DispatchQueue.global().async {
+            _ = OnlineProxy.refreshAccessToken(stale: stale)
+            refreshDone.fulfill()
+        }
+        XCTAssertEqual(transportStarted.wait(timeout: .now() + 2), .success)
+
+        // 刷新在飞期间发起整文件重写（改 teamName）—— 必须排队等锁
+        let rewriteDone = expectation(description: "rewrite")
+        DispatchQueue.global().async {
+            OnlineProxy.rewriteSettingsFile { credentials in
+                var meee2 = self.baseSettings(accessToken: credentials.accessToken, refreshToken: credentials.refreshToken)
+                meee2["teamName"] = "renamed-team"
+                meee2["authExpired"] = credentials.authExpired
+                return meee2
+            }
+            rewriteDone.fulfill()
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+        transportGate.signal()
+        wait(for: [refreshDone, rewriteDone], timeout: 5)
+
+        // 重写带上的是轮换后的凭证，teamName 修改也保留
+        let meee2 = fileMeee2()
+        XCTAssertEqual(meee2["accessToken"] as? String, "rotated-a")
+        XCTAssertEqual(meee2["refreshToken"] as? String, "rt-2")
+        XCTAssertEqual(meee2["teamName"] as? String, "renamed-team")
+    }
+
+    func testLoginWriteDuringRefreshFlightWins() {
+        // codex P2：重连（登录写）与在飞刷新竞争 —— persistTokens 持同一把
+        // 凭证锁，两种落盘顺序下文件最终都必须是新登录凭证：
+        // 登录先落盘 → 刷新的 superseded guard 让位；刷新先落盘 → 登录后写覆盖。
+        writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-old"))
+        let stale = OnlineProxy.loadSettings()
+        let transportStarted = DispatchSemaphore(value: 0)
+        let transportGate = DispatchSemaphore(value: 0)
+        OnlineProxy.refreshTransportOverride = { _ in
+            transportStarted.signal()
+            transportGate.wait()
+            return .success(self.refreshSuccessBody(access: "rotated-old-family", refresh: "rt-old-2"))
+        }
+
+        let refreshDone = expectation(description: "refresh")
+        DispatchQueue.global().async {
+            _ = OnlineProxy.refreshAccessToken(stale: stale)
+            refreshDone.fulfill()
+        }
+        XCTAssertEqual(transportStarted.wait(timeout: .now() + 2), .success)
+
+        let loginDone = expectation(description: "login persist")
+        DispatchQueue.global().async {
+            OnlineProxy.persistTokens(accessToken: "fresh-login-a", refreshToken: "fresh-login-rt")
+            loginDone.fulfill()
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+        transportGate.signal()
+        wait(for: [refreshDone, loginDone], timeout: 5)
+
+        let meee2 = fileMeee2()
+        XCTAssertEqual(meee2["accessToken"] as? String, "fresh-login-a")
+        XCTAssertEqual(meee2["refreshToken"] as? String, "fresh-login-rt")
+    }
+
     func testRefreshFailureCooldownPreventsRetryStorm() {
         writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-1"))
         let transportCalls = ManagedAtomicCounter()
