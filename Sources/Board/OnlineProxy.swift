@@ -317,6 +317,12 @@ enum OnlineProxy {
                 lastRefreshFailureAt = Date()
                 return nil
             }
+            if let superseded = settingsIfRefreshTokenSuperseded(requestToken: current.refreshToken) {
+                // 等待网络期间用户已重新登录（登录路径不持文件锁），文件里
+                // 已是更新的凭证 —— 丢弃本次刷新结果，以新登录为准
+                MInfo("[OnlineProxy] refresh result discarded — credentials re-issued by a newer login")
+                return superseded
+            }
             let refreshToken = (object["refresh_token"] as? String) ?? current.refreshToken
             persistTokens(accessToken: accessToken, refreshToken: refreshToken)
             lastRefreshFailureAt = nil
@@ -332,6 +338,12 @@ enum OnlineProxy {
                 authExpired: false
             )
         case .failure(.http(let status, _)) where status == 401 || status == 403:
+            if let superseded = settingsIfRefreshTokenSuperseded(requestToken: current.refreshToken) {
+                // 被拒的是发起请求时那枚旧 token；等待期间用户已重新登录，
+                // 文件里的新凭证不能被它连坐清掉
+                MInfo("[OnlineProxy] stale refresh rejected (\(status)) — newer login credentials present, keeping them")
+                return superseded
+            }
             // AUTH_INVALID:refresh token 已被吊销,本地凭证作废。清掉并显式
             // 进入「需要重新登录」态,而不是让 app 顶着旧凭证持续 401。
             MWarn("[OnlineProxy] refresh rejected (\(status)) — credentials revoked, reconnect required")
@@ -344,6 +356,20 @@ enum OnlineProxy {
             lastRefreshFailureAt = Date()
             return nil
         }
+    }
+
+    /// 刷新等待网络期间凭证是否已被「别的来源」换掉（典型：用户重新登录，
+    /// 登录路径不持 refresh 文件锁）。是则返回文件里的新凭证，刷新结果
+    /// （无论成败）都应让位于它 —— 尤其 401 不能把新登录连坐清掉。
+    private static func settingsIfRefreshTokenSuperseded(requestToken: String) -> Settings? {
+        let latest = loadSettings()
+        guard !latest.refreshToken.isEmpty,
+              latest.refreshToken != requestToken,
+              !latest.accessToken.isEmpty,
+              !latest.authExpired else {
+            return nil
+        }
+        return latest
     }
 
     /// 登录成功（浏览器回调之外的路径，如连接码验证）或刷新成功后落盘新凭证。

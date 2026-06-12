@@ -259,6 +259,46 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertEqual(transportCalls.value, 1)
     }
 
+    func testRefresh401DoesNotClobberFreshLoginTokens() {
+        // codex P2：旧 refresh 在飞期间用户完成重新登录（登录路径不持文件
+        // 锁）。401 回来不能把文件里刚登录的新凭证连坐清掉。
+        writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "revoked-rt"))
+        let stale = OnlineProxy.loadSettings()
+        OnlineProxy.refreshTransportOverride = { _ in
+            // 网络等待期间「重新登录」落盘新凭证
+            self.writeSettingsFile(self.baseSettings(accessToken: "fresh-login-a", refreshToken: "fresh-login-rt"))
+            return .failure(.http(status: 401, body: Data(#"{"code":"AUTH_INVALID"}"#.utf8)))
+        }
+
+        let result = OnlineProxy.refreshAccessToken(stale: stale)
+
+        // 刷新失败让位于新登录：复用新凭证、文件不被清、不进过期态
+        XCTAssertEqual(result?.accessToken, "fresh-login-a")
+        let meee2 = fileMeee2()
+        XCTAssertEqual(meee2["accessToken"] as? String, "fresh-login-a")
+        XCTAssertEqual(meee2["refreshToken"] as? String, "fresh-login-rt")
+        XCTAssertNotEqual(meee2["authExpired"] as? Bool, true)
+        XCTAssertFalse(testDefaults.bool(forKey: "meee2AuthExpired"))
+    }
+
+    func testRefreshSuccessYieldsToNewerLoginTokens() {
+        // 同一窗口的成功侧：刷新结果属于旧 token family，等待期间用户已
+        // 重新登录，结果应丢弃、不得覆盖新登录凭证。
+        writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-old"))
+        let stale = OnlineProxy.loadSettings()
+        OnlineProxy.refreshTransportOverride = { _ in
+            self.writeSettingsFile(self.baseSettings(accessToken: "fresh-login-a", refreshToken: "fresh-login-rt"))
+            return .success(self.refreshSuccessBody(access: "rotated-old-family-a", refresh: "rt-old-2"))
+        }
+
+        let result = OnlineProxy.refreshAccessToken(stale: stale)
+
+        XCTAssertEqual(result?.accessToken, "fresh-login-a")
+        let meee2 = fileMeee2()
+        XCTAssertEqual(meee2["accessToken"] as? String, "fresh-login-a")
+        XCTAssertEqual(meee2["refreshToken"] as? String, "fresh-login-rt")
+    }
+
     func testCallOnlineAPIShortCircuitsWhenAuthExpired() {
         var meee2 = baseSettings(accessToken: "", refreshToken: "")
         meee2["authExpired"] = true
