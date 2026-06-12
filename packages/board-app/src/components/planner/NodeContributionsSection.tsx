@@ -1,7 +1,8 @@
-import { Plus, UserRound, Users } from 'lucide-react'
+import { Bot, Plus, Sparkles, UserRound, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   fetchPlannerNodeContributions,
+  startPlannerContributionSession,
   submitPlannerNodeContribution,
   updatePlannerNodeContribution,
 } from '../../api'
@@ -10,10 +11,12 @@ import type { NodeContribution, PlannerGraphState, PlanningNode } from '../../ty
 
 // Teams · 多人增量贡献 — collect-list step 的共享账本面板。
 //
-// 节点保持单 owner;owner 在这里把节点开放给团队(policy: 'team')后,每个
-// 成员都能轻量地丢一条贡献(标题 + 备注/链接),不开工作 session、不动节点
-// 状态机。条目存云端 contrib 账本,每条带 submittedBy 归属,这里用团队目录
-// 解析成头像 + 名字。面板挂载期间轻量轮询,别人的新贡献十几秒内可见。
+// 节点保持单 owner;owner 把节点开放给团队(policy: 'team')后,任何成员都能
+// 在这个节点上**启动自己的 AI 收集会话**(主路径):会话按节点契约调研,产出
+// 经 MCP add_node_contribution 逐条进云端账本,归属=启动它的成员,kind=agent。
+// 会话是专属轻量会话 — 不绑 node.sessionId、不动节点状态机,多成员可并发。
+// 手动单条添加保留为次要补充(收起在「手动添加」后面)。
+// 面板挂载期间轻量轮询,别人的新贡献十几秒内可见。
 
 const POLL_MS = 15_000
 
@@ -60,6 +63,9 @@ export function NodeContributionsSection({
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [policyBusy, setPolicyBusy] = useState(false)
   const [labelDraft, setLabelDraft] = useState(node.contribution?.itemLabel ?? '')
+  const [manualOpen, setManualOpen] = useState(false)
+  const [collectBusy, setCollectBusy] = useState(false)
+  const [collectStatus, setCollectStatus] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -107,6 +113,25 @@ export function NodeContributionsSection({
       })
   }
 
+  // 主路径:启动(或复用)我的 AI 收集会话。产出会经 MCP 陆续进账本,
+  // 这里只反馈派发结果;轮询会把新条目带进列表。
+  const startCollect = () => {
+    if (collectBusy) return
+    setCollectBusy(true)
+    setCollectStatus(null)
+    startPlannerContributionSession(canvasId, node.id)
+      .then((res) => {
+        if (!mountedRef.current) return
+        setCollectBusy(false)
+        setCollectStatus(res.detail)
+      })
+      .catch((err) => {
+        if (!mountedRef.current) return
+        setCollectBusy(false)
+        setCollectStatus((err as Error).message || '启动收集会话失败')
+      })
+  }
+
   const submit = () => {
     const trimmed = title.trim()
     if (!trimmed || submitting) return
@@ -139,7 +164,7 @@ export function NodeContributionsSection({
         <span>团队共建</span>
         <small>
           {enabled
-            ? `开放中 · 每位成员都可以添加一条${itemLabel}`
+            ? `开放中 · 每位成员都能启动自己的 AI 会话来收集${itemLabel}`
             : '关闭中 · 仅负责人可整理'}
         </small>
       </div>
@@ -188,12 +213,26 @@ export function NodeContributionsSection({
 
         {enabled && (
           <>
+            <div className="planner-contrib__collect">
+              <button
+                type="button"
+                className="planner-contrib__collect-btn"
+                disabled={collectBusy}
+                onClick={startCollect}
+                title={`派发我的专属收集会话:按节点契约调研,每确认一条${itemLabel}就写进账本(带我的署名)`}
+              >
+                <Sparkles size={13} aria-hidden />
+                {collectBusy ? '派发中…' : `开始 AI 收集${itemLabel}`}
+              </button>
+              {collectStatus && <small className="planner-contrib__collect-status">{collectStatus}</small>}
+            </div>
+
             {loadError ? (
               <p className="planner-contrib__error">{loadError}</p>
             ) : items === null ? (
               <p className="planner-node-modal__empty">加载中…</p>
             ) : count === 0 ? (
-              <p className="planner-node-modal__empty">还没有{itemLabel},来添加第一条</p>
+              <p className="planner-node-modal__empty">还没有{itemLabel} — 点上面开始 AI 收集,产出会陆续出现在这里</p>
             ) : (
               <ul className="planner-contrib__list">
                 {items.map((item) => {
@@ -201,6 +240,7 @@ export function NodeContributionsSection({
                   const who = member?.displayName
                     ?? (item.submittedBy ? `${item.submittedBy.slice(0, 8)}…` : '未知成员')
                   const href = safeHttpUrl(item.url)
+                  const viaAgent = item.kind === 'agent'
                   return (
                     <li key={item.id} className="planner-contrib__item">
                       <span className="planner-contrib__avatar" title={who}>
@@ -217,6 +257,11 @@ export function NodeContributionsSection({
                         {item.note && <em>{item.note}</em>}
                       </span>
                       <span className="planner-contrib__meta">
+                        {viaAgent && (
+                          <span className="planner-contrib__via-agent" title={`${who} 的收集会话产出`}>
+                            <Bot size={11} aria-hidden />
+                          </span>
+                        )}
                         {who} · {relativeTime(item.createdAt)}
                       </span>
                     </li>
@@ -225,35 +270,46 @@ export function NodeContributionsSection({
               </ul>
             )}
 
-            <div className="planner-contrib__form">
-              <input
-                value={title}
-                placeholder={`添加一条${itemLabel}…`}
-                maxLength={500}
-                disabled={submitting}
-                onChange={(e) => setTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit()
-                }}
-              />
-              <input
-                value={note}
-                placeholder="备注(可选)"
-                maxLength={4000}
-                disabled={submitting}
-                onChange={(e) => setNote(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit()
-                }}
-              />
+            {manualOpen ? (
+              <div className="planner-contrib__form">
+                <input
+                  value={title}
+                  placeholder={`手动添加一条${itemLabel}…`}
+                  maxLength={500}
+                  disabled={submitting}
+                  autoFocus
+                  onChange={(e) => setTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit()
+                  }}
+                />
+                <input
+                  value={note}
+                  placeholder="备注(可选)"
+                  maxLength={4000}
+                  disabled={submitting}
+                  onChange={(e) => setNote(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit()
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={submitting || !title.trim()}
+                  onClick={submit}
+                >
+                  <Plus size={12} aria-hidden /> 添加
+                </button>
+              </div>
+            ) : (
               <button
                 type="button"
-                disabled={submitting || !title.trim()}
-                onClick={submit}
+                className="planner-contrib__manual-toggle"
+                onClick={() => setManualOpen(true)}
               >
-                <Plus size={12} aria-hidden /> 添加
+                手动添加一条
               </button>
-            </div>
+            )}
             {submitError && <p className="planner-contrib__error">{submitError}</p>}
           </>
         )}

@@ -1704,6 +1704,22 @@ export function submitPlannerNodeContribution(
   )
 }
 
+/** 共建主路径:成员在共建节点上启动自己的 AI 收集会话(专属轻量会话,
+ *  不绑 node.sessionId;产出经 MCP add_node_contribution 逐条进账本)。 */
+export function startPlannerContributionSession(
+  canvasId: string,
+  nodeId: string,
+  input?: { hint?: string },
+): Promise<{ ok: boolean; sessionId: string; nodeId: string; action: string; detail: string }> {
+  return jsonRequest<{ ok: boolean; sessionId: string; nodeId: string; action: string; detail: string }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ hint: input?.hint ?? undefined }),
+    },
+  )
+}
+
 export function abandonPlannerNodeSession(
   canvasId: string,
   nodeId: string,

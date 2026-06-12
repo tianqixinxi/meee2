@@ -7,6 +7,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchPlannerNodeContributions: vi.fn(),
   submitPlannerNodeContribution: vi.fn(),
   updatePlannerNodeContribution: vi.fn(),
+  startPlannerContributionSession: vi.fn(),
 }))
 
 vi.mock('../../api', async () => {
@@ -16,6 +17,7 @@ vi.mock('../../api', async () => {
     fetchPlannerNodeContributions: apiMocks.fetchPlannerNodeContributions,
     submitPlannerNodeContribution: apiMocks.submitPlannerNodeContribution,
     updatePlannerNodeContribution: apiMocks.updatePlannerNodeContribution,
+    startPlannerContributionSession: apiMocks.startPlannerContributionSession,
   }
 })
 
@@ -48,6 +50,7 @@ describe('NodeContributionsSection', () => {
     apiMocks.fetchPlannerNodeContributions.mockReset()
     apiMocks.submitPlannerNodeContribution.mockReset()
     apiMocks.updatePlannerNodeContribution.mockReset()
+    apiMocks.startPlannerContributionSession.mockReset()
   })
 
   it('renders the attributed ledger when the node is open for team contributions', async () => {
@@ -100,7 +103,54 @@ describe('NodeContributionsSection', () => {
     expect(screen.getByText('EvilCo').closest('a')).toBeNull()
   })
 
-  it('submits a contribution and refreshes the list', async () => {
+  it('starts an AI collection session as the primary path', async () => {
+    apiMocks.fetchPlannerNodeContributions.mockResolvedValue({ contributions: [] })
+    apiMocks.startPlannerContributionSession.mockResolvedValue({
+      ok: true,
+      sessionId: 'sess-1',
+      nodeId: 'node-1',
+      action: 'created',
+      detail: '已派发专属收集会话,产出会陆续进入账本。',
+    })
+    render(
+      <NodeContributionsSection
+        canvasId="canvas-1"
+        node={makeNode({ policy: 'team', itemLabel: 'startup' })}
+        isOwner={false}
+        teamMembers={TEAM}
+      />,
+    )
+    fireEvent.click(await screen.findByText('开始 AI 收集startup'))
+    await waitFor(() => {
+      expect(apiMocks.startPlannerContributionSession).toHaveBeenCalledWith('canvas-1', 'node-1')
+    })
+    // 派发结果反馈到面板。
+    expect(await screen.findByText('已派发专属收集会话,产出会陆续进入账本。')).toBeTruthy()
+  })
+
+  it('marks agent-produced items with attribution to the member', async () => {
+    apiMocks.fetchPlannerNodeContributions.mockResolvedValue({
+      contributions: [
+        { id: 'c1', title: 'Modal', kind: 'agent', submittedBy: 'u-alice', createdAt: new Date().toISOString() },
+      ],
+    })
+    const { container } = render(
+      <NodeContributionsSection
+        canvasId="canvas-1"
+        node={makeNode({ policy: 'team' })}
+        isOwner={false}
+        teamMembers={TEAM}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('Modal')).toBeTruthy()
+    })
+    // agent 产出带机器人标记,归属仍是成员。
+    expect(container.querySelector('.planner-contrib__via-agent')).toBeTruthy()
+    expect(screen.getByText(/Alice/)).toBeTruthy()
+  })
+
+  it('submits a manual contribution behind the secondary toggle and refreshes', async () => {
     apiMocks.fetchPlannerNodeContributions.mockResolvedValue({ contributions: [] })
     apiMocks.submitPlannerNodeContribution.mockResolvedValue({
       ok: true,
@@ -114,7 +164,10 @@ describe('NodeContributionsSection', () => {
         teamMembers={TEAM}
       />,
     )
-    const input = await screen.findByPlaceholderText('添加一条startup…')
+    // 手动表单默认收起,点「手动添加一条」展开。
+    expect(screen.queryByPlaceholderText('手动添加一条startup…')).toBeNull()
+    fireEvent.click(await screen.findByText('手动添加一条'))
+    const input = await screen.findByPlaceholderText('手动添加一条startup…')
     fireEvent.change(input, { target: { value: 'Vercel' } })
     fireEvent.click(screen.getByText('添加'))
     await waitFor(() => {

@@ -649,6 +649,9 @@ public final class BoardServer {
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/contribution"] = BoardServer.cors(BoardAPI.updatePlannerNodeContribution)
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/contributions"] = BoardServer.cors(BoardAPI.listPlannerNodeContributions)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/contributions"] = BoardServer.cors(BoardAPI.submitPlannerNodeContribution)
+        // 共建主路径:成员启动自己的 AI 收集会话(专属轻量会话,产出经 MCP
+        // add_node_contribution 逐条进账本)。
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/contribution-session"] = BoardServer.cors(BoardAPI.startPlannerContributionSession)
         // Wave 1-3 integration — OnlineProxy routes.
         // UI-2: assign a node to a teammate through meee2-online.
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/assign"] = BoardServer.cors(BoardAPI.proxyAssignPlannerNode)

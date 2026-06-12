@@ -3679,14 +3679,17 @@ enum BoardAPI {
     }
 
     /// POST /api/planner/canvases/:id/nodes/:nodeId/contributions
-    /// Body: {"title": String, "note"?: String, "url"?: String}
+    /// Body: {"title": String, "note"?: String, "url"?: String, "via"?: "agent"}
     /// 轻量贡献写入 — 不开工作 session、不动节点状态机。本地先按已同步的
     /// 节点 policy 预检(owner 豁免),云端按 state 再硬校验一次。
+    /// `via:"agent"` 是收集会话经 MCP add_node_contribution 的写入,账本
+    /// submitted_by_kind 记 agent;人工表单不带 via,记 human。
     static func submitPlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
         struct SubmitContributionRequest: Decodable {
             let title: String
             let note: String?
             let url: String?
+            let via: String?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -3738,6 +3741,9 @@ enum BoardAPI {
         if let url = body.url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
             payload["url"] = url
         }
+        if body.via == "agent" {
+            payload["kind"] = "agent"
+        }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
             return errorResponse("bad_request", "failed to encode contribution payload", status: 400)
         }
@@ -3754,6 +3760,169 @@ enum BoardAPI {
         case .failure(let err):
             return mapOnlineProxyError(err)
         }
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contribution-session
+    /// Body: {"hint"?: String}
+    /// 团队共建的主路径:成员在共建节点上启动自己的 AI 收集会话。镜像 #148
+    /// artifact-sync 专属会话模式 — per (canvas,node) 至多一条、活着复用、
+    /// 不绑 node.sessionId、不动节点状态机;产出经 MCP add_node_contribution
+    /// 逐条进共享账本,归属=本机登录成员。授权即 contribution.policy=='team'
+    /// (owner 恒可),viewer 成员也放行 — 共建开放本身就是授权。
+    static func startPlannerContributionSession(_ req: HttpRequest) -> HttpResponse {
+        struct StartRequest: Decodable {
+            let hint: String?
+        }
+        struct StartResponse: Encodable {
+            let ok: Bool
+            let sessionId: String
+            let nodeId: String
+            /// created = 新派发;reused = 指令打进已有会话;pending = 启动中去重。
+            let action: String
+            let detail: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: StartRequest.self) ?? StartRequest(hint: nil)
+        let node: PlanningNode
+        do {
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let found = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            node = found
+            guard (node.nodeKind ?? .step) == .step else {
+                return errorResponse("bad_request", "only step nodes collect contributions", status: 400)
+            }
+            let acceptsTeam = node.contribution?.acceptsTeamContributions == true
+            guard acceptsTeam || state.access.role == .owner else {
+                return errorResponse("forbidden", "node does not accept team contributions", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+
+        let itemLabel = node.contribution?.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemWord = (itemLabel?.isEmpty ?? true) ? "条目" : itemLabel!
+        let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // 单行指令(同 sync 会话:fresh spawn 作 initialPrompt、复用走 deliverPrompt)。
+        let instruction = "[团队共建收集会话] 你是节点「\(node.title)」(canvasId \(canvasId), nodeId \(nodeId))的专属收集会话,代表本机登录成员往该节点的共享账本贡献\(itemWord)。任务:1) 用 read_node_contract 读节点契约理解要收集什么;2) 按契约做真实的调研/收集(可联网搜索、读文件),每确认一条就立刻用 add_node_contribution 提交(title=\(itemWord)本体,note=一句话依据,url=http(s) 来源链接)\(hint.isEmpty ? "" : ";本次重点:\(hint)");3) 收集若干条后用一段话总结本轮产出并结束回合。边界:这是增量贡献不是节点交付 — 不要 submit_node_output / attach_artifact_to_node / update_artifact / update_artifact_views(工具面已禁用),不要改节点状态或画布其它对象;同一\(itemWord)不要重复提交 — 账本已有同名条目时 add_node_contribution 会返回 duplicate:true,跳过换下一条即可。"
+
+        let registryKey = contributionSessionKey(canvasId: canvasId, nodeId: nodeId)
+        let trackedSessionId = contributionSessionId(forKey: registryKey)
+        let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
+        let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
+        let providerSession = providerSessionId.flatMap(resolvePluginSession)
+        let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+        let bootTimeout: TimeInterval = 120
+        let stillBooting = providerSessionId == nil
+            && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
+        let response: StartResponse
+        do {
+            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
+                switch TerminalSessionBackendRegistry.shared.deliverPrompt(
+                    id: trackedSessionId,
+                    text: instruction
+                ) {
+                case .delivered:
+                    response = StartResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        nodeId: nodeId,
+                        action: "reused",
+                        detail: "收集指令已下达给该节点的专属收集会话,产出会陆续进入账本。"
+                    )
+                case .busy:
+                    response = StartResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        nodeId: nodeId,
+                        action: "pending",
+                        detail: "上一条收集指令正在提交,本次点击已去重。"
+                    )
+                case .sessionNotFound:
+                    return errorResponse("contribution_session_failed", "专属收集会话的终端拒绝输入,请重试。", status: 500)
+                }
+            } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
+                response = StartResponse(
+                    ok: true,
+                    sessionId: trackedSessionId,
+                    nodeId: nodeId,
+                    action: "pending",
+                    detail: "专属收集会话正在启动并执行收集指令,无需重复触发。"
+                )
+            } else {
+                if let trackedSessionId, liveSurface != nil {
+                    _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+                }
+                let surface = try createInternalSessionSurface(
+                    provider: "claude",
+                    cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
+                    command: contributionSessionLaunchCommand(),
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    // 收集会话不绑节点:不抢 node.sessionId、不进节点三态,
+                    // 多成员可在各自桌面对同一节点并发收集。
+                    nodeId: nil,
+                    initialPrompt: instruction
+                )
+                recordContributionSession(surface.sessionId, forKey: registryKey)
+                response = StartResponse(
+                    ok: true,
+                    sessionId: surface.sessionId,
+                    nodeId: nodeId,
+                    action: "created",
+                    detail: "已派发专属收集会话,产出会陆续进入账本。"
+                )
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+        NSLog("[Contribution] node=\(nodeId.prefix(24)) -> session=\(response.sessionId.prefix(12)) action=\(response.action)")
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(response)
+    }
+
+    // MARK: - 共建收集专属会话注册表(进程内存,同 artifact-sync 模式)
+
+    private static let contributionSessionsLock = NSLock()
+    private static var contributionSessions: [String: String] = [:]
+
+    private static func contributionSessionKey(canvasId: String, nodeId: String) -> String {
+        "\(canvasId)|\(nodeId)"
+    }
+
+    private static func contributionSessionId(forKey key: String) -> String? {
+        contributionSessionsLock.lock()
+        defer { contributionSessionsLock.unlock() }
+        return contributionSessions[key]
+    }
+
+    private static func recordContributionSession(_ sessionId: String, forKey key: String) {
+        contributionSessionsLock.lock()
+        defer { contributionSessionsLock.unlock() }
+        contributionSessions[key] = sessionId
+    }
+
+    /// 收集会话的启动命令:full-access 基础上禁用节点交付/账本改写工具 —
+    /// 收集会话只允许逐条 add_node_contribution。两套同名 MCP 注册都要覆盖。
+    private static func contributionSessionLaunchCommand() -> String {
+        let banned = ["submit_node_output", "attach_artifact_to_node", "update_artifact", "update_artifact_views"]
+        let rules = banned
+            .flatMap { ["mcp__meee2__\($0)", "mcp__plugin_meee2_meee2__\($0)"] }
+            .map { "\"\($0)\"" }
+            .joined(separator: " ")
+        return AgentLaunchCommand.fullAccessCommand(forProvider: "claude") + " --disallowedTools \(rules)"
     }
 
     /// UI-2 · proxy `fetchOwnedCanvases` to the meee2-online team API.

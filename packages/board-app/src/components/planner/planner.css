@@ -3846,6 +3846,51 @@
   color: var(--danger, #f7768e);
   font-size: 11px;
 }
+/* 共建主路径 — 「开始 AI 收集」。比手动表单视觉权重高(主 CTA)。 */
+.planner-contrib__collect {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+}
+.planner-contrib__collect-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid rgba(122, 162, 247, 0.55);
+  border-radius: 6px;
+  background: rgba(122, 162, 247, 0.18);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.planner-contrib__collect-btn:hover:not(:disabled) {
+  background: rgba(122, 162, 247, 0.28);
+}
+.planner-contrib__collect-btn:disabled { opacity: 0.5; cursor: default; }
+.planner-contrib__collect-status {
+  color: var(--text-dim, rgba(168, 165, 155, 0.85));
+  font-size: 11px;
+  line-height: 1.4;
+}
+/* 手动添加降级为次要入口:小号文本按钮,点开才出表单。 */
+.planner-contrib__manual-toggle {
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-dim, rgba(168, 165, 155, 0.85));
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.planner-contrib__manual-toggle:hover { color: var(--text); }
+/* agent 产出标记 — 归属行前的小机器人。 */
+.planner-contrib__via-agent {
+  display: inline-flex; align-items: center;
+  margin-right: 2px;
+  color: rgba(122, 162, 247, 0.9);
+}
 
 /* PR4 — artifact 节点 version chip strip。横向小行，左边一个「版本」标签，
  *  右边 chips。最多展示 6 个版本号(v{N}, v{N-1}, ...)，超出走 +N。

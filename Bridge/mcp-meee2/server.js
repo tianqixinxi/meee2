@@ -228,6 +228,27 @@ const TOOLS = [
       required: ['canvasId'],
     },
   },
+  {
+    name: 'add_node_contribution',
+    description:
+      'Append ONE item to a team-contribution node\'s shared ledger ' +
+      '(团队共建,e.g. collect-startup-list). Call once per item as you find ' +
+      'them — items accumulate incrementally with attribution to the member ' +
+      'who started this session. Does NOT finish the node or touch node ' +
+      'state; keep collecting and end your turn with a summary. Requires the ' +
+      'node to have contribution.policy="team" (or you are the canvas owner).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        nodeId: { type: 'string', description: 'Contribution-enabled step node id.' },
+        title: { type: 'string', description: 'The item itself (e.g. company name). Required.' },
+        note: { type: 'string', description: 'Optional one-line note / evidence.' },
+        url: { type: 'string', description: 'Optional http(s) source link.' },
+      },
+      required: ['canvasId', 'nodeId', 'title'],
+    },
+  },
 ]
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
@@ -483,6 +504,25 @@ async function handleSubmitNodeOutput(args) {
   )
 }
 
+// 团队共建:逐条追加贡献。不走 assertPlannerToolScope —— 共建会话不绑节点
+// (nodeId=nil 的专属轻量会话),授权由本地路由按节点 contribution.policy 判,
+// 云端再按同步 state 硬校验一次。via:'agent' 让账本归属记成 agent 产出。
+async function handleAddNodeContribution(args) {
+  const { canvasId, nodeId, title } = args
+  if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
+  if (!title || !String(title).trim()) throw new Error('title is required')
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+    {
+      title: String(title).trim(),
+      note: args.note || null,
+      url: args.url || null,
+      via: 'agent',
+    },
+  )
+}
+
 async function handleAttachArtifactToNode(args) {
   const { canvasId, nodeId } = args
   if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
@@ -645,6 +685,9 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'update_artifact_views':
         result = await handleUpdateArtifactViews(args)
+        break
+      case 'add_node_contribution':
+        result = await handleAddNodeContribution(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)

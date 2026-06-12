@@ -1388,6 +1388,8 @@ export interface NodeContribution {
   url?: string | null
   /** Contributor user id — resolve display name via the team directory. */
   submittedBy?: string | null
+  /** 'agent' = 成员的 AI 收集会话产出;'human' = 手动添加。 */
+  kind?: string | null
   createdAt: string
 }
 
