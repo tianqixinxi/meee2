@@ -177,6 +177,41 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertEqual(refreshed?.accessToken, "rotated-by-peer")
     }
 
+    func testRefreshWaitsForCrossProcessLockAndReusesRotatedTokens() {
+        // codex P1：NSLock 只管进程内 —— bundled app / debug 二进制 / CLI
+        // 同时运行时仍可能各自拿同一个 refresh token 并发刷新。这里模拟
+        // 「另一个进程」先持有 settings.json.lock 并完成轮换：本进程的
+        // refresh 必须阻塞在文件锁上，等到锁后复用文件里的新凭证，不打网络。
+        writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-1"))
+        let stale = OnlineProxy.loadSettings()
+
+        let lockPath = settingsFile.path + ".lock"
+        let fd = open(lockPath, O_CREAT | O_WRONLY, 0o600)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        XCTAssertEqual(flock(fd, LOCK_EX), 0)
+
+        OnlineProxy.refreshTransportOverride = { _ in
+            XCTFail("另一进程已轮换凭证，等到文件锁后应直接复用，不再打 refresh")
+            return .failure(.badURL)
+        }
+
+        let done = expectation(description: "refresh returns")
+        let results = ConcurrentResults()
+        DispatchQueue.global().async {
+            results.append(OnlineProxy.refreshAccessToken(stale: stale))
+            done.fulfill()
+        }
+
+        // 「另一个进程」持锁期间完成刷新落盘，然后放锁
+        Thread.sleep(forTimeInterval: 0.3)
+        writeSettingsFile(baseSettings(accessToken: "rotated-by-other-process", refreshToken: "rt-2"))
+        flock(fd, LOCK_UN)
+        close(fd)
+
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(results.values.first??.accessToken, "rotated-by-other-process")
+    }
+
     func testRefreshFailureCooldownPreventsRetryStorm() {
         writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-1"))
         let transportCalls = ManagedAtomicCounter()

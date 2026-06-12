@@ -19,8 +19,9 @@ import Foundation
 ///     settings.json too; UserDefaults is a legacy fallback only.
 ///
 /// Refresh model: Supabase rotates the refresh token on every use and
-/// revokes the whole family on reuse, so refresh MUST be single-flight per
-/// process — see `refreshAccessToken(stale:)`.
+/// revokes the whole family on reuse, so refresh MUST be single-flight —
+/// in-process via NSLock AND machine-wide via flock on settings.json.lock
+/// (multiple app forms can run concurrently) — see `refreshAccessToken(stale:)`.
 enum OnlineProxy {
     enum ProxyError: Error {
         case missingSettings(String)
@@ -245,14 +246,42 @@ enum OnlineProxy {
     /// Single-flight：Supabase 每次刷新都轮换 refresh token，并在检测到旧
     /// token 复用时吊销整个 token family。access token 过期瞬间 app 内多个
     /// 并发请求会同时拿到 401 —— 若各自刷新，第二个请求就构成 reuse，所有
-    /// 副本全部 AUTH_INVALID（2026-06-12 实测）。因此全进程同一时刻只允许
-    /// 一个刷新在飞：第一个 401 持锁刷新，其余阻塞等锁，醒来后 double-check
-    /// settings.json —— 凭证已轮换则直接复用，不再发起第二次刷新。
+    /// 副本全部 AUTH_INVALID（2026-06-12 实测）。因此同一时刻只允许一个
+    /// 刷新在飞，分两层：
+    ///
+    ///   - 进程内 `NSLock`：第一个 401 持锁刷新，其余阻塞等锁；
+    ///   - 跨进程 `flock(settings.json.lock)`：bundled app / debug 二进制 /
+    ///     CLI 可能同时在跑且共享 settings.json，文件锁保证全机器单飞。
+    ///
+    /// 等到锁后先 double-check settings.json —— 凭证已被（本进程其它线程
+    /// 或另一个进程）轮换则直接复用，不再发起第二次刷新。
     static func refreshAccessToken(stale: Settings) -> Settings? {
         refreshLock.lock()
         defer { refreshLock.unlock() }
+        return withCrossProcessRefreshLock {
+            refreshHoldingLocks(stale: stale)
+        }
+    }
 
-        // Double-check：等锁期间另一请求可能已刷新成功并落盘
+    /// 围绕共享凭证文件的跨进程互斥。锁文件建不出来 / flock 失败时退化为
+    /// 仅进程内互斥（比拒绝刷新好——单进程场景本就不需要文件锁）。
+    private static func withCrossProcessRefreshLock<T>(_ body: () -> T) -> T {
+        let lockURL = settingsFileURL().appendingPathExtension("lock")
+        try? FileManager.default.createDirectory(
+            at: lockURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let fd = open(lockURL.path, O_CREAT | O_WRONLY, 0o600)
+        guard fd >= 0 else { return body() }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { return body() }
+        defer { flock(fd, LOCK_UN) }
+        return body()
+    }
+
+    private static func refreshHoldingLocks(stale: Settings) -> Settings? {
+        // Double-check（锁内）：等锁期间本进程其它线程或另一个进程可能已
+        // 刷新成功并落盘
         let current = loadSettings()
         if !current.accessToken.isEmpty, current.accessToken != stale.accessToken {
             MInfo("[OnlineProxy] refresh reused — token already rotated by a concurrent request")
