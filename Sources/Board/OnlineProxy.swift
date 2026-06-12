@@ -280,14 +280,29 @@ enum OnlineProxy {
     }
 
     private static func refreshHoldingLocks(stale: Settings) -> Settings? {
-        // Double-check（锁内）：等锁期间本进程其它线程或另一个进程可能已
-        // 刷新成功并落盘
-        let current = loadSettings()
-        if !current.accessToken.isEmpty, current.accessToken != stale.accessToken {
-            MInfo("[OnlineProxy] refresh reused — token already rotated by a concurrent request")
-            return current
+        // Double-check（锁内）：对照 settings.json 的「持久化」凭证态，不走
+        // loadSettings() —— env 注入的 token（e2e 用同一组 env 启动多进程）
+        // 会盖住另一个进程刚轮换落盘的新凭证，等锁的人就会拿已用过的 env
+        // refresh token 再打一次，正中 reuse-detection。
+        let persisted = persistedCredentialState()
+        if !persisted.accessToken.isEmpty, persisted.accessToken != stale.accessToken {
+            MInfo("[OnlineProxy] refresh reused — token already rotated by a concurrent flight")
+            return withTokens(
+                stale,
+                accessToken: persisted.accessToken,
+                refreshToken: persisted.refreshToken.isEmpty ? stale.refreshToken : persisted.refreshToken
+            )
         }
-        if current.authExpired || current.refreshToken.isEmpty {
+        // 过期态只阻断「文件凭证」的刷新；env 注入模式（文件可能为空/过期）
+        // 仍允许用 env refresh token 起第一飞
+        let envRefreshToken = ProcessInfo.processInfo.environment["MEEE2_ONLINE_REFRESH_TOKEN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if persisted.authExpired, envRefreshToken.isEmpty {
+            return nil
+        }
+        let refreshToken = !persisted.refreshToken.isEmpty ? persisted.refreshToken
+            : (!envRefreshToken.isEmpty ? envRefreshToken : stale.refreshToken)
+        if refreshToken.isEmpty {
             return nil
         }
         if let failedAt = lastRefreshFailureAt,
@@ -295,7 +310,7 @@ enum OnlineProxy {
             return nil
         }
 
-        let baseURL = URL(string: current.onlineBaseUrl) ?? Meee2OnlineConfig.appBaseURL
+        let baseURL = URL(string: stale.onlineBaseUrl) ?? Meee2OnlineConfig.appBaseURL
         let url = baseURL
             .appendingPathComponent("api")
             .appendingPathComponent("v1")
@@ -305,7 +320,7 @@ enum OnlineProxy {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "refreshToken": current.refreshToken
+            "refreshToken": refreshToken
         ])
 
         let result = refreshTransportOverride?(request) ?? performSync(request: request)
@@ -317,28 +332,19 @@ enum OnlineProxy {
                 lastRefreshFailureAt = Date()
                 return nil
             }
-            if let superseded = settingsIfRefreshTokenSuperseded(requestToken: current.refreshToken) {
+            if let superseded = settingsIfRefreshTokenSuperseded(requestToken: refreshToken, base: stale) {
                 // 等待网络期间用户已重新登录（登录路径不持文件锁），文件里
                 // 已是更新的凭证 —— 丢弃本次刷新结果，以新登录为准
                 MInfo("[OnlineProxy] refresh result discarded — credentials re-issued by a newer login")
                 return superseded
             }
-            let refreshToken = (object["refresh_token"] as? String) ?? current.refreshToken
-            persistTokens(accessToken: accessToken, refreshToken: refreshToken)
+            let rotatedRefreshToken = (object["refresh_token"] as? String) ?? refreshToken
+            persistTokens(accessToken: accessToken, refreshToken: rotatedRefreshToken)
             lastRefreshFailureAt = nil
             MInfo("[OnlineProxy] refresh ok — rotated token persisted to settings.json")
-            return Settings(
-                supabaseUrl: current.supabaseUrl,
-                supabaseKey: current.supabaseKey,
-                onlineBaseUrl: current.onlineBaseUrl,
-                accessToken: accessToken,
-                refreshToken: refreshToken,
-                teamId: current.teamId,
-                userId: current.userId,
-                authExpired: false
-            )
+            return withTokens(stale, accessToken: accessToken, refreshToken: rotatedRefreshToken)
         case .failure(.http(let status, _)) where status == 401 || status == 403:
-            if let superseded = settingsIfRefreshTokenSuperseded(requestToken: current.refreshToken) {
+            if let superseded = settingsIfRefreshTokenSuperseded(requestToken: refreshToken, base: stale) {
                 // 被拒的是发起请求时那枚旧 token；等待期间用户已重新登录，
                 // 文件里的新凭证不能被它连坐清掉
                 MInfo("[OnlineProxy] stale refresh rejected (\(status)) — newer login credentials present, keeping them")
@@ -359,17 +365,32 @@ enum OnlineProxy {
     }
 
     /// 刷新等待网络期间凭证是否已被「别的来源」换掉（典型：用户重新登录，
-    /// 登录路径不持 refresh 文件锁）。是则返回文件里的新凭证，刷新结果
-    /// （无论成败）都应让位于它 —— 尤其 401 不能把新登录连坐清掉。
-    private static func settingsIfRefreshTokenSuperseded(requestToken: String) -> Settings? {
-        let latest = loadSettings()
+    /// 登录路径不持 refresh 文件锁）。是则返回基于文件新凭证的 Settings，
+    /// 刷新结果（无论成败）都应让位于它 —— 尤其 401 不能把新登录连坐清掉。
+    /// 对账走 persistedCredentialState（文件原值），同样不能被 env 盖住。
+    private static func settingsIfRefreshTokenSuperseded(requestToken: String, base: Settings) -> Settings? {
+        let latest = persistedCredentialState()
         guard !latest.refreshToken.isEmpty,
               latest.refreshToken != requestToken,
               !latest.accessToken.isEmpty,
               !latest.authExpired else {
             return nil
         }
-        return latest
+        return withTokens(base, accessToken: latest.accessToken, refreshToken: latest.refreshToken)
+    }
+
+    /// 连接字段沿用 base、凭证替换为给定 token 的 Settings 副本。
+    private static func withTokens(_ base: Settings, accessToken: String, refreshToken: String) -> Settings {
+        Settings(
+            supabaseUrl: base.supabaseUrl,
+            supabaseKey: base.supabaseKey,
+            onlineBaseUrl: base.onlineBaseUrl,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            teamId: base.teamId,
+            userId: base.userId,
+            authExpired: false
+        )
     }
 
     /// 登录成功（浏览器回调之外的路径，如连接码验证）或刷新成功后落盘新凭证。

@@ -212,6 +212,33 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertEqual(results.values.first??.accessToken, "rotated-by-other-process")
     }
 
+    func testLockedDoubleCheckReadsFileNotCallerView() {
+        // codex P2（e2e 场景）：多进程用同一组 env token 启动时，caller 的
+        // stale 视图来自 env（loadSettings 里 env 优先），另一进程已轮换
+        // 落盘 settings.json。锁内对账必须直接看文件 —— 否则等锁的人会拿
+        // 已用过的 env refresh token 再打一次，正中 reuse-detection。
+        // 这里用手工构造的 stale 模拟 env 视图（token 与文件不同源）。
+        writeSettingsFile(baseSettings(accessToken: "rotated-by-peer-a", refreshToken: "rt-2"))
+        let stale = OnlineProxy.Settings(
+            supabaseUrl: "https://example.supabase.co",
+            supabaseKey: "anon-key",
+            onlineBaseUrl: "https://online.example.com",
+            accessToken: "env-stale-a",
+            refreshToken: "env-stale-rt",
+            teamId: "team-1",
+            userId: "user-1",
+            authExpired: false
+        )
+        OnlineProxy.refreshTransportOverride = { _ in
+            XCTFail("文件已有轮换后的凭证，过期的 caller 视图不得再触发真实刷新")
+            return .failure(.badURL)
+        }
+
+        let result = OnlineProxy.refreshAccessToken(stale: stale)
+        XCTAssertEqual(result?.accessToken, "rotated-by-peer-a")
+        XCTAssertEqual(result?.refreshToken, "rt-2")
+    }
+
     func testRefreshFailureCooldownPreventsRetryStorm() {
         writeSettingsFile(baseSettings(accessToken: "expired-a", refreshToken: "rt-1"))
         let transportCalls = ManagedAtomicCounter()
