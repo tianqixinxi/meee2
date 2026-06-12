@@ -118,6 +118,7 @@ public struct Meee2OnlineCallbackAPI {
         defaults.removeObject(forKey: "meee2Online")
         defaults.removeObject(forKey: "meee2EnabledSessionIds")
         defaults.removeObject(forKey: "meee2DisabledSessionIds")
+        defaults.removeObject(forKey: "meee2AuthExpired")
         defaults.set(teamId, forKey: "meee2TeamId")
         defaults.set(teamName, forKey: "meee2TeamName")
         defaults.set(userId, forKey: "meee2UserId")
@@ -127,8 +128,11 @@ public struct Meee2OnlineCallbackAPI {
         defaults.set(supabaseUrl, forKey: "meee2SupabaseUrl")
         defaults.set(supabaseKey, forKey: "meee2SupabaseKey")
         defaults.set(onlineBaseUrl, forKey: "meee2OnlineBaseUrl")
-        defaults.set(accessToken, forKey: "meee2OnlineAccessToken")
-        defaults.set(refreshToken, forKey: "meee2OnlineRefreshToken")
+        // Token 只落 settings.json（单一真相）。偏好域按二进制形态分裂
+        // （com.meee2.app / meee2），写进去的副本会在另一形态重新登录后
+        // 变成旧 token family，触发 Supabase reuse-detection 全家吊销。
+        defaults.removeObject(forKey: "meee2OnlineAccessToken")
+        defaults.removeObject(forKey: "meee2OnlineRefreshToken")
         if let teamsData {
             defaults.set(teamsData, forKey: "meee2Teams")
         }
@@ -164,15 +168,18 @@ public struct Meee2OnlineCallbackAPI {
         // 确保目录存在
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // 写入 JSON
+        // 写入 JSON —— 持凭证锁与在飞的 token 刷新串行：登录写是「最新真相」,
+        // 但落盘顺序必须确定(刷新若后落盘,其 superseded guard 会让位于这里)
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            do {
-                try data.write(to: file, options: .atomic)
-                MInfo("[Meee2OnlineCallback] Saved config to \(file.path)")
-                return true
-            } catch {
-                MError("[Meee2OnlineCallback] Failed to write config: \(error)")
-                return false
+            return OnlineProxy.withCredentialFileLock {
+                do {
+                    try data.write(to: file, options: .atomic)
+                    MInfo("[Meee2OnlineCallback] Saved config to \(file.path)")
+                    return true
+                } catch {
+                    MError("[Meee2OnlineCallback] Failed to write config: \(error)")
+                    return false
+                }
             }
         }
         return false

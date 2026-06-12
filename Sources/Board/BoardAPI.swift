@@ -4356,7 +4356,12 @@ enum BoardAPI {
     static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
         let settings = readMeee2OnlineSettings()
         let defaults = UserDefaults.standard
-        let connected = defaults.bool(forKey: "meee2Connected")
+        // 凭证态以 settings.json 为准:authExpired 由任一二进制形态在 refresh
+        // 被吊销时写入,两种形态(bundled app / debug 二进制)都要立即退出
+        // 「已连接」展示,引导重新登录,而不是顶着 401 假装在线。
+        let authExpired = (settings["authExpired"] as? Bool) ?? false
+        let fileConnected = (settings["online"] as? Bool) ?? false
+        let connected = (defaults.bool(forKey: "meee2Connected") || fileConnected) && !authExpired
         let userName = connected
             ? defaultString(defaults, key: "meee2UserName", fallback: settings["userName"])
             : ""
@@ -4380,6 +4385,7 @@ enum BoardAPI {
 
         return jsonResponse(UserProfileDTO(
             connected: connected,
+            authExpired: authExpired,
             userId: userId,
             displayName: displayName,
             userName: userName,
@@ -4770,11 +4776,14 @@ enum BoardAPI {
         return components.url!
     }
 
-    private static func clearMeee2OnlineSettings() {
+    /// 主动断开：清空当前偏好域 + settings.json（含 token，文件是凭证唯一
+    /// 真相）。SettingsView 的 Disconnect 也走这里，保证两个入口语义一致。
+    static func clearMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         for key in [
             "meee2Connected",
             "meee2Online",
+            "meee2AuthExpired",
             "meee2TeamId",
             "meee2TeamName",
             "meee2Teams",
@@ -4794,8 +4803,10 @@ enum BoardAPI {
             defaults.removeObject(forKey: key)
         }
 
-        let settings: [String: Any] = [
-            "meee2": [
+        // 断开 = 整文件重置（token 一并清掉）；忽略文件现值，但仍须持锁
+        // 与在飞刷新串行，避免清理与轮换落盘交错出半新半旧状态
+        OnlineProxy.rewriteSettingsFile { _ in
+            [
                 "enabled": false,
                 "online": false,
                 "teams": [],
@@ -4806,12 +4817,6 @@ enum BoardAPI {
                 "machineId": Host.current().name ?? "unknown",
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
-        ]
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
         }
     }
 
@@ -4828,14 +4833,12 @@ enum BoardAPI {
                 "role": team.role ?? ""
             ]
         }
-        let meee2Settings: [String: Any] = [
+        let base: [String: Any] = [
             "enabled": true,
             "online": defaults.bool(forKey: "meee2Connected"),
             "supabaseUrl": normalizedSupabaseUrl,
             "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
             "onlineBaseUrl": defaults.string(forKey: "meee2OnlineBaseUrl") ?? "",
-            "accessToken": defaults.string(forKey: "meee2OnlineAccessToken") ?? "",
-            "refreshToken": defaults.string(forKey: "meee2OnlineRefreshToken") ?? "",
             "teamId": defaults.string(forKey: "meee2TeamId") ?? "",
             "userId": defaults.string(forKey: "meee2UserId") ?? "",
             "userName": defaults.string(forKey: "meee2UserName") ?? "",
@@ -4849,13 +4852,15 @@ enum BoardAPI {
             "machineId": Host.current().name ?? "unknown",
             "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
         ]
-        let settings: [String: Any] = ["meee2": meee2Settings]
-
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
+        // token / authExpired 在凭证锁内重读 settings.json 合并(rewrite
+        // 内部持锁):偏好域不再存 token,不持锁的 read-then-write 会把并发
+        // 刷新刚轮换的凭证冲回已吊销的旧 token family
+        OnlineProxy.rewriteSettingsFile { credentials in
+            var meee2 = base
+            meee2["accessToken"] = credentials.accessToken
+            meee2["refreshToken"] = credentials.refreshToken
+            meee2["authExpired"] = credentials.authExpired
+            return meee2
         }
     }
 
