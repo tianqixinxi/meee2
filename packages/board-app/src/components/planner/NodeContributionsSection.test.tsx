@@ -205,6 +205,42 @@ describe('NodeContributionsSection', () => {
     expect(apiMocks.fetchPlannerNodeContributions).not.toHaveBeenCalled()
   })
 
+  it('renders the per-member collector list; own session opens locally, others open the dashboard', async () => {
+    apiMocks.fetchPlannerNodeContributions.mockResolvedValue({
+      contributions: [],
+      dashboardBaseUrl: 'https://www.meee2.com',
+      collectors: [
+        { userId: 'u-alice', sessionId: 'sess-alice', startedAt: new Date().toISOString(), mine: true, alive: true },
+        { userId: 'u-bob', sessionId: 'sess-bob', startedAt: new Date().toISOString() },
+      ],
+    })
+    const onOpenSession = vi.fn()
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    render(
+      <NodeContributionsSection
+        canvasId="canvas-1"
+        node={makeNode({ policy: 'team' })}
+        isOwner={false}
+        teamMembers={TEAM}
+        currentUserId="u-alice"
+        onOpenSession={onOpenSession}
+      />,
+    )
+    // 成员维度列表:我的 + Bob 的。
+    expect(await screen.findByText('Alice (我)')).toBeTruthy()
+    expect(screen.getByText('收集中')).toBeTruthy()
+    fireEvent.click(screen.getByText('Alice (我)'))
+    expect(onOpenSession).toHaveBeenCalledWith('sess-alice', 'node-1')
+    // 别人的 → dashboard 网页。
+    fireEvent.click(screen.getByText('Bob'))
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://www.meee2.com/dashboard/sessions/sess-bob',
+      '_blank',
+      'noreferrer',
+    )
+    openSpy.mockRestore()
+  })
+
   it('shows members a hint when the owner has not opened contributions', () => {
     render(
       <NodeContributionsSection

@@ -3643,9 +3643,11 @@ enum BoardAPI {
     }
 
     /// GET /api/planner/canvases/:id/nodes/:nodeId/contributions
-    /// Proxies the cloud contribution ledger (oldest-first). Any team member
-    /// may read; the cloud route re-checks membership against the caller's
-    /// own access token.
+    /// Proxies the cloud contribution ledger (oldest-first) + collectors
+    /// (成员维度的收集会话列表)。本地富化:把我的 collector 行接上本机注册表
+    /// (provider 会话 id / alive),并在云端标记还没有会话 id 时补发一条带 id
+    /// 的标记让队友也能点开看;同时带上 dashboardBaseUrl 供 UI 拼接「查看
+    /// 别人的会话」网页链接。
     static func listPlannerNodeContributions(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -3670,11 +3672,109 @@ enum BoardAPI {
             settings: settings
         ) {
         case .success(let data):
+            let enriched = enrichContributionsPayload(
+                data,
+                canvasId: canvasId,
+                remoteCanvasId: remoteCanvasId,
+                nodeId: nodeId,
+                settings: settings
+            )
             return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
-                try? writer.write(data)
+                try? writer.write(enriched)
             }
         case .failure(let err):
             return mapOnlineProxyError(err)
+        }
+    }
+
+    /// 收集会话 collectors 的本地富化。云端标记在 spawn 时只有 surface id
+    /// (甚至没有);真正可打开的 provider 会话 id 只有跑会话的这台桌面知道。
+    /// 这里把「我的」行接上注册表,并把 id 回写云端(fire-and-forget),让
+    /// 队友的面板也能链接到我的会话页。
+    private static func enrichContributionsPayload(
+        _ data: Data,
+        canvasId: String,
+        remoteCanvasId: String,
+        nodeId: String,
+        settings: OnlineProxy.Settings
+    ) -> Data {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return data
+        }
+        root["dashboardBaseUrl"] = settings.onlineBaseUrl
+        var collectors = (root["collectors"] as? [[String: Any]]) ?? []
+        let registryKey = contributionSessionKey(canvasId: canvasId, nodeId: nodeId)
+        if let tracked = contributionSessionId(forKey: registryKey),
+           TerminalSessionBackendRegistry.shared.snapshot(id: tracked) != nil {
+            let providerSid = providerResumeSessionIdForManagedSurface(tracked)
+            let providerSession = providerSid.flatMap(resolvePluginSession)
+            let alive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+            var foundMine = false
+            for idx in collectors.indices where (collectors[idx]["userId"] as? String) == settings.userId {
+                foundMine = true
+                collectors[idx]["mine"] = true
+                collectors[idx]["alive"] = alive
+                let cloudSid = collectors[idx]["sessionId"] as? String
+                if let providerSid {
+                    collectors[idx]["sessionId"] = providerSid
+                    if cloudSid == nil || cloudSid != providerSid {
+                        postCollectorMarker(
+                            settings: settings,
+                            remoteCanvasId: remoteCanvasId,
+                            nodeId: nodeId,
+                            sessionId: providerSid
+                        )
+                    }
+                }
+            }
+            if !foundMine {
+                // spawn 时的标记没写成功(离线等)— 本地仍知道自己在收集。
+                collectors.append([
+                    "userId": settings.userId,
+                    "sessionId": providerSid as Any,
+                    "startedAt": NSNull(),
+                    "mine": true,
+                    "alive": alive
+                ])
+                postCollectorMarker(
+                    settings: settings,
+                    remoteCanvasId: remoteCanvasId,
+                    nodeId: nodeId,
+                    sessionId: providerSid
+                )
+            }
+        }
+        root["collectors"] = collectors
+        guard JSONSerialization.isValidJSONObject(root),
+              let out = try? JSONSerialization.data(withJSONObject: root) else {
+            return data
+        }
+        return out
+    }
+
+    /// 异步补发收集会话标记(带 provider 会话 id)。失败无害 — 下一次列表
+    /// 刷新会再试;标记是 append-only,云端按成员取最新且合并 sessionId。
+    private static func postCollectorMarker(
+        settings: OnlineProxy.Settings,
+        remoteCanvasId: String,
+        nodeId: String,
+        sessionId: String?
+    ) {
+        var payload: [String: Any] = [
+            "teamId": settings.teamId,
+            "canvasId": remoteCanvasId
+        ]
+        if let sessionId, !sessionId.isEmpty {
+            payload["sessionId"] = sessionId
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            _ = OnlineProxy.callOnlineAPI(
+                method: "POST",
+                path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions/collectors",
+                body: body,
+                settings: settings
+            )
         }
     }
 
@@ -3875,6 +3975,20 @@ enum BoardAPI {
                     initialPrompt: instruction
                 )
                 recordContributionSession(surface.sessionId, forKey: registryKey)
+                // 立刻给云端投一条 presence 标记(此刻还没有 provider 会话 id;
+                // 链接后由列表代理的富化路径补发带 id 的标记)。
+                let snapshot = BoardLayoutStore.shared.snapshot()
+                let remoteCanvasId = snapshot.canvases
+                    .first(where: { $0.id == canvasId })?.remoteId ?? canvasId
+                let settings = OnlineProxy.loadSettings()
+                if !settings.teamId.isEmpty {
+                    postCollectorMarker(
+                        settings: settings,
+                        remoteCanvasId: remoteCanvasId,
+                        nodeId: nodeId,
+                        sessionId: nil
+                    )
+                }
                 response = StartResponse(
                     ok: true,
                     sessionId: surface.sessionId,

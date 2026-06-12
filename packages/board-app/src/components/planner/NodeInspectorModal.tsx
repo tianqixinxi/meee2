@@ -550,6 +550,8 @@ export function NodeInspectorModal({
             node={node}
             isOwner={role === 'owner'}
             teamMembers={teamMembers}
+            currentUserId={access?.actorId ?? null}
+            onOpenSession={onOpenSession}
             onGraphStateChanged={onGraphStateChanged}
           />
         )}

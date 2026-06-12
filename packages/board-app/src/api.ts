@@ -1681,11 +1681,21 @@ export function updatePlannerNodeContribution(
   )
 }
 
+/** 节点收集会话(成员维度):谁在这个节点上跑收集会话。`mine`/`alive` 由
+ *  本机代理富化;`sessionId` 链接后才有(自己的可本地打开,别人的开 dashboard)。 */
+export interface NodeCollector {
+  userId: string
+  sessionId?: string | null
+  startedAt?: string | null
+  mine?: boolean
+  alive?: boolean
+}
+
 export function fetchPlannerNodeContributions(
   canvasId: string,
   nodeId: string,
-): Promise<{ contributions: NodeContribution[] }> {
-  return jsonRequest<{ contributions: NodeContribution[] }>(
+): Promise<{ contributions: NodeContribution[]; collectors?: NodeCollector[]; dashboardBaseUrl?: string }> {
+  return jsonRequest<{ contributions: NodeContribution[]; collectors?: NodeCollector[]; dashboardBaseUrl?: string }>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
   )
 }

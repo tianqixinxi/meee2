@@ -6,7 +6,7 @@ import {
   submitPlannerNodeContribution,
   updatePlannerNodeContribution,
 } from '../../api'
-import type { TeamMember } from '../../api'
+import type { NodeCollector, TeamMember } from '../../api'
 import type { NodeContribution, PlannerGraphState, PlanningNode } from '../../types'
 
 // Teams · 多人增量贡献 — collect-list step 的共享账本面板。
@@ -25,6 +25,10 @@ interface Props {
   node: PlanningNode
   isOwner: boolean
   teamMembers: TeamMember[]
+  /** 当前用户 id(access.actorId)— 区分「我的」收集会话。 */
+  currentUserId?: string | null
+  /** 打开本地会话(自己的收集会话)。 */
+  onOpenSession?: (sessionId: string, nodeId: string) => void
   onGraphStateChanged?: (state: PlannerGraphState) => void
 }
 
@@ -50,12 +54,16 @@ export function NodeContributionsSection({
   node,
   isOwner,
   teamMembers,
+  currentUserId,
+  onOpenSession,
   onGraphStateChanged,
 }: Props) {
   const enabled = node.contribution?.policy === 'team'
   const itemLabel = node.contribution?.itemLabel?.trim() || '条目'
 
   const [items, setItems] = useState<NodeContribution[] | null>(null)
+  const [collectors, setCollectors] = useState<NodeCollector[]>([])
+  const [dashboardBaseUrl, setDashboardBaseUrl] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [note, setNote] = useState('')
@@ -80,6 +88,8 @@ export function NodeContributionsSection({
       .then((res) => {
         if (!mountedRef.current) return
         setItems(res.contributions ?? [])
+        setCollectors(res.collectors ?? [])
+        if (res.dashboardBaseUrl) setDashboardBaseUrl(res.dashboardBaseUrl)
         setLoadError(null)
       })
       .catch((err) => {
@@ -124,6 +134,7 @@ export function NodeContributionsSection({
         if (!mountedRef.current) return
         setCollectBusy(false)
         setCollectStatus(res.detail)
+        refresh()
       })
       .catch((err) => {
         if (!mountedRef.current) return
@@ -226,6 +237,54 @@ export function NodeContributionsSection({
               </button>
               {collectStatus && <small className="planner-contrib__collect-status">{collectStatus}</small>}
             </div>
+
+            {collectors.length > 0 && (
+              <ul className="planner-contrib__collectors">
+                {collectors.map((c) => {
+                  const member = memberById.get(c.userId)
+                  const who = member?.displayName ?? `${c.userId.slice(0, 8)}…`
+                  const mine = c.mine ?? (currentUserId != null && c.userId === currentUserId)
+                  const canOpenLocal = mine && !!c.sessionId && !!onOpenSession
+                  const remoteUrl = !mine && c.sessionId && dashboardBaseUrl
+                    ? `${dashboardBaseUrl.replace(/\/+$/, '')}/dashboard/sessions/${encodeURIComponent(c.sessionId)}`
+                    : null
+                  const clickable = canOpenLocal || !!remoteUrl
+                  return (
+                    <li key={c.userId}>
+                      <button
+                        type="button"
+                        className="planner-contrib__collector"
+                        disabled={!clickable}
+                        title={clickable
+                          ? (mine ? '打开我的收集会话' : `在网页查看 ${who} 的收集会话`)
+                          : '会话还没同步出可打开的链接'}
+                        onClick={() => {
+                          if (canOpenLocal && c.sessionId) {
+                            onOpenSession?.(c.sessionId, node.id)
+                          } else if (remoteUrl) {
+                            window.open(remoteUrl, '_blank', 'noreferrer')
+                          }
+                        }}
+                      >
+                        <span className="planner-contrib__avatar" title={who}>
+                          {member?.avatarUrl
+                            ? <img src={member.avatarUrl} alt="" />
+                            : <UserRound size={12} aria-hidden />}
+                        </span>
+                        <span className="planner-contrib__collector-name">
+                          {who}{mine ? ' (我)' : ''}
+                        </span>
+                        <span className={`planner-contrib__collector-state${c.alive ? ' is-alive' : ''}`}>
+                          {mine
+                            ? (c.alive ? '收集中' : '会话已结束')
+                            : c.startedAt ? `启动于 ${relativeTime(c.startedAt)}` : '收集中'}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
 
             {loadError ? (
               <p className="planner-contrib__error">{loadError}</p>
