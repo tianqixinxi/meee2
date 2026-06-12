@@ -118,6 +118,7 @@ public struct Meee2OnlineCallbackAPI {
         defaults.removeObject(forKey: "meee2Online")
         defaults.removeObject(forKey: "meee2EnabledSessionIds")
         defaults.removeObject(forKey: "meee2DisabledSessionIds")
+        defaults.removeObject(forKey: "meee2AuthExpired")
         defaults.set(teamId, forKey: "meee2TeamId")
         defaults.set(teamName, forKey: "meee2TeamName")
         defaults.set(userId, forKey: "meee2UserId")
@@ -127,8 +128,11 @@ public struct Meee2OnlineCallbackAPI {
         defaults.set(supabaseUrl, forKey: "meee2SupabaseUrl")
         defaults.set(supabaseKey, forKey: "meee2SupabaseKey")
         defaults.set(onlineBaseUrl, forKey: "meee2OnlineBaseUrl")
-        defaults.set(accessToken, forKey: "meee2OnlineAccessToken")
-        defaults.set(refreshToken, forKey: "meee2OnlineRefreshToken")
+        // Token 只落 settings.json（单一真相）。偏好域按二进制形态分裂
+        // （com.meee2.app / meee2），写进去的副本会在另一形态重新登录后
+        // 变成旧 token family，触发 Supabase reuse-detection 全家吊销。
+        defaults.removeObject(forKey: "meee2OnlineAccessToken")
+        defaults.removeObject(forKey: "meee2OnlineRefreshToken")
         if let teamsData {
             defaults.set(teamsData, forKey: "meee2Teams")
         }

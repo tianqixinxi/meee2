@@ -4312,7 +4312,12 @@ enum BoardAPI {
     static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
         let settings = readMeee2OnlineSettings()
         let defaults = UserDefaults.standard
-        let connected = defaults.bool(forKey: "meee2Connected")
+        // 凭证态以 settings.json 为准:authExpired 由任一二进制形态在 refresh
+        // 被吊销时写入,两种形态(bundled app / debug 二进制)都要立即退出
+        // 「已连接」展示,引导重新登录,而不是顶着 401 假装在线。
+        let authExpired = (settings["authExpired"] as? Bool) ?? false
+        let fileConnected = (settings["online"] as? Bool) ?? false
+        let connected = (defaults.bool(forKey: "meee2Connected") || fileConnected) && !authExpired
         let userName = connected
             ? defaultString(defaults, key: "meee2UserName", fallback: settings["userName"])
             : ""
@@ -4336,6 +4341,7 @@ enum BoardAPI {
 
         return jsonResponse(UserProfileDTO(
             connected: connected,
+            authExpired: authExpired,
             userId: userId,
             displayName: displayName,
             userName: userName,
@@ -4726,11 +4732,14 @@ enum BoardAPI {
         return components.url!
     }
 
-    private static func clearMeee2OnlineSettings() {
+    /// 主动断开：清空当前偏好域 + settings.json（含 token，文件是凭证唯一
+    /// 真相）。SettingsView 的 Disconnect 也走这里，保证两个入口语义一致。
+    static func clearMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         for key in [
             "meee2Connected",
             "meee2Online",
+            "meee2AuthExpired",
             "meee2TeamId",
             "meee2TeamName",
             "meee2Teams",
@@ -4784,14 +4793,18 @@ enum BoardAPI {
                 "role": team.role ?? ""
             ]
         }
+        // token / authExpired 从 settings.json 读回保留:偏好域不再存 token,
+        // 用旧缓存反写会把别的形态刚刷新的凭证冲回已吊销的 token family
+        let credentials = OnlineProxy.persistedCredentialState()
         let meee2Settings: [String: Any] = [
             "enabled": true,
             "online": defaults.bool(forKey: "meee2Connected"),
             "supabaseUrl": normalizedSupabaseUrl,
             "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
             "onlineBaseUrl": defaults.string(forKey: "meee2OnlineBaseUrl") ?? "",
-            "accessToken": defaults.string(forKey: "meee2OnlineAccessToken") ?? "",
-            "refreshToken": defaults.string(forKey: "meee2OnlineRefreshToken") ?? "",
+            "accessToken": credentials.accessToken,
+            "refreshToken": credentials.refreshToken,
+            "authExpired": credentials.authExpired,
             "teamId": defaults.string(forKey: "meee2TeamId") ?? "",
             "userId": defaults.string(forKey: "meee2UserId") ?? "",
             "userName": defaults.string(forKey: "meee2UserName") ?? "",

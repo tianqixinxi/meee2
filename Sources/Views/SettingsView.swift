@@ -65,12 +65,15 @@ public struct SettingsView: View {
     /// Supabase Key
     @AppStorage("meee2SupabaseKey") private var meee2SupabaseKey: String = ""
 
-    /// meee2 Online API base URL + user-scoped token. Supabase fields above
-    /// remain for backward compatibility while desktop traffic moves to the
-    /// Next.js control plane.
+    /// meee2 Online API base URL. Supabase fields above remain for backward
+    /// compatibility while desktop traffic moves to the Next.js control plane.
+    /// Access/refresh token 不进 AppStorage —— 偏好域按二进制形态分裂，
+    /// 唯一真相是 ~/.meee2/settings.json（见 OnlineProxy）。
     @AppStorage("meee2OnlineBaseUrl") private var meee2OnlineBaseUrl: String = ""
-    @AppStorage("meee2OnlineAccessToken") private var meee2OnlineAccessToken: String = ""
-    @AppStorage("meee2OnlineRefreshToken") private var meee2OnlineRefreshToken: String = ""
+
+    /// 服务端吊销了本地凭证（refresh 401）。由 OnlineProxy.markAuthExpired
+    /// 置位，重新登录后清除；UI 用它显示「登录已过期」提示。
+    @AppStorage("meee2AuthExpired") private var meee2AuthExpired: Bool = false
 
     /// Machine ID (auto-generated)
     private var meee2MachineId: String {
@@ -319,12 +322,22 @@ public struct SettingsView: View {
                     }
                 } else {
                     // Not connected state
-                    HStack {
-                        Image(systemName: "cloud.slash")
-                            .foregroundColor(.secondary)
-                        Text("Not connected")
-                            .foregroundColor(.secondary)
-                        Spacer()
+                    if meee2AuthExpired {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("Login expired — please reconnect to meee2.")
+                                .foregroundColor(.orange)
+                            Spacer()
+                        }
+                    } else {
+                        HStack {
+                            Image(systemName: "cloud.slash")
+                                .foregroundColor(.secondary)
+                            Text("Not connected")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
                     }
 
                     // Single connect button - opens browser with callback
@@ -363,8 +376,7 @@ public struct SettingsView: View {
                 meee2SupabaseUrl = normalizedMeee2OnlineSupabaseUrl(userInfo["supabaseUrl"] as? String ?? "")
                 meee2SupabaseKey = userInfo["supabaseKey"] as? String ?? ""
                 meee2OnlineBaseUrl = userInfo["onlineBaseUrl"] as? String ?? ""
-                meee2OnlineAccessToken = userInfo["accessToken"] as? String ?? ""
-                meee2OnlineRefreshToken = userInfo["refreshToken"] as? String ?? ""
+                // token 已由回调直接写入 settings.json，这里不再缓存副本
                 if let teamsData = userInfo["teamsData"] as? Data {
                     meee2TeamsData = teamsData
                 }
@@ -381,7 +393,14 @@ public struct SettingsView: View {
             do {
                 let result = try await verifyCode(code: connectionCode)
 
-                // Store configuration
+                // Store configuration — token 先落 settings.json（唯一真相），
+                // 后面 writeMeee2OnlineSettings 重写文件时会从文件读回保留
+                if let accessToken = result.access_token, !accessToken.isEmpty {
+                    OnlineProxy.persistTokens(
+                        accessToken: accessToken,
+                        refreshToken: result.refresh_token ?? ""
+                    )
+                }
                 meee2Connected = true
                 meee2TeamId = result.team.id
                 meee2TeamName = result.team.name
@@ -392,8 +411,6 @@ public struct SettingsView: View {
                 meee2SupabaseUrl = normalizedMeee2OnlineSupabaseUrl(result.supabase_url)
                 meee2SupabaseKey = result.supabase_key
                 meee2OnlineBaseUrl = result.online_base_url ?? ""
-                meee2OnlineAccessToken = result.access_token ?? ""
-                meee2OnlineRefreshToken = result.refresh_token ?? ""
                 storeMeee2OnlineTeams(result.teams ?? [result.team])
                 updateMeee2OnlineSyncActivation()
 
@@ -426,6 +443,7 @@ public struct SettingsView: View {
 
     private func disconnectMeee2Online() {
         meee2Connected = false
+        meee2AuthExpired = false
         meee2TeamId = ""
         meee2TeamName = ""
         meee2UserId = ""
@@ -435,14 +453,15 @@ public struct SettingsView: View {
         meee2SupabaseUrl = ""
         meee2SupabaseKey = ""
         meee2OnlineBaseUrl = ""
-        meee2OnlineAccessToken = ""
-        meee2OnlineRefreshToken = ""
         meee2TeamsData = Data()
         meee2SessionTeamIdsData = Data()
         UserDefaults.standard.removeObject(forKey: "meee2Online")
         UserDefaults.standard.removeObject(forKey: "meee2EnabledSessionIds")
         UserDefaults.standard.removeObject(forKey: "meee2DisabledSessionIds")
-        updateMeee2OnlineSyncActivation()
+        // settings.json 是凭证唯一真相,断开必须把文件里的 token 一并清掉,
+        // 否则其它二进制形态(读同一份文件)会继续带旧凭证调用
+        BoardAPI.clearMeee2OnlineSettings()
+        Meee2OnlinePusher.shared.refreshActivation()
     }
 
     private var meee2DashboardUrl: URL? {
@@ -502,6 +521,9 @@ public struct SettingsView: View {
     private func writeMeee2OnlineSettings() {
         guard meee2Connected else { return }
         let normalizedSupabaseUrl = normalizedMeee2OnlineSupabaseUrl(meee2SupabaseUrl)
+        // token / authExpired 从 settings.json 读回保留：本视图没有 token 的
+        // 内存副本（凭证唯一真相是文件），整文件重写不能把它们冲掉
+        let credentials = OnlineProxy.persistedCredentialState()
 
         let settings: [String: Any] = [
                 "meee2": [
@@ -510,8 +532,9 @@ public struct SettingsView: View {
                 "supabaseUrl": normalizedSupabaseUrl,
                 "supabaseKey": meee2SupabaseKey,
                 "onlineBaseUrl": meee2OnlineBaseUrl,
-                "accessToken": meee2OnlineAccessToken,
-                "refreshToken": meee2OnlineRefreshToken,
+                "accessToken": credentials.accessToken,
+                "refreshToken": credentials.refreshToken,
+                "authExpired": credentials.authExpired,
                 "teamId": meee2TeamId,
                 "userId": meee2UserId,
                 "userName": meee2UserName,
