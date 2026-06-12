@@ -45,14 +45,22 @@ export function ArtifactViewTabs({
     <div className="artifact-view-tabs" data-compact={compact}>
       {views.length > 1 && (
         <div className="artifact-view-tabs__list" role="tablist" aria-label="Artifact views">
+          {/* 卡片上下文里整张节点卡的 click 会打开 inspector,tab 点击必须
+              stopPropagation(click + pointerdown,后者还挡 React Flow 拖拽),
+              否则「切视图」永远变成「开检查器」。nodrag 同理。 */}
           {views.map((item) => (
             <button
               key={item.view.id}
               type="button"
               role="tab"
               aria-selected={item.view.id === active.view.id}
-              className={item.view.id === active.view.id ? 'is-active' : undefined}
-              onClick={() => setSelectedId(item.view.id)}
+              className={`nodrag${item.view.id === active.view.id ? ' is-active' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                setSelectedId(item.view.id)
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
             >
               {item.view.title}
             </button>

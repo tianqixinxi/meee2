@@ -52,6 +52,15 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
         }
     }
 
+    func deliverPrompt(id: String, text: String) -> PromptDeliveryOutcome {
+        (try? runOnMain {
+            guard let session = resolveSession(id: id) else {
+                return PromptDeliveryOutcome.sessionNotFound
+            }
+            return session.deliverPrompt(text) ? .delivered : .busy
+        }) ?? .sessionNotFound
+    }
+
     func snapshot(id: String) -> TerminalSessionSnapshot? {
         try? runOnMain {
             resolveSession(id: id)?.snapshot()
@@ -231,6 +240,9 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var status = InternalTerminalLifecycle.starting.rawValue
     private var didSendCommand = false
     private var didSendInitialPrompt = false
+    /// deliverPrompt 的提交窗口守卫:打字到 Return 落键之间为 true,期间的
+    /// 重复投递被拒绝(P2 — 防止两条指令拼进同一个 composer)。
+    private var pendingPromptSubmit = false
     private var detached = false
     private var lastLayoutFrame: NSRect = .zero
 
@@ -385,6 +397,36 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         terminalView.sendText(text)
         touch()
         logPerf("write_input", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
+    }
+
+    /// 打字 + 提交。writeInput 的裸 "\n" 在 agent TUI 的 composer 里是插入
+    /// 换行而非提交(实测:artifact sync 复用投递的指令一直躺在输入框里,
+    /// 会话纹丝不动);真正的提交是 Return 键。复刻 initial-prompt 投递的
+    /// 提交节奏:打字后 400ms 按 Return,150ms 后补一次(首次可能被渲染吞)。
+    /// 返回 false = 上一条 prompt 还在提交窗口内(P2:此刻再打字会把两条
+    /// 文本拼进同一个 composer,被第一个 Return 当一条畸形请求提交)。
+    func deliverPrompt(_ text: String) -> Bool {
+        guard !detached, !pendingPromptSubmit else { return false }
+        pendingPromptSubmit = true
+        let startedAt = Date()
+        terminalView.sendText(text)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
+            guard let self else { return }
+            guard !self.detached else {
+                self.pendingPromptSubmit = false
+                return
+            }
+            self.pressReturnKey(reason: "deliver_prompt_submit")
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+                guard let self else { return }
+                self.pendingPromptSubmit = false
+                guard !self.detached else { return }
+                self.pressReturnKey(reason: "deliver_prompt_submit_retry")
+            }
+        }
+        touch()
+        logPerf("deliver_prompt", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
+        return true
     }
 
     func fitToCurrentSize() {
