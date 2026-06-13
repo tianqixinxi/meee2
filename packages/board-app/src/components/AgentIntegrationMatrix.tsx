@@ -19,6 +19,7 @@ import type {
 } from '../types'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
 import { ALL_INTEGRATION_VIEW_SCHEMAS } from '../integrations/viewSchemas'
+import { Notice } from './feedback/Notice'
 
 /** Integrations whose backend exposes a browse endpoint (PRs / docs / …). */
 const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
@@ -84,10 +85,10 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
-  /** Transient toast for the one-click "Complete auth" flow — shows
+  /** Persistent Notice for the one-click "Complete auth" flow — shows
    *  "Browser opening…" + fallback link, auto-clears once a re-scan flips
    *  the row to `connected`. */
-  const [authToast, setAuthToast] = useState<
+  const [authNotice, setAuthNotice] = useState<
     { id: string; message: string; authUrl?: string | null } | null
   >(null)
   /** PRD §1 Featured/Other 分组:Other 默认折叠(514 个 connector 视觉太重)。 */
@@ -190,10 +191,10 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const handleCompleteAuth = (id: string) => {
     setBusyId(id)
     setError(null)
-    setAuthToast(null)
+    setAuthNotice(null)
     completeIntegrationAuth(id)
       .then((result) => {
-        setAuthToast({ id, message: result.message, authUrl: result.authUrl })
+        setAuthNotice({ id, message: result.message, authUrl: result.authUrl })
         if (!result.spawned) return // bail polling — nothing to wait for
         // Poll re-scan a few times — OAuth usually completes within ~15s of
         // browser auth-click; we don't want the user staring at a stale row.
@@ -209,8 +210,8 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               if (stillNeedsAuth && attempts < 10) {
                 setTimeout(poll, 3000)
               } else if (!stillNeedsAuth) {
-                setAuthToast({ id, message: `${id} ${t('integrations.connected').toLowerCase()}.` })
-                setTimeout(() => setAuthToast(null), 4000)
+                setAuthNotice({ id, message: `${id} ${t('integrations.connected').toLowerCase()}.` })
+                setTimeout(() => setAuthNotice(null), 4000)
               }
             })
             .catch(() => { /* best-effort — manual Re-scan still works */ })
@@ -464,13 +465,18 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
         </>
       )}
 
-      {authToast && (
-        <div className="agent-matrix__auth-toast" role="status">
-          <Sparkles size={13} aria-hidden />
-          <span>{authToast.message}</span>
-          {authToast.authUrl && (
+      {authNotice && (
+        <Notice
+          tone="warning"
+          placement="panel"
+          icon={<Sparkles size={13} />}
+          onDismiss={() => setAuthNotice(null)}
+          className="agent-matrix__auth-notice"
+        >
+          <span>{authNotice.message}</span>
+          {authNotice.authUrl && (
             <a
-              href={authToast.authUrl}
+              href={authNotice.authUrl}
               target="_blank"
               rel="noreferrer noopener"
               className="agent-matrix__auth-link"
@@ -478,15 +484,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               {t('integrations.openAuthPage')}
             </a>
           )}
-          <button
-            type="button"
-            className="agent-matrix__auth-dismiss"
-            onClick={() => setAuthToast(null)}
-            aria-label={t('integrations.dismiss')}
-          >
-            <X size={11} aria-hidden />
-          </button>
-        </div>
+        </Notice>
       )}
 
       {browsingId && (
