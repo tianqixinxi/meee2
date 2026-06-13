@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../lib/i18n'
 import { WorkspaceMonitor } from './WorkspaceMonitor'
@@ -26,7 +26,7 @@ const canvas = {
   teamId: null,
 }
 
-describe('WorkspaceMonitor density modes', () => {
+describe('WorkspaceMonitor compact view', () => {
   beforeEach(() => {
     apiMocks.fetchPlannerWorkspaceMonitor.mockResolvedValue({
       generatedAt: '2026-05-31T05:00:00.000Z',
@@ -55,7 +55,7 @@ describe('WorkspaceMonitor density modes', () => {
     })
   })
 
-  it('uses compact for scan-only fields and comfortable for diagnostic context', async () => {
+  it('renders compact scan fields without a density switcher', async () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
@@ -76,17 +76,9 @@ describe('WorkspaceMonitor density modes', () => {
     expect(screen.queryByText('member-a')).not.toBeInTheDocument()
     expect(screen.queryByText('AI recap says owner needs updated evidence before publishing.')).not.toBeInTheDocument()
     expect(screen.queryByText('Missing source links')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Comfortable' }))
-
-    await waitFor(() => {
-      expect(screen.getByText('member-a')).toBeInTheDocument()
-    })
-    expect(screen.getByText('Recap')).toBeInTheDocument()
-    expect(screen.getByText('AI recap says owner needs updated evidence before publishing.')).toBeInTheDocument()
-    expect(screen.getByText('Attention')).toBeInTheDocument()
-    expect(screen.getByText('Missing source links')).toBeInTheDocument()
-    expect(screen.getByText('Open item')).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Density' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Compact' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Comfortable' })).not.toBeInTheDocument()
   })
 
   it('keeps meee2 AI controls outside the monitor table toolbar', async () => {
