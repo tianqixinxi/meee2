@@ -238,9 +238,11 @@ function MonitorCard({
   const title = item.nodeTitle ?? item.summary
   const summary = item.summary.trim()
   const showSummary = summary.length > 0 && summary !== title
-  const blockers = item.blockers.filter((blocker) => blocker.trim().length > 0)
-  const attention = blockers.length > 0 ? blockers.join('; ') : item.nextAction?.trim()
+  const rawBlockers = item.blockers.filter((blocker) => blocker.trim().length > 0)
+  const blockers = rawBlockers.filter((blocker) => !isPlaceholderBlocker(blocker))
   const progress = item.nextAction?.trim()
+  const onlyPlaceholderBlockers = rawBlockers.length > 0 && blockers.length === 0
+  const attention = blockers.length > 0 ? blockers.join('; ') : onlyPlaceholderBlockers ? '' : progress
   const awaiting = formatAwaitingDuration(item.awaitingInputSince, t)
   const openLabel = monitorOpenLabel(item, t)
   return (
@@ -324,6 +326,10 @@ function matchesSearch(item: PlannerMonitorItem, term: string): boolean {
     item.proposalStatus ?? '',
     ...item.blockers,
   ].some((value) => value.toLowerCase().includes(term))
+}
+
+function isPlaceholderBlocker(value: string): boolean {
+  return value.trim().toLowerCase() === 'blocked: no reason was provided by the session.'
 }
 
 function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): boolean {

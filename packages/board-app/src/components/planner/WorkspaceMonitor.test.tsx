@@ -51,6 +51,27 @@ describe('WorkspaceMonitor comfortable view', () => {
         updatedAt: '2026-05-31T04:45:00.000Z',
         nextAction: '2/4 nodes',
         awaitingInputSince: '2026-05-31T03:45:00.000Z',
+      }, {
+        id: 'monitor-node-placeholder',
+        kind: 'node',
+        canvasId: 'canvas-1',
+        canvasTitle: 'Launch Monitor',
+        nodeId: 'node-placeholder',
+        nodeTitle: 'Placeholder blocker node',
+        sessionId: null,
+        deliveryId: null,
+        proposalId: null,
+        proposalStatus: null,
+        summary: 'Blocked without a useful reason.',
+        runState: 'blocked',
+        blockers: ['Blocked: no reason was provided by the session.'],
+        needsOwnerReview: false,
+        doerId: null,
+        riskRank: 0,
+        evidenceCount: 0,
+        updatedAt: '2026-05-31T04:30:00.000Z',
+        nextAction: '1/2 nodes',
+        awaitingInputSince: null,
       }],
     })
   })
@@ -70,15 +91,17 @@ describe('WorkspaceMonitor comfortable view', () => {
 
     expect(await screen.findByText('Research launch sentiment')).toBeInTheDocument()
     expect(screen.getAllByText('Launch Monitor').length).toBeGreaterThan(0)
-    expect(screen.getByText('blocked')).toBeInTheDocument()
+    expect(screen.getAllByText('blocked').length).toBeGreaterThan(0)
     expect(screen.getByText('3 evidence')).toBeInTheDocument()
     expect(screen.getByText('2/4 nodes')).toBeInTheDocument()
     expect(screen.getByText('member-a')).toBeInTheDocument()
-    expect(screen.getByText('Recap')).toBeInTheDocument()
+    expect(screen.getAllByText('Recap').length).toBeGreaterThan(0)
     expect(screen.getByText('AI recap says owner needs updated evidence before publishing.')).toBeInTheDocument()
     expect(screen.getByText('Attention')).toBeInTheDocument()
     expect(screen.getByText('Missing source links')).toBeInTheDocument()
-    expect(screen.getByText('Open item')).toBeInTheDocument()
+    expect(screen.getAllByText('Open item').length).toBeGreaterThan(0)
+    expect(screen.getByText('Placeholder blocker node')).toBeInTheDocument()
+    expect(screen.queryByText('Blocked: no reason was provided by the session.')).not.toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Density' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Compact' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Comfortable' })).not.toBeInTheDocument()
