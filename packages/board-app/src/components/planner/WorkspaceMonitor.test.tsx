@@ -26,7 +26,7 @@ const canvas = {
   teamId: null,
 }
 
-describe('WorkspaceMonitor compact view', () => {
+describe('WorkspaceMonitor comfortable view', () => {
   beforeEach(() => {
     apiMocks.fetchPlannerWorkspaceMonitor.mockResolvedValue({
       generatedAt: '2026-05-31T05:00:00.000Z',
@@ -55,7 +55,7 @@ describe('WorkspaceMonitor compact view', () => {
     })
   })
 
-  it('renders compact scan fields without a density switcher', async () => {
+  it('renders comfortable diagnostic fields without a density switcher', async () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
@@ -73,9 +73,12 @@ describe('WorkspaceMonitor compact view', () => {
     expect(screen.getByText('blocked')).toBeInTheDocument()
     expect(screen.getByText('3 evidence')).toBeInTheDocument()
     expect(screen.getByText('2/4 nodes')).toBeInTheDocument()
-    expect(screen.queryByText('member-a')).not.toBeInTheDocument()
-    expect(screen.queryByText('AI recap says owner needs updated evidence before publishing.')).not.toBeInTheDocument()
-    expect(screen.queryByText('Missing source links')).not.toBeInTheDocument()
+    expect(screen.getByText('member-a')).toBeInTheDocument()
+    expect(screen.getByText('Recap')).toBeInTheDocument()
+    expect(screen.getByText('AI recap says owner needs updated evidence before publishing.')).toBeInTheDocument()
+    expect(screen.getByText('Attention')).toBeInTheDocument()
+    expect(screen.getByText('Missing source links')).toBeInTheDocument()
+    expect(screen.getByText('Open item')).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Density' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Compact' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Comfortable' })).not.toBeInTheDocument()

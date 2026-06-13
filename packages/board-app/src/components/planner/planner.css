@@ -6106,6 +6106,11 @@
   padding-bottom: 6px;
 }
 
+.planner-monitor__kanban[data-density="comfortable"] {
+  grid-template-columns: repeat(5, minmax(250px, 1fr));
+  gap: 12px;
+}
+
 .planner-monitor-lane {
   min-width: 190px;
   min-height: 0;
@@ -6116,6 +6121,10 @@
   border: 1px solid rgba(168, 165, 155, 0.16);
   border-radius: var(--radius-sm);
   background: rgba(28, 29, 27, 0.58);
+}
+
+.planner-monitor__kanban[data-density="comfortable"] .planner-monitor-lane {
+  min-width: 250px;
 }
 
 .planner-monitor-lane__header {
@@ -6161,6 +6170,11 @@
   padding: 6px;
 }
 
+.planner-monitor__kanban[data-density="comfortable"] .planner-monitor-lane__items {
+  gap: 9px;
+  padding: 9px;
+}
+
 .planner-monitor-card {
   display: grid;
   gap: 3px;
@@ -6173,6 +6187,11 @@
   color: var(--text);
   text-align: left;
   cursor: pointer;
+}
+
+.planner-monitor-card--comfortable {
+  gap: 7px;
+  padding: 10px;
 }
 
 .planner-monitor-card:hover,
@@ -6255,13 +6274,41 @@
 }
 
 .planner-monitor-card p {
-  overflow: hidden;
   margin: 0;
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.planner-monitor-card__summary,
+.planner-monitor-card__attention {
+  gap: 2px;
+}
+
+.planner-monitor-card__summary strong,
+.planner-monitor-card__attention strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.planner-monitor-card__attention {
+  padding-left: 8px;
+  border-left: 2px solid rgba(168, 165, 155, 0.22);
+}
+
+.planner-monitor-card__attention.is-blocker {
+  border-left-color: rgba(194, 106, 106, 0.72);
+}
+
+.planner-monitor-card__attention.is-blocker {
+  color: #edb0b0;
 }
 
 .planner-monitor-card__footer {
@@ -6275,6 +6322,14 @@
 
 .planner-monitor-card__footer .has-evidence {
   color: var(--accent-hover);
+}
+
+.planner-monitor-card__wait {
+  color: var(--warning);
+}
+
+.planner-monitor-card__open-target {
+  margin-left: auto;
 }
 
 .planner-monitor__empty {

@@ -171,7 +171,7 @@ export function WorkspaceMonitor({
             <span>{t('monitor.loading')}</span>
           </div>
         ) : (
-          <div className="planner-monitor__kanban" data-density="compact">
+          <div className="planner-monitor__kanban" data-density="comfortable">
             {lanes.map((lane) => {
               const collapsed = collapsedLanes.includes(lane.key)
               const Icon = lane.icon
@@ -236,12 +236,17 @@ function MonitorCard({
         : stateIcons[item.runState ?? 'ready'] ?? Clock3
   const evidence = evidenceCount(item)
   const title = item.nodeTitle ?? item.summary
+  const summary = item.summary.trim()
+  const showSummary = summary.length > 0 && summary !== title
+  const blockers = item.blockers.filter((blocker) => blocker.trim().length > 0)
+  const attention = blockers.length > 0 ? blockers.join('; ') : item.nextAction?.trim()
   const progress = item.nextAction?.trim()
+  const awaiting = formatAwaitingDuration(item.awaitingInputSince, t)
   const openLabel = monitorOpenLabel(item, t)
   return (
     <button
       type="button"
-      className={`planner-monitor-card planner-monitor-card--compact planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
+      className={`planner-monitor-card planner-monitor-card--comfortable planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
       onClick={() => onOpenItem(item)}
       aria-label={`${openLabel}: ${title}`}
       title={`${openLabel}: ${item.canvasTitle}`}
@@ -256,18 +261,40 @@ function MonitorCard({
       <h3>{title}</h3>
       <div className="planner-monitor-card__meta">
         <span>{monitorCanvasName(item.canvasTitle)}</span>
+        <span>{item.doerId || t('monitor.unassigned')}</span>
         <span>{statusLabel(item, t)}</span>
       </div>
+      {showSummary && (
+        <p className="planner-monitor-card__summary">
+          <strong>{t('monitor.recap')}</strong>
+          {summary}
+        </p>
+      )}
+      {attention && (
+        <p className={`planner-monitor-card__attention${blockers.length > 0 ? ' is-blocker' : ''}`}>
+          <strong>{blockers.length > 0 ? t('monitor.attention') : t('monitor.progress')}</strong>
+          {attention}
+        </p>
+      )}
       <div className="planner-monitor-card__footer">
         <span className={evidence > 0 ? 'has-evidence' : ''}>
           {t('monitor.evidenceCount', { count: String(evidence) })}
         </span>
-        {progress && (
+        {progress && blockers.length > 0 && (
           <span className="planner-monitor-card__next">
             <Signpost size={11} aria-hidden />
             {progress}
           </span>
         )}
+        {awaiting && (
+          <span className="planner-monitor-card__wait">
+            <Clock3 size={11} aria-hidden />
+            {awaiting}
+          </span>
+        )}
+        <span className="planner-monitor-card__open-target">
+          {openLabel}
+        </span>
       </div>
     </button>
   )
@@ -400,6 +427,21 @@ function formatRelativeTimestamp(value?: string | null): string {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h`
   return `${Math.round(hours / 24)}d`
+}
+
+function formatAwaitingDuration(value: string | null | undefined, t: Translator): string {
+  if (!value) return ''
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return ''
+  const minutes = Math.max(1, Math.round((Date.now() - timestamp) / (1000 * 60)))
+  if (minutes < 60) {
+    return t('monitor.waiting', { duration: `${minutes}m` })
+  }
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) {
+    return t('monitor.waiting', { duration: `${hours}h` })
+  }
+  return t('monitor.waiting', { duration: `${Math.round(hours / 24)}d` })
 }
 
 function monitorCanvasName(name: string): string {
