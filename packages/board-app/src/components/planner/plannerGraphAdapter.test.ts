@@ -141,4 +141,98 @@ describe('buildPlannerGraph — revealed output artifacts', () => {
       expect.objectContaining({ source: artifactNode?.id, target: 'consumer' }),
     ]))
   })
+
+  it('places an output artifact beyond a wide producer node', () => {
+    const producer = node({
+      id: 'producer',
+      title: 'Wide Producer',
+      layout: { x: 0, y: 0, width: 520, height: 238 },
+      schema: { inputs: [], outputs: ['repo://docs/prd/spec.md'], goal: '' },
+    })
+    const graph = buildPlannerGraph({
+      nodes: [producer],
+      states: [],
+      mode: 'design',
+      artifacts: [artifact({ id: 'art-1', nodeId: 'producer', reference: 'repo://docs/prd/spec.md' })],
+      ioArtifactVisibility: {
+        producer: { inputs: [], outputs: ['repo://docs/prd/spec.md'] },
+      },
+    })
+
+    const artifactNode = graph.nodes.find((item) => item.id.startsWith('io-artifact-producer-output-'))
+    expect(artifactNode).toBeTruthy()
+    expect(artifactNode?.position.x).toBeGreaterThanOrEqual(568)
+  })
+
+  it('moves an output artifact away from an occupied right-side node', () => {
+    const producer = node({
+      id: 'producer',
+      title: 'Producer',
+      layout: { x: 0, y: 0, width: 320, height: 238 },
+      schema: { inputs: [], outputs: ['repo://docs/prd/spec.md'], goal: '' },
+    })
+    const neighbor = node({
+      id: 'neighbor',
+      title: 'Neighbor',
+      layout: { x: 350, y: 0, width: 320, height: 238 },
+      schema: { inputs: [], outputs: [], goal: '' },
+    })
+    const graph = buildPlannerGraph({
+      nodes: [producer, neighbor],
+      states: [],
+      mode: 'design',
+      artifacts: [artifact({ id: 'art-1', nodeId: 'producer', reference: 'repo://docs/prd/spec.md' })],
+      ioArtifactVisibility: {
+        producer: { inputs: [], outputs: ['repo://docs/prd/spec.md'] },
+      },
+    })
+
+    const artifactNode = graph.nodes.find((item) => item.id.startsWith('io-artifact-producer-output-'))
+    const shiftedNeighbor = graph.nodes.find((item) => item.id === 'neighbor')
+    expect(artifactNode).toBeTruthy()
+    expect(overlaps(rectFor(artifactNode!, 240, 120), { x: 0, y: 0, width: 320, height: 238 })).toBe(false)
+    expect(shiftedNeighbor?.position.x).toBeGreaterThan(350)
+    expect(overlaps(rectFor(artifactNode!, 240, 120), rectFor(shiftedNeighbor!, 320, 238))).toBe(false)
+  })
+
+  it('adds temporary horizontal spacing for downstream nodes when an output artifact is visible', () => {
+    const producer = node({
+      id: 'producer',
+      title: 'Producer',
+      layout: { x: 0, y: 0, width: 640, height: 238 },
+      schema: { inputs: [], outputs: ['repo://docs/prd/spec.md'], goal: '' },
+    })
+    const consumer = node({
+      id: 'consumer',
+      title: 'Consumer',
+      layout: { x: 760, y: 0, width: 640, height: 238 },
+      schema: { inputs: ['prd'], outputs: [], goal: '' },
+      dependsOnNodeIds: ['producer'],
+    })
+    const graph = buildPlannerGraph({
+      nodes: [producer, consumer],
+      states: [],
+      mode: 'design',
+      artifacts: [artifact({ id: 'art-1', nodeId: 'producer', reference: 'repo://docs/prd/spec.md' })],
+      ioArtifactVisibility: {
+        producer: { inputs: [], outputs: ['repo://docs/prd/spec.md'] },
+      },
+    })
+
+    const shiftedConsumer = graph.nodes.find((item) => item.id === 'consumer')
+    const artifactNode = graph.nodes.find((item) => item.id.startsWith('io-artifact-producer-output-'))
+    expect(shiftedConsumer?.position.x).toBeGreaterThan(760)
+    expect(overlaps(rectFor(artifactNode!, 240, 120), rectFor(shiftedConsumer!, 640, 238))).toBe(false)
+  })
 })
+
+function rectFor(item: { position: { x: number; y: number } }, width: number, height: number) {
+  return { x: item.position.x, y: item.position.y, width, height }
+}
+
+function overlaps(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+}

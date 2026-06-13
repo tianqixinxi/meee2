@@ -207,7 +207,11 @@ describe('ArtifactsView global index', () => {
             createdAt: '2026-06-03T08:00:00Z',
             typedPayload: {
               type: 'markdown',
-              preview: '# Team Review\nReady for review',
+              preview: `# Team Review
+Ready for review
+
+${'Detailed team review context. '.repeat(30)}
+SHOULD_NOT_APPEAR_IN_DETAIL`,
             },
           }),
           artifact({
@@ -294,7 +298,7 @@ describe('ArtifactsView global index', () => {
       expect((await screen.findAllByText('payload://release-v2')).length).toBeGreaterThan(0)
 
       const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
-      fireEvent.click(within(detail).getByRole('button', { name: /Open in Canvas/ }))
+      fireEvent.click(within(detail).getByRole('button', { name: /Reveal source/ }))
 
       expect(opened).toEqual([
         expect.objectContaining({
@@ -388,7 +392,7 @@ describe('ArtifactsView global index', () => {
 
     expect((await screen.findAllByText('Legacy Kanban Payload')).length).toBeGreaterThan(0)
     expect(await screen.findByText('待处理')).toBeInTheDocument()
-    expect(screen.getByText('Scope fallback')).toBeInTheDocument()
+    expect(screen.queryByText('Scope fallback')).not.toBeInTheDocument()
 
     const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
     fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
@@ -397,5 +401,21 @@ describe('ArtifactsView global index', () => {
     expect(within(modal).getByText('已生成')).toBeInTheDocument()
     expect(within(modal).getByText('Render typed preview')).toBeInTheDocument()
     expect(within(modal).queryByText(/"columns"/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the detail preview summarized while the content modal renders the full payload', async () => {
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+
+    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    expect(await within(detail).findByRole('heading', { name: 'Team Review Notes' })).toBeInTheDocument()
+    expect(within(detail).queryByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).not.toBeInTheDocument()
+
+    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    expect(within(modal).getByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).toBeInTheDocument()
   })
 })

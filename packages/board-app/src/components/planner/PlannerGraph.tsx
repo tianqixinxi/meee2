@@ -2931,9 +2931,19 @@ function mergeGraphNodesPreservingPositions(
   return nextNodes.map((nextNode) => {
     const current = currentById.get(nextNode.id)
     if (!current) return nextNode
+    const shouldUseProgramPosition =
+      !current.dragging &&
+      isPlannerGraphNode(nextNode) &&
+      isPlannerGraphNode(current) &&
+      (
+        nextNode.data.virtual === true ||
+        current.data.virtual === true ||
+        nextNode.data.autoSpaced === true ||
+        current.data.autoSpaced === true
+      )
     return {
       ...nextNode,
-      position: current.position,
+      position: shouldUseProgramPosition ? nextNode.position : current.position,
       selected: current.selected,
       dragging: current.dragging,
       // 宽高自由调整 — NodeResizer 把用户调整后的尺寸记在 width/height 上。和

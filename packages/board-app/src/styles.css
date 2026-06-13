@@ -1996,7 +1996,8 @@ textarea {
 .artifacts-filter,
 .artifacts-open-button,
 .artifacts-card__actions button,
-.artifacts-link-button {
+.artifacts-link-button,
+.artifacts-load-button {
   border: 1px solid rgba(168, 165, 155, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(36, 36, 33, 0.68);
@@ -2016,7 +2017,8 @@ textarea {
 .artifacts-card__actions button:hover,
 .artifacts-card__actions button.is-active,
 .artifacts-link-button:hover,
-.artifacts-open-button:hover {
+.artifacts-open-button:hover,
+.artifacts-load-button:hover {
   background: rgba(255, 255, 255, 0.065);
   color: var(--text);
 }
@@ -2199,10 +2201,12 @@ textarea {
   height: 30px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
   padding: 0 10px;
   font-size: 12px;
   font-weight: 700;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -2702,9 +2706,51 @@ textarea {
 
 .artifacts-link-button {
   height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 0 8px;
   font-size: 11px;
   font-weight: 700;
+  line-height: 1;
+}
+
+.artifacts-load-button {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border-color: rgba(231, 188, 106, 0.34);
+  background: rgba(231, 188, 106, 0.12);
+  color: #e6c478;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.artifacts-load-button:hover {
+  border-color: rgba(231, 188, 106, 0.5);
+  background: rgba(231, 188, 106, 0.18);
+  color: #f0d493;
+}
+
+.artifacts-open-button svg,
+.artifacts-link-button svg,
+.artifacts-load-button svg,
+.artifacts-card__actions button svg {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.artifacts-open-button span,
+.artifacts-link-button span,
+.artifacts-load-button span,
+.artifacts-card__actions button span {
+  line-height: 1;
 }
 
 .artifacts-link-button.danger {
@@ -2739,6 +2785,51 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.artifacts-preview--summary {
+  max-height: 132px;
+  overflow: hidden;
+}
+
+.artifacts-summary-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.artifacts-summary-rows {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.artifacts-summary-rows div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(80px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid rgba(168, 165, 155, 0.1);
+  border-radius: var(--radius-sm);
+  background: rgba(12, 12, 11, 0.2);
+}
+
+.artifacts-summary-rows dt,
+.artifacts-summary-rows dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.artifacts-summary-rows dt {
+  color: var(--text-faint);
+  font-weight: 760;
+}
+
+.artifacts-summary-rows dd {
+  color: var(--text-dim);
 }
 
 .artifacts-versions label {
@@ -13893,6 +13984,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-card__actions button.is-active,
 :root[data-theme="light"] .artifacts-link-button:hover,
 :root[data-theme="light"] .artifacts-open-button:hover,
+:root[data-theme="light"] .artifacts-load-button:hover,
 :root[data-theme="light"] .artifacts-focus button:hover,
 :root[data-theme="light"] .artifacts-type-button:hover,
 :root[data-theme="light"] .artifacts-type-button.is-active,
@@ -13906,6 +13998,18 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   background: var(--accent-subtle);
   border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
   color: var(--text);
+}
+
+:root[data-theme="light"] .artifacts-load-button {
+  border-color: rgba(169, 116, 28, 0.32);
+  background: rgba(169, 116, 28, 0.1);
+  color: #8b5f14;
+}
+
+:root[data-theme="light"] .artifacts-load-button:hover {
+  border-color: rgba(169, 116, 28, 0.44);
+  background: rgba(169, 116, 28, 0.15);
+  color: #6f4a0b;
 }
 
 :root[data-theme="light"] .workspace-rail {
