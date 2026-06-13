@@ -1,7 +1,7 @@
-# meee2 web chat bridge
+# Meee2 web chat bridge
 
 Chrome / Edge extension that mirrors your ChatGPT (and soon Claude.ai)
-web conversations into the **local meee2 board**, which then propagates
+web conversations into the **local Meee2 board**, which then propagates
 them to **meee2** through the existing push pipeline.
 
 ## How it works
@@ -16,7 +16,7 @@ chatgpt.com tab
        │
        │ POST /api/external-sessions/upsert
        ▼
-  meee2 BoardServer (localhost:9876)
+  Meee2 BoardServer (localhost:9876)
        │
        ├─ ExternalChatPlugin keeps in-memory store
        ├─ broadcastStateChanged → meee2 webui card appears

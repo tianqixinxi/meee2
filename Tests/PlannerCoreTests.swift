@@ -100,7 +100,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertThrowsError(try service.applyNodeChange(nodes: nodes, proposal: proposal)) { error in
             XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
         }
-        XCTAssertEqual(nodes[0].title, "meee2 AI LLM Spike")
+        XCTAssertEqual(nodes[0].title, "Meee2 AI LLM Spike")
     }
 
     func testApplyNodeChangeAddsAndUpdatesApprovedProposal() throws {

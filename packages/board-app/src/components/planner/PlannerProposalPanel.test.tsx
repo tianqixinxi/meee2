@@ -49,7 +49,7 @@ describe('PlannerProposalPanel empty canvas intake', () => {
             body: '输入分析结论和引用来源，输出结构化飞书文档草稿。',
           },
         ],
-        prompt: 'Draft a concrete meee2 canvas for public sentiment collection and Feishu document output.',
+        prompt: 'Draft a concrete Meee2 canvas for public sentiment collection and Feishu document output.',
       },
     })))
 
@@ -91,9 +91,9 @@ describe('PlannerProposalPanel empty canvas intake', () => {
     expect(screen.queryByText(/\*\*Input:/)).not.toBeInTheDocument()
     expect(screen.queryByText('What should I optimize for?')).not.toBeInTheDocument()
     const prompt = JSON.stringify(apiMocks.streamAssistantChat.mock.calls[0]?.[0]?.messages ?? [])
-    expect(prompt).toContain('A meee2 canvas can be a workflow, monitor, or scene')
+    expect(prompt).toContain('A Meee2 canvas can be a workflow, monitor, or scene')
     expect(prompt).toContain('Scene canvas rule')
-    expect(prompt).not.toContain('A meee2 canvas is a graph of executable node cards connected by dependencies')
+    expect(prompt).not.toContain('A Meee2 canvas is a graph of executable node cards connected by dependencies')
   })
 
   it('submits a confirmed scene template payload when the model returns a poker scene plan', async () => {

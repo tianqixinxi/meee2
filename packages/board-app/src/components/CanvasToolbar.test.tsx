@@ -141,7 +141,7 @@ describe('CanvasToolbar template save flow', () => {
     expect(screen.queryByRole('dialog', { name: /AI recap/i })).not.toBeInTheDocument()
   })
 
-  it('places the meee2 AI collapse control before canvas navigation', () => {
+  it('places the Meee2 AI collapse control before canvas navigation', () => {
     const onTogglePlannerDialog = vi.fn()
     render(
       <I18nProvider>
@@ -167,7 +167,7 @@ describe('CanvasToolbar template save flow', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse meee2 AI dialog' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Meee2 AI dialog' }))
 
     expect(onTogglePlannerDialog).toHaveBeenCalledTimes(1)
   })

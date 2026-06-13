@@ -88,7 +88,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     public func activate() {
         _ = settingsSnapshot(force: true)
         guard shouldStayActive else {
-            MLog("[Meee2OnlinePusher] Not connected to meee2 Online, skipping activation")
+            MLog("[Meee2OnlinePusher] Not connected to Meee2 Online, skipping activation")
             return
         }
         guard subscription == nil,
@@ -567,7 +567,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         defer {
             perfLog("session-upsert-build", started: started, extra: "sid=\(session.sessionId.prefix(8)),force=\(force),hydrate=\(hydrateTranscriptFields)")
         }
-        // Build payload with full summary data for meee2 dashboard
+        // Build payload with full summary data for Meee2 dashboard
         let status = mapStatus(session.status)
 
         var payload: [String: Any] = [

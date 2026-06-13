@@ -87,7 +87,7 @@ export function FirstRunOnboarding({
         : 'Refresh'
 
   return (
-    <main className="first-run" aria-label="meee2 setup">
+    <main className="first-run" aria-label="Meee2 setup">
       <div className="first-run__shell">
         <header className="first-run__brand">
           <div className="first-run__mark" aria-hidden>
@@ -102,7 +102,7 @@ export function FirstRunOnboarding({
             <h1 id="first-run-title">{ready ? 'Your workspace is ready' : activeStep?.title ?? 'Connect local AI sessions'}</h1>
             <p>
               {ready
-                ? 'meee2 can receive real local session activity and persist workspace state.'
+                ? 'Meee2 can receive real local session activity and persist workspace state.'
                 : activeStep?.detail ?? 'Fix required checks for installed providers, hooks, socket, BoardServer, runtime, and local state.'}
             </p>
           </div>

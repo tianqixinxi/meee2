@@ -62,7 +62,7 @@ async function discoverMeee2URL(force = false) {
     }
   }
 
-  throw new Error(`meee2 BoardServer unreachable on ${DEFAULT_PORT}-${MAX_PORT}`)
+  throw new Error(`Meee2 BoardServer unreachable on ${DEFAULT_PORT}-${MAX_PORT}`)
 }
 
 async function apiFetch(path, options) {

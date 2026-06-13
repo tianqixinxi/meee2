@@ -1848,7 +1848,7 @@ enum BoardAPI {
         }
         do {
             let proposal = try PlannerBoardBridge.graphChangeProposal(
-                summary: body.summary ?? "Update meee2 AI graph",
+                summary: body.summary ?? "Update Meee2 AI graph",
                 changes: body.changes,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
@@ -4380,7 +4380,7 @@ enum BoardAPI {
         } else if !userEmail.isEmpty {
             displayName = userEmail.components(separatedBy: "@").first ?? userEmail
         } else {
-            displayName = connected ? "meee2 user" : "Not connected"
+            displayName = connected ? "Meee2 user" : "Not connected"
         }
 
         return jsonResponse(UserProfileDTO(
@@ -4401,7 +4401,7 @@ enum BoardAPI {
     // MARK: - GET /api/team/members
 
     /// Team member directory for assignment and Team UI. This endpoint must
-    /// only expose real meee2 Online team members; planner doer/activity ids
+    /// only expose real Meee2 Online team members; planner doer/activity ids
     /// are local execution identities and are not assignable people.
     static func getTeamMembers(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()
@@ -6401,7 +6401,7 @@ enum BoardAPI {
             category: "official",
             tags: tagsForOfficialTemplate(template),
             ownerUserId: nil,
-            ownerName: "meee2",
+            ownerName: "Meee2",
             version: 1,
             readOnly: true,
             canEdit: false,

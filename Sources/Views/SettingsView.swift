@@ -54,7 +54,7 @@ public struct SettingsView: View {
     /// User ID
     @AppStorage("meee2UserId") private var meee2UserId: String = ""
 
-    /// Connected meee2 user profile
+    /// Connected Meee2 user profile
     @AppStorage("meee2UserName") private var meee2UserName: String = ""
     @AppStorage("meee2UserEmail") private var meee2UserEmail: String = ""
     @AppStorage("meee2UserAvatarUrl") private var meee2UserAvatarUrl: String = ""
@@ -65,7 +65,7 @@ public struct SettingsView: View {
     /// Supabase Key
     @AppStorage("meee2SupabaseKey") private var meee2SupabaseKey: String = ""
 
-    /// meee2 Online API base URL. Supabase fields above remain for backward
+    /// Meee2 Online API base URL. Supabase fields above remain for backward
     /// compatibility while desktop traffic moves to the Next.js control plane.
     /// Access/refresh token 不进 AppStorage —— 偏好域按二进制形态分裂，
     /// 唯一真相是 ~/.meee2/settings.json（见 OnlineProxy）。
@@ -287,14 +287,14 @@ public struct SettingsView: View {
 
     private var userSettings: some View {
         Form {
-            Section("meee2 Online Sync") {
+            Section("Meee2 Online Sync") {
                 if meee2Connected {
                     HStack {
                         meee2UserAvatar
                         VStack(alignment: .leading) {
                             Text(meee2DisplayName)
                                 .font(.headline)
-                            Text(meee2UserEmail.isEmpty ? "Connected to meee2" : meee2UserEmail)
+                            Text(meee2UserEmail.isEmpty ? "Connected to Meee2" : meee2UserEmail)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -357,7 +357,7 @@ public struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                Text("Choose the exact local sessions that are visible in your meee2 dashboard.")
+                Text("Choose the exact local sessions that are visible in your Meee2 dashboard.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -584,7 +584,7 @@ public struct SettingsView: View {
     private var meee2DisplayName: String {
         if !meee2UserName.isEmpty { return meee2UserName }
         if !meee2UserEmail.isEmpty { return meee2UserEmail.components(separatedBy: "@").first ?? meee2UserEmail }
-        return "meee2 user"
+        return "Meee2 user"
     }
 
     private var meee2UserInitials: String {

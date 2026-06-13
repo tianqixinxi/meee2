@@ -20,6 +20,26 @@ enum AppIconProvider {
     }
 
     static func loadIcon() -> NSImage? {
+        if let icon = loadBundledAppIcon() {
+            return icon
+        }
+
+        if let icon = renderStatusBarMonogramIcon() {
+            return icon
+        }
+
+        return nil
+    }
+
+    static func loadStatusBarIcon() -> NSImage? {
+        if let icon = loadBundledStatusTemplateIcon() {
+            return prepareStatusBarTemplateIcon(icon)
+        }
+
+        return renderStatusBarTemplateFallbackIcon()
+    }
+
+    private static func loadBundledAppIcon() -> NSImage? {
         if let icon = NSImage(named: "AppIcon") {
             return icon
         }
@@ -30,23 +50,70 @@ enum AppIconProvider {
             }
         }
 
-        if let icon = renderStatusBarSymbolIcon() {
-            return icon
-        }
-
         return nil
     }
 
-    private static func renderStatusBarSymbolIcon() -> NSImage? {
-        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 82, weight: .regular)
-            .applying(NSImage.SymbolConfiguration(hierarchicalColor: .white))
-        guard let symbol = NSImage(
-            systemSymbolName: "brain.head.profile",
-            accessibilityDescription: "meee2"
-        )?.withSymbolConfiguration(symbolConfig) else {
-            return nil
+    private static func loadBundledStatusTemplateIcon() -> NSImage? {
+        if let icon = NSImage(named: statusTemplateIconName) {
+            return icon
         }
 
+        let reps = candidateStatusTemplateIconURLs().compactMap { url -> NSBitmapImageRep? in
+            guard
+                let data = try? Data(contentsOf: url),
+                let rep = NSBitmapImageRep(data: data)
+            else {
+                return nil
+            }
+            rep.size = statusTemplateIconSize
+            return rep
+        }
+
+        guard !reps.isEmpty else { return nil }
+        let image = NSImage(size: statusTemplateIconSize)
+        reps.forEach { image.addRepresentation($0) }
+        return image
+    }
+
+    private static func prepareStatusBarTemplateIcon(_ source: NSImage) -> NSImage {
+        let icon = NSImage(size: statusTemplateIconCanvasSize)
+        icon.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        source.draw(
+            in: statusTemplateIconDestinationRect,
+            from: statusTemplateIconOpaqueRect,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        icon.unlockFocus()
+        icon.isTemplate = true
+        icon.accessibilityDescription = "Meee2"
+        return icon
+    }
+
+    private static func renderStatusBarTemplateFallbackIcon() -> NSImage? {
+        let image = NSImage(size: statusTemplateIconCanvasSize)
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        NSColor.black.setFill()
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 16, weight: .bold),
+            .foregroundColor: NSColor.black,
+            .paragraphStyle: paragraph
+        ]
+        ("M" as NSString).draw(
+            in: NSRect(x: 0, y: 1, width: statusTemplateIconCanvasSize.width, height: statusTemplateIconCanvasSize.height),
+            withAttributes: attributes
+        )
+        image.isTemplate = true
+        image.accessibilityDescription = "Meee2"
+        return image
+    }
+
+    private static func renderStatusBarMonogramIcon() -> NSImage? {
         let size = NSSize(width: 128, height: 128)
         let image = NSImage(size: size)
         image.lockFocus()
@@ -55,10 +122,17 @@ enum AppIconProvider {
         NSColor(calibratedWhite: 0.08, alpha: 1).setFill()
         NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 28, yRadius: 28).fill()
 
-        symbol.isTemplate = false
-        let symbolRect = NSRect(x: 23, y: 18, width: 82, height: 88)
-        symbol.draw(in: symbolRect, from: .zero, operation: .sourceOver, fraction: 1)
-
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 82, weight: .bold),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraph
+        ]
+        ("M" as NSString).draw(
+            in: NSRect(x: 0, y: 16, width: size.width, height: 96),
+            withAttributes: attributes
+        )
         return image
     }
 
@@ -98,6 +172,36 @@ enum AppIconProvider {
         }
     }
 
+    private static func candidateStatusTemplateIconURLs() -> [URL] {
+        let filenames = [
+            "\(statusTemplateIconName).png",
+            "\(statusTemplateIconName)@2x.png",
+            "\(statusTemplateIconName)@3x.png"
+        ]
+        var urls: [URL] = []
+
+        if let resourceURL = Bundle.main.resourceURL {
+            urls.append(contentsOf: filenames.map { resourceURL.appendingPathComponent($0) })
+        }
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        urls.append(contentsOf: filenames.map { cwd.appendingPathComponent("Resources").appendingPathComponent($0) })
+
+        var dir = executableDirectory()
+        for _ in 0..<10 {
+            urls.append(contentsOf: filenames.map { dir.appendingPathComponent("Resources").appendingPathComponent($0) })
+            dir.deleteLastPathComponent()
+        }
+
+        var seen = Set<String>()
+        return urls.filter { url in
+            let path = url.standardizedFileURL.path
+            guard !seen.contains(path) else { return false }
+            seen.insert(path)
+            return FileManager.default.fileExists(atPath: path)
+        }
+    }
+
     private static func executableDirectory() -> URL {
         let arg0 = CommandLine.arguments.first ?? ""
         if arg0.hasPrefix("/") {
@@ -108,4 +212,10 @@ enum AppIconProvider {
             .standardizedFileURL
             .deletingLastPathComponent()
     }
+
+    private static let statusTemplateIconName = "meee2StatusTemplate"
+    private static let statusTemplateIconSize = NSSize(width: 22, height: 22)
+    private static let statusTemplateIconCanvasSize = NSSize(width: 24, height: 18)
+    private static let statusTemplateIconOpaqueRect = NSRect(x: 5, y: 8, width: 12, height: 7)
+    private static let statusTemplateIconDestinationRect = NSRect(x: 1, y: 2.5, width: 22, height: 13)
 }
