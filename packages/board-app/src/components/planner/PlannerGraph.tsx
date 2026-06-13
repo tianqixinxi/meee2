@@ -2308,7 +2308,6 @@ function PlannerGraphInner({
           className={[
             'planner-flow',
             renderSceneSpec ? 'planner-flow--scene' : '',
-            showWorkspacePreview && activeProposal ? 'planner-flow--preview' : '',
           ].filter(Boolean).join(' ')}
           data-guide-target="planner-flow"
         >
@@ -2368,8 +2367,39 @@ function PlannerGraphInner({
               dataSources={plannerState.canvas.dataSources}
             />
           )}
-          {(hasSessionActionBanner || mcpWarning) && (
+          {((showWorkspacePreview && activeProposal) || hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
+              {showWorkspacePreview && activeProposal && (
+                <div className="planner-workspace-preview__notice" role="status">
+                  <div className="planner-workspace-preview__notice-copy">
+                    <span>Preview only</span>
+                    <strong>{activeProposal.summary || 'meee2 AI proposed canvas changes'}</strong>
+                    <em>Review and apply these changes before they become the real canvas.</em>
+                  </div>
+                  <div className="planner-workspace-preview__actions" role="group" aria-label="Preview controls">
+                    <button
+                      type="button"
+                      className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
+                      onClick={handleReject}
+                      disabled={busy}
+                      aria-busy={busy}
+                      title="Reject this proposal — revert to previous canvas"
+                    >
+                      {busy ? '…' : '✕ Reject'}
+                    </button>
+                    <button
+                      type="button"
+                      className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
+                      onClick={handleApproveAndApply}
+                      disabled={busy}
+                      aria-busy={busy}
+                      title="Approve & apply this proposal — make these changes real"
+                    >
+                      {busy ? 'Applying…' : '✓ Apply'}
+                    </button>
+                  </div>
+                </div>
+              )}
               {hasSessionActionBanner && (
                 <div
                   className={`planner-mcp-banner planner-session-action-banner${closedBoundSessions.length > 0 ? ' is-warning' : ' is-ready'}`}
@@ -2442,10 +2472,6 @@ function PlannerGraphInner({
           {showWorkspacePreview && activeProposal ? (
             <PlannerWorkspacePreview
               graph={reviewGraph}
-              proposal={activeProposal}
-              onApply={handleApproveAndApply}
-              onReject={handleReject}
-              busy={busy}
             />
           ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
@@ -3436,54 +3462,11 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
 
 function PlannerWorkspacePreview({
   graph,
-  proposal,
-  onApply,
-  onReject,
-  busy,
 }: {
   graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
-  proposal: PlanProposal
-  onApply?: () => void
-  onReject?: () => void
-  busy?: boolean
 }) {
   return (
     <div className="planner-workspace-preview" aria-label="Proposal preview" data-guide-target="planner-workspace-preview">
-      <div className="planner-workspace-preview__notice" role="status">
-        <div className="planner-workspace-preview__notice-copy">
-          <span>Preview only</span>
-          <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
-          <em>Review and apply these changes before they become the real canvas.</em>
-        </div>
-        {(onApply || onReject) && (
-          <div className="planner-workspace-preview__actions" role="group" aria-label="Preview controls">
-            {onReject && (
-              <button
-                type="button"
-                className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
-                onClick={onReject}
-                disabled={busy}
-                aria-busy={busy}
-                title="Reject this proposal — revert to previous canvas"
-              >
-                {busy ? '…' : '✕ Reject'}
-              </button>
-            )}
-            {onApply && (
-              <button
-                type="button"
-                className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
-                onClick={onApply}
-                disabled={busy}
-                aria-busy={busy}
-                title="Approve & apply this proposal — make these changes real"
-              >
-                {busy ? 'Applying…' : '✓ Apply'}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}
