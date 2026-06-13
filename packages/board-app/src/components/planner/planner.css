@@ -922,7 +922,7 @@
 }
 
 .planner-flow--preview .planner-banner-stack {
-  top: max(148px, calc(var(--canvas-toolbar-bottom, 72px) + 92px));
+  top: max(92px, calc(var(--canvas-toolbar-bottom, 72px) + 20px));
 }
 
 .planner-mcp-banner {
