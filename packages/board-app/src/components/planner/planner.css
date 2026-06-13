@@ -911,7 +911,7 @@
 
 .planner-banner-stack {
   position: absolute;
-  top: calc(var(--canvas-toolbar-bottom, 72px) + 12px);
+  top: 14px;
   right: 14px;
   z-index: var(--z-notice-overlay);
   display: flex;
@@ -6547,7 +6547,7 @@
   }
 
   .planner-banner-stack {
-    top: calc(var(--canvas-toolbar-bottom, 72px) + 12px);
+    top: 14px;
     right: 12px;
     width: min(660px, calc(100% - 32px));
   }
