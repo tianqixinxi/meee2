@@ -32,6 +32,7 @@ import {
 import { resolvedArtifactPayload } from '../lib/artifactPayload'
 import { useI18n } from '../lib/i18n'
 import type {
+  ArtifactPayload,
   ArtifactReviewStatus,
   CanvasInfo,
   CanvasScope,
@@ -630,10 +631,8 @@ function ArtifactDetailPanel({
             <Loader2 size={14} className="spin" aria-hidden />
             <span>{t('artifacts.loadingLatest')}</span>
           </div>
-        ) : resolvedArtifactPayload(item.latest, content) || content || item.latest.payload != null ? (
-          <ArtifactViewTabs artifact={item.latest} content={content} />
         ) : (
-          <ArtifactContentPreview content={content} t={t} />
+          <ArtifactDetailPreview artifact={item.latest} content={content} t={t} />
         )}
       </section>
 
@@ -705,7 +704,7 @@ function ArtifactDetailPanel({
           onClick={() => onOpenSource(item)}
         >
           <ExternalLink size={14} aria-hidden />
-          <span>{t('artifacts.openInCanvas')}</span>
+          <span>{t('artifacts.revealSource')}</span>
         </button>
         <button
           type="button"
@@ -717,7 +716,7 @@ function ArtifactDetailPanel({
         </button>
         <button
           type="button"
-          className="artifacts-link-button"
+          className="artifacts-load-button"
           onClick={() => onOpenContent(item)}
         >
           <GitCompare size={13} aria-hidden />
@@ -790,7 +789,7 @@ function ArtifactContentModal({
                   </button>
                   <button type="button" className="artifacts-link-button" onClick={onOpenSource}>
                     <FileText size={13} aria-hidden />
-                    <span>{t('artifacts.openInCanvas')}</span>
+                    <span>{t('artifacts.revealSource')}</span>
                   </button>
                 </div>
               </div>
@@ -887,6 +886,146 @@ function ArtifactContentPreview({ content, t }: { content?: PlannerArtifactConte
   return (
     <pre className="artifacts-preview">
       {preview || t('artifacts.noPreview')}
+    </pre>
+  )
+}
+
+function ArtifactDetailPreview({
+  artifact,
+  content,
+  t,
+}: {
+  artifact: PlannerArtifact
+  content?: PlannerArtifactContent
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  const payload = resolvedArtifactPayload(artifact, content)
+  if (payload) return <TypedArtifactSummary payload={payload} t={t} />
+  if (content) return <ContentSummary content={content} t={t} />
+  if (artifact.payload != null) {
+    return <TextSummary text={stringifyPreview(artifact.payload)} fallback={t('artifacts.noPreview')} />
+  }
+  return <ArtifactContentPreview content={content} t={t} />
+}
+
+function TypedArtifactSummary({ payload, t }: { payload: ArtifactPayload; t: ReturnType<typeof useI18n>['t'] }) {
+  switch (payload.type) {
+    case 'prd':
+      return (
+        <div className="artifacts-summary-preview">
+          <TextSummary text={payload.tldr} fallback={t('artifacts.noPreview')} />
+          {payload.sections.length > 0 && (
+            <SummaryRows rows={payload.sections.slice(0, 4).map((section) => ({
+              label: section.heading,
+              value: `${section.lines} line${section.lines === 1 ? '' : 's'}`,
+            }))} />
+          )}
+        </div>
+      )
+    case 'kanban': {
+      const itemCount = payload.columns.reduce((sum, column) => sum + column.items.length, 0)
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'Columns', value: String(payload.columns.length) },
+            { label: 'Items', value: String(itemCount) },
+            ...payload.columns.slice(0, 4).map((column) => ({
+              label: column.name,
+              value: `${column.items.length} item${column.items.length === 1 ? '' : 's'}`,
+            })),
+          ]} />
+        </div>
+      )
+    }
+    case 'impl-pr':
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'PR', value: payload.number ? `#${payload.number}` : 'not recorded' },
+            { label: 'Branch', value: payload.branch || 'not recorded' },
+            { label: 'Base', value: payload.baseBranch || 'not recorded' },
+            { label: 'Changed', value: `${payload.filesChanged} files, +${payload.insertions} / -${payload.deletions}` },
+            { label: 'CI', value: payload.ciStatus },
+          ]} />
+        </div>
+      )
+    case 'check-result':
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'Passed', value: String(payload.pass) },
+            { label: 'Failed', value: String(payload.fail) },
+            { label: 'Skipped', value: String(payload.skip) },
+          ]} />
+          {payload.failing.length > 0 && <TextSummary text={payload.failing.slice(0, 4).join('\n')} fallback="" />}
+        </div>
+      )
+    case 'file':
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: t('artifacts.filename'), value: payload.filename },
+            { label: t('artifacts.mimeType'), value: payload.mime },
+            { label: t('artifacts.size'), value: formatBytes(payload.sizeBytes, t) },
+            ...(payload.lines != null ? [{ label: 'Lines', value: String(payload.lines) }] : []),
+          ]} />
+        </div>
+      )
+    case 'json':
+      return (
+        <div className="artifacts-summary-preview">
+          <TextSummary text={payload.preview} fallback={t('artifacts.noPreview')} />
+          <SummaryRows rows={payload.entries.slice(0, 5)} />
+        </div>
+      )
+    case 'markdown':
+      return <TextSummary text={payload.preview} fallback={t('artifacts.noPreview')} />
+    case 'integration': {
+      const fieldCount = payload.fields ? Object.keys(payload.fields).length : 0
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'Connector', value: payload.connector },
+            { label: 'External ID', value: payload.externalId || 'not recorded' },
+            ...(fieldCount > 0 ? [{ label: 'Fields', value: String(fieldCount) }] : []),
+          ]} />
+          {payload.summary && <TextSummary text={payload.summary} fallback="" />}
+        </div>
+      )
+    }
+  }
+}
+
+function ContentSummary({ content, t }: { content: PlannerArtifactContent; t: ReturnType<typeof useI18n>['t'] }) {
+  if (content.type === 'file') return <ArtifactContentPreview content={content} t={t} />
+  if (content.type === 'json' || content.type === 'kanban') {
+    return <TextSummary text={summarizeStructuredContent(content)} fallback={t('artifacts.noPreview')} />
+  }
+  if (content.type === 'html') {
+    return <TextSummary text={stripHtml(content.content ?? '')} fallback={t('artifacts.noPreview')} />
+  }
+  return <TextSummary text={content.content ?? stringifyPreview(content.payload)} fallback={t('artifacts.noPreview')} />
+}
+
+function SummaryRows({ rows }: { rows: Array<{ label?: string; key?: string; value: string }> }) {
+  if (rows.length === 0) return null
+  return (
+    <dl className="artifacts-summary-rows">
+      {rows.map((row, index) => (
+        <div key={`${row.label ?? row.key ?? index}:${index}`}>
+          <dt>{row.label ?? row.key}</dt>
+          <dd>{row.value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function TextSummary({ text, fallback }: { text: string; fallback: string }) {
+  const preview = truncatePreview(cleanPreviewText(text), 420)
+  return (
+    <pre className="artifacts-preview artifacts-preview--summary">
+      {preview || fallback}
     </pre>
   )
 }
@@ -991,14 +1130,64 @@ function isHttpUrl(value: string | null | undefined): value is string {
   }
 }
 
-function formatJsonPreview(content: PlannerArtifactContent): string {
+function summarizeStructuredContent(content: PlannerArtifactContent): string {
   const raw = content.content ?? stringifyPreview(content.payload)
   if (!raw) return ''
   try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return `JSON array · ${parsed.length} item${parsed.length === 1 ? '' : 's'}`
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>
+      if (Array.isArray(obj.columns)) {
+        const columns = obj.columns
+          .map((column) => column && typeof column === 'object' ? column as Record<string, unknown> : null)
+          .filter((column): column is Record<string, unknown> => Boolean(column))
+        const itemCount = columns.reduce((sum, column) => {
+          const inline = Array.isArray(column.items) ? column.items.length : 0
+          const cards = Array.isArray(column.cards) ? column.cards.length : 0
+          return sum + inline + cards
+        }, Array.isArray(obj.items) ? obj.items.length : 0)
+        const names = columns
+          .map((column) => String(column.title ?? column.name ?? column.id ?? 'Column'))
+          .slice(0, 4)
+          .join(', ')
+        return `Kanban · ${columns.length} column${columns.length === 1 ? '' : 's'} · ${itemCount} item${itemCount === 1 ? '' : 's'}${names ? `\n${names}` : ''}`
+      }
+      const entries = Object.entries(obj).slice(0, 6).map(([key, value]) => `${key}: ${compactValue(value)}`)
+      return `JSON object · ${Object.keys(obj).length} field${Object.keys(obj).length === 1 ? '' : 's'}\n${entries.join('\n')}`
+    }
+    return compactValue(parsed)
   } catch {
     return raw
   }
+}
+
+function compactValue(value: unknown): string {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return truncatePreview(cleanPreviewText(value), 80)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return `Array(${value.length})`
+  if (typeof value === 'object') return `Object(${Object.keys(value as Record<string, unknown>).length})`
+  return String(value)
+}
+
+function cleanPreviewText(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function stripHtml(value: string): string {
+  return cleanPreviewText(value.replace(/<[^>]+>/g, ' '))
+}
+
+function truncatePreview(value: string, max: number): string {
+  if (value.length <= max) return value
+  return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}...`
 }
 
 function stringifyPreview(value: unknown): string {
