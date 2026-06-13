@@ -1,12 +1,13 @@
 import { Bot, Plus, Sparkles, UserRound, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  completePlannerNodeContribution,
   fetchPlannerNodeContributions,
   startPlannerContributionSession,
   submitPlannerNodeContribution,
   updatePlannerNodeContribution,
 } from '../../api'
-import type { NodeCollector, TeamMember } from '../../api'
+import type { ContributionCompletionSuggestion, NodeCollector, TeamMember } from '../../api'
 import type { NodeContribution, PlannerGraphState, PlanningNode } from '../../types'
 
 // Teams · 多人增量贡献 — collect-list step 的共享账本面板。
@@ -27,6 +28,8 @@ interface Props {
   teamMembers: TeamMember[]
   /** 当前用户 id(access.actorId)— 区分「我的」收集会话。 */
   currentUserId?: string | null
+  /** 收口权:canvas owner 或节点 doerId。 */
+  canCloseout?: boolean
   /** 打开本地会话(自己的收集会话)。 */
   onOpenSession?: (sessionId: string, nodeId: string) => void
   onGraphStateChanged?: (state: PlannerGraphState) => void
@@ -55,6 +58,7 @@ export function NodeContributionsSection({
   isOwner,
   teamMembers,
   currentUserId,
+  canCloseout = false,
   onOpenSession,
   onGraphStateChanged,
 }: Props) {
@@ -71,6 +75,9 @@ export function NodeContributionsSection({
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [policyBusy, setPolicyBusy] = useState(false)
   const [labelDraft, setLabelDraft] = useState(node.contribution?.itemLabel ?? '')
+  const [doneWhenDraft, setDoneWhenDraft] = useState(node.contribution?.doneWhen ?? '')
+  const [suggestion, setSuggestion] = useState<ContributionCompletionSuggestion | null>(null)
+  const [closing, setClosing] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
   const [collectBusy, setCollectBusy] = useState(false)
   const [collectStatus, setCollectStatus] = useState<string | null>(null)
@@ -90,6 +97,7 @@ export function NodeContributionsSection({
         setItems(res.contributions ?? [])
         setCollectors(res.collectors ?? [])
         if (res.dashboardBaseUrl) setDashboardBaseUrl(res.dashboardBaseUrl)
+        setSuggestion(res.completionSuggestion ?? null)
         setLoadError(null)
       })
       .catch((err) => {
@@ -110,6 +118,7 @@ export function NodeContributionsSection({
     updatePlannerNodeContribution(canvasId, node.id, {
       policy,
       itemLabel: policy === 'team' ? (nextLabel ?? labelDraft).trim() || null : null,
+      doneWhen: policy === 'team' ? doneWhenDraft.trim() || null : null,
     })
       .then((state) => {
         if (!mountedRef.current) return
@@ -143,6 +152,23 @@ export function NodeContributionsSection({
       })
   }
 
+  // 收口:账本物化为节点输出 → 节点完成 → 触发下游。人做最终定夺。
+  const closeout = () => {
+    if (closing) return
+    setClosing(true)
+    completePlannerNodeContribution(canvasId, node.id)
+      .then((state) => {
+        if (!mountedRef.current) return
+        setClosing(false)
+        onGraphStateChanged?.(state)
+      })
+      .catch((err) => {
+        if (!mountedRef.current) return
+        setClosing(false)
+        setSubmitError((err as Error).message || '收口失败')
+      })
+  }
+
   const submit = () => {
     const trimmed = title.trim()
     if (!trimmed || submitting) return
@@ -168,15 +194,18 @@ export function NodeContributionsSection({
 
   const memberById = new Map(teamMembers.map((m) => [m.userId, m]))
   const count = items?.length ?? 0
+  const isCompleted = node.status === 'done'
 
   return (
     <>
       <div className="planner-node-modal__group-label">
         <span>团队共建</span>
         <small>
-          {enabled
-            ? `开放中 · 每位成员都能启动自己的 AI 会话来收集${itemLabel}`
-            : '关闭中 · 仅负责人可整理'}
+          {!enabled
+            ? '关闭中 · 仅负责人可整理'
+            : isCompleted
+              ? `已收口 · 账本已冻结为节点输出(${count} 条)`
+              : `开放中 · 每位成员都能启动自己的 AI 会话来收集${itemLabel}`}
         </small>
       </div>
       <div className="planner-node-modal__section planner-contrib">
@@ -195,6 +224,20 @@ export function NodeContributionsSection({
                     const next = labelDraft.trim() || null
                     if ((node.contribution?.itemLabel ?? null) !== next) {
                       setPolicy('team', next)
+                    }
+                  }}
+                />
+                <input
+                  className="planner-contrib__donewhen-input"
+                  value={doneWhenDraft}
+                  placeholder="收齐判据(如:50 家且每家有来源链接;空=人工定夺)"
+                  maxLength={500}
+                  title="自然语言判据 — 收集会话每轮对照自评,达成时发「建议收口」提醒;收口永远由人确认"
+                  onChange={(e) => setDoneWhenDraft(e.target.value)}
+                  onBlur={() => {
+                    const next = doneWhenDraft.trim() || null
+                    if ((node.contribution?.doneWhen ?? null) !== next) {
+                      setPolicy('team', undefined)
                     }
                   }}
                 />
@@ -224,6 +267,21 @@ export function NodeContributionsSection({
 
         {enabled && (
           <>
+            {suggestion && !isCompleted && (
+              <div className="planner-contrib__suggestion">
+                <Bot size={13} aria-hidden />
+                <span>
+                  <strong>AI 建议收口</strong>
+                  <em>{suggestion.rationale}</em>
+                </span>
+                {canCloseout && (
+                  <button type="button" disabled={closing} onClick={closeout}>
+                    {closing ? '收口中…' : '完成收集'}
+                  </button>
+                )}
+              </div>
+            )}
+            {!isCompleted && (
             <div className="planner-contrib__collect">
               <button
                 type="button"
@@ -236,7 +294,19 @@ export function NodeContributionsSection({
                 {collectBusy ? '派发中…' : `开始 AI 收集${itemLabel}`}
               </button>
               {collectStatus && <small className="planner-contrib__collect-status">{collectStatus}</small>}
+              {canCloseout && !suggestion && count > 0 && (
+                <button
+                  type="button"
+                  className="planner-contrib__closeout-btn"
+                  disabled={closing}
+                  onClick={closeout}
+                  title="把账本物化为节点输出(全量快照),节点完成、触发下游"
+                >
+                  {closing ? '收口中…' : '完成收集'}
+                </button>
+              )}
             </div>
+            )}
 
             {collectors.length > 0 && (
               <ul className="planner-contrib__collectors">
@@ -329,7 +399,7 @@ export function NodeContributionsSection({
               </ul>
             )}
 
-            {manualOpen ? (
+            {isCompleted ? null : manualOpen ? (
               <div className="planner-contrib__form">
                 <input
                   value={title}

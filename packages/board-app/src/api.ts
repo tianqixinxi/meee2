@@ -1670,13 +1670,17 @@ export function updatePlannerNodeGate(
 export function updatePlannerNodeContribution(
   canvasId: string,
   nodeId: string,
-  input: { policy: 'team' | 'closed'; itemLabel?: string | null },
+  input: { policy: 'team' | 'closed'; itemLabel?: string | null; doneWhen?: string | null },
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution`,
     {
       method: 'PATCH',
-      body: JSON.stringify({ policy: input.policy, itemLabel: input.itemLabel ?? undefined }),
+      body: JSON.stringify({
+        policy: input.policy,
+        itemLabel: input.itemLabel ?? undefined,
+        doneWhen: input.doneWhen ?? undefined,
+      }),
     },
   )
 }
@@ -1691,12 +1695,38 @@ export interface NodeCollector {
   alive?: boolean
 }
 
+/** AI 自评达标后的「建议收口」信号(最新一条)。收口永远是人点的。 */
+export interface ContributionCompletionSuggestion {
+  by?: string | null
+  rationale: string
+  at?: string | null
+}
+
+export interface NodeContributionsResponse {
+  contributions: NodeContribution[]
+  collectors?: NodeCollector[]
+  dashboardBaseUrl?: string
+  completionSuggestion?: ContributionCompletionSuggestion | null
+}
+
 export function fetchPlannerNodeContributions(
   canvasId: string,
   nodeId: string,
-): Promise<{ contributions: NodeContribution[]; collectors?: NodeCollector[]; dashboardBaseUrl?: string }> {
-  return jsonRequest<{ contributions: NodeContribution[]; collectors?: NodeCollector[]; dashboardBaseUrl?: string }>(
+): Promise<NodeContributionsResponse> {
+  return jsonRequest<NodeContributionsResponse>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+  )
+}
+
+/** 收口:把共建账本物化为节点输出(全量快照),节点完成、触发下游。
+ *  仅 canvas owner / 节点 doerId。 */
+export function completePlannerNodeContribution(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution-complete`,
+    { method: 'POST', body: JSON.stringify({}) },
   )
 }
 

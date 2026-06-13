@@ -519,18 +519,24 @@ struct NodeContributionConfig: Codable, Equatable {
     var policy: String
     /// UI 上"一条贡献"的业务名(如「startup」「候选人」),空 = 通用文案。
     var itemLabel: String?
+    /// 收齐判据(自然语言,场景相关,治理层定义 — proposal/owner 写入)。
+    /// 收集会话每轮对照自评,达成发「建议收口」信号;空 = 纯手动收口。
+    /// 进 read_node_contract 的 completionCriteria,见 contract builder。
+    var doneWhen: String?
 
-    enum CodingKeys: String, CodingKey { case policy, itemLabel }
+    enum CodingKeys: String, CodingKey { case policy, itemLabel, doneWhen }
 
-    init(policy: String = "closed", itemLabel: String? = nil) {
+    init(policy: String = "closed", itemLabel: String? = nil, doneWhen: String? = nil) {
         self.policy = policy
         self.itemLabel = itemLabel
+        self.doneWhen = doneWhen
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         policy = try c.decodeIfPresent(String.self, forKey: .policy) ?? "closed"
         itemLabel = try c.decodeIfPresent(String.self, forKey: .itemLabel)
+        doneWhen = try c.decodeIfPresent(String.self, forKey: .doneWhen)
     }
 
     var acceptsTeamContributions: Bool { policy == "team" }
@@ -6538,6 +6544,61 @@ final class PlannerStore {
         }
     }
 
+    /// 共建:有成员收集中 → 节点「运行中」。仅从未启动类状态翻,幂等。
+    func markContributionCollecting(
+        canvasId: String,
+        nodeId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            var node = record.nodes[nodeIndex]
+            let wfs = node.workflowRunState
+            guard node.status != .done, wfs == nil || wfs == .pending || wfs == .readyToStart else {
+                return record
+            }
+            node.workflowRunState = .running
+            record.nodes[nodeIndex] = node
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: "\(node.title) 团队收集中"
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    /// 共建:收集会话判定收齐 → 节点进「需要人回应」(gateWait),等收口人定夺。
+    func markContributionAwaitingCloseout(
+        canvasId: String,
+        nodeId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            var node = record.nodes[nodeIndex]
+            guard node.status != .done, node.workflowRunState != .gateWait else { return record }
+            node.workflowRunState = .gateWait
+            record.nodes[nodeIndex] = node
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: "\(node.title) 收齐判据达成 — 等待收口"
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
     /// canvas-spec §8 / §11 · Confirm a node parked at「待确认」(awaiting-review,
     /// `workflowRunState == .gateWait` after a needs-review `done`). This is the
     /// human "approve / sign-off" action: the node transitions to `.done`, and
@@ -7812,6 +7873,9 @@ final class PlannerStore {
             artifactPayloadTypes: PlannerArtifactPayloadType.allCases,
             completionCriteria: [
                 node.schema.goal,
+            ] + ((node.contribution?.doneWhen?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+                $0.isEmpty ? nil : ["共建收齐判据(达成时经 suggest_contribution_completion 发建议收口信号,勿直接交付): \($0)"]
+            } ?? []) + [
                 "Submit output with status done, blocked, or needs_review.",
                 "If output.payload_kind is artifact_ref, submit artifacts[] and set artifact.reference to the expected output slot; do not submit an artifact_ref wrapper.",
                 "Inline artifact payloads must be typed objects such as {\"type\":\"json\",\"json\":\"{...}\"} or {\"type\":\"text\",\"text\":\"...\"}; do not use a bare string or {\"content\":...}.",
@@ -9016,6 +9080,48 @@ enum PlannerBoardBridge {
         }
         _ = try store.updateNodeContribution(canvasId: canvasId, nodeId: nodeId, contribution: contribution)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    /// 共建「建议收口」信号消费 — owner 桌面把节点翻 gateWait(需要人回应)。
+    /// 幂等:已 gateWait / 已 done 直接返回。只有 owner 桌面调用(它是唯一
+    /// 能推 canvas state 的端,翻转随同步全员可见)。
+    @discardableResult
+    static func markContributionAwaitingCloseout(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> Bool {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }),
+              node.contribution?.acceptsTeamContributions == true,
+              node.status != .done,
+              node.workflowRunState != .gateWait else {
+            return false
+        }
+        _ = try store.markContributionAwaitingCloseout(canvasId: canvasId, nodeId: nodeId)
+        return true
+    }
+
+    /// 共建:有成员在收集 → 节点进「运行中」。幂等;仅从未启动类状态翻转,
+    /// 不打扰 gateWait/done。owner 桌面专用(state 推送方)。
+    @discardableResult
+    static func markContributionCollecting(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> Bool {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }),
+              node.contribution?.acceptsTeamContributions == true,
+              node.status != .done else {
+            return false
+        }
+        let wfs = node.workflowRunState
+        guard wfs == nil || wfs == .pending || wfs == .readyToStart else { return false }
+        _ = try store.markContributionCollecting(canvasId: canvasId, nodeId: nodeId)
+        return true
     }
 
     /// canvas-spec §8 / §11 · Owner confirm/approve of a node parked at

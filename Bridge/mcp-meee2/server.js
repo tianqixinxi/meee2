@@ -249,6 +249,28 @@ const TOOLS = [
       required: ['canvasId', 'nodeId', 'title'],
     },
   },
+  {
+    name: 'suggest_contribution_completion',
+    description:
+      'Signal that a team-contribution node\'s done-when criteria appear to ' +
+      'be MET, based on your evaluation of the current ledger. The node owner ' +
+      'gets prompted to close collection — completion is ALWAYS a human ' +
+      'decision; this is only the recommendation + your evidence. Call at most ' +
+      'once per round, only when the criteria in the node contract are truly ' +
+      'satisfied. rationale is required and shown to the owner.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        nodeId: { type: 'string', description: 'Contribution-enabled step node id.' },
+        rationale: {
+          type: 'string',
+          description: 'Why the criteria are met (counts, coverage, quality) — the owner reads this before closing.',
+        },
+      },
+      required: ['canvasId', 'nodeId', 'rationale'],
+    },
+  },
 ]
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
@@ -523,6 +545,19 @@ async function handleAddNodeContribution(args) {
   )
 }
 
+// 建议收口:收集会话自评 doneWhen 达成后的信号。授权同 add_node_contribution
+// (本地路由按节点 policy 把门,云端按团队成员校验)。
+async function handleSuggestContributionCompletion(args) {
+  const { canvasId, nodeId, rationale } = args
+  if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
+  if (!rationale || !String(rationale).trim()) throw new Error('rationale is required')
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution-completion-suggestion`,
+    { rationale: String(rationale).trim() },
+  )
+}
+
 async function handleAttachArtifactToNode(args) {
   const { canvasId, nodeId } = args
   if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
@@ -688,6 +723,9 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'add_node_contribution':
         result = await handleAddNodeContribution(args)
+        break
+      case 'suggest_contribution_completion':
+        result = await handleSuggestContributionCompletion(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)

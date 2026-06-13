@@ -3607,6 +3607,7 @@ enum BoardAPI {
         struct UpdateContributionRequest: Decodable {
             let policy: String
             let itemLabel: String?
+            let doneWhen: String?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -3619,10 +3620,12 @@ enum BoardAPI {
             return errorResponse("bad_request", "policy must be \"team\" or \"closed\"", status: 400)
         }
         let trimmedLabel = body.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDoneWhen = body.doneWhen?.trimmingCharacters(in: .whitespacesAndNewlines)
         let contribution: NodeContributionConfig? = body.policy == "team"
             ? NodeContributionConfig(
                 policy: "team",
-                itemLabel: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel
+                itemLabel: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel,
+                doneWhen: (trimmedDoneWhen?.isEmpty ?? true) ? nil : trimmedDoneWhen
             )
             : nil
         do {
@@ -3745,11 +3748,219 @@ enum BoardAPI {
             }
         }
         root["collectors"] = collectors
+        // 状态消费:只有 owner 桌面能改节点状态并随 state 推送全员。幂等。
+        //  · 有「建议收口」信号 → gateWait(需要人回应)
+        //  · 否则有人在收集 → running(收集中)
+        let ownerId = BoardLayoutStore.shared.snapshot().canvases
+            .first(where: { $0.id == canvasId })?.ownerUserId
+        if ownerId == settings.userId {
+            let hasSignal = root["completionSuggestion"] is [String: Any]
+            let hasCollectors = !collectors.isEmpty
+            if hasSignal || hasCollectors {
+                DispatchQueue.global(qos: .utility).async {
+                    if hasSignal {
+                        _ = try? PlannerBoardBridge.markContributionAwaitingCloseout(
+                            nodeId: nodeId,
+                            for: canvasId,
+                            snapshot: BoardLayoutStore.shared.snapshot(),
+                            actorUserId: settings.userId
+                        )
+                    } else {
+                        _ = try? PlannerBoardBridge.markContributionCollecting(
+                            nodeId: nodeId,
+                            for: canvasId,
+                            snapshot: BoardLayoutStore.shared.snapshot(),
+                            actorUserId: settings.userId
+                        )
+                    }
+                }
+            }
+        }
         guard JSONSerialization.isValidJSONObject(root),
               let out = try? JSONSerialization.data(withJSONObject: root) else {
             return data
         }
         return out
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contribution-completion-suggestion
+    /// Body: {"rationale": String}
+    /// 收集会话自评 doneWhen 达成后的「建议收口」信号。授权同贡献写入
+    /// (policy=='team' 或 owner);信号落云端 contrib-signal 槽,owner 桌面
+    /// 消费后把节点翻「需要人回应」。收口永远是人做的。
+    static func submitPlannerContributionCompletionSuggestion(_ req: HttpRequest) -> HttpResponse {
+        struct SuggestRequest: Decodable { let rationale: String }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: SuggestRequest.self),
+              !body.rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"rationale\":String}", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        do {
+            let actorId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+            let state = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: actorId)
+            guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            let acceptsTeam = node.contribution?.acceptsTeamContributions == true
+            guard acceptsTeam || state.access.role == .owner else {
+                return errorResponse("forbidden", "node does not accept team contributions", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        let payload: [String: Any] = [
+            "teamId": settings.teamId,
+            "canvasId": remoteCanvasId,
+            "rationale": body.rationale.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
+            return errorResponse("bad_request", "failed to encode suggestion payload", status: 400)
+        }
+        switch OnlineProxy.callOnlineAPI(
+            method: "POST",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions/suggest-completion",
+            body: bodyData,
+            settings: settings
+        ) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contribution-complete
+    /// 收口:canvas owner / 节点 doerId(收口负责人)把共建账本物化为节点
+    /// 输出 artifact(全量快照,带各条归属),节点翻 done → 触发下游。
+    /// 收口后云端按 node.status==done 冻结账本写入;owner 重开节点即恢复。
+    static func completePlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        let actorId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+        let node: PlanningNode
+        do {
+            let state = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: actorId)
+            guard let found = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            node = found
+            guard node.contribution != nil else {
+                return errorResponse("bad_request", "node is not a contribution node", status: 400)
+            }
+            // 收口权:canvas owner + 节点收口负责人(doerId)。职责≡权限。
+            guard state.access.role == .owner || node.doerId == state.access.actorId else {
+                return errorResponse("forbidden", "only the canvas owner or the node owner can complete collection", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+
+        // 拉云端账本全量(物化的数据源是云端真相,不是本机缓存)。
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        let ledgerResult = OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions",
+            query: [
+                URLQueryItem(name: "teamId", value: settings.teamId),
+                URLQueryItem(name: "canvasId", value: remoteCanvasId)
+            ],
+            settings: settings
+        )
+        guard case .success(let ledgerData) = ledgerResult,
+              let ledger = (try? JSONSerialization.jsonObject(with: ledgerData)) as? [String: Any],
+              let items = ledger["contributions"] as? [[String: Any]] else {
+            return errorResponse("bad_gateway", "failed to load the contribution ledger from meee2-online", status: 502)
+        }
+        guard !items.isEmpty else {
+            return errorResponse("bad_request", "ledger is empty — nothing to complete", status: 400)
+        }
+
+        // 物化:账本全量快照 → 节点输出 artifact(json items,含归属)。
+        // 合同铁律「output is always a full snapshot」在这里天然成立。
+        let itemLabel = node.contribution?.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemWord = (itemLabel?.isEmpty ?? true) ? "条目" : itemLabel!
+        let outputReference = node.schema.outputs.first ?? "contributions"
+        let payloadObject: [String: Any] = [
+            "kind": "contribution-ledger",
+            "itemLabel": itemWord,
+            "count": items.count,
+            "items": items
+        ]
+        guard let payloadJSONData = try? JSONSerialization.data(withJSONObject: payloadObject),
+              let payloadJSONString = String(data: payloadJSONData, encoding: .utf8) else {
+            return errorResponse("planner_error", "failed to encode ledger payload", status: 500)
+        }
+        let output = PlannerNodeOutput(
+            nodeId: nodeId,
+            status: .done,
+            message: PlannerNodeOutputMessage(
+                summary: "共建收口:\(items.count) 条\(itemWord)(账本物化为输出快照)",
+                routeTo: []
+            ),
+            artifacts: [
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "\(node.title) · 共建账本 \(items.count) 条",
+                    reference: outputReference,
+                    payload: .object([
+                        "type": .string("json"),
+                        "json": .string(payloadJSONString)
+                    ]),
+                    routeTo: []
+                )
+            ],
+            next: .complete
+        )
+        do {
+            _ = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: nodeId,
+                output: output,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorId,
+                submittedByKind: .human,
+                submittedBy: actorId
+            )
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: actorId
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
     }
 
     /// 异步补发收集会话标记(带 provider 会话 id)。失败无害 — 下一次列表
@@ -3914,7 +4125,11 @@ enum BoardAPI {
         let itemWord = (itemLabel?.isEmpty ?? true) ? "条目" : itemLabel!
         let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // 单行指令(同 sync 会话:fresh spawn 作 initialPrompt、复用走 deliverPrompt)。
-        let instruction = "[团队共建收集会话] 你是节点「\(node.title)」(canvasId \(canvasId), nodeId \(nodeId))的专属收集会话,代表本机登录成员往该节点的共享账本贡献\(itemWord)。任务:1) 用 read_node_contract 读节点契约理解要收集什么;2) 按契约做真实的调研/收集(可联网搜索、读文件),每确认一条就立刻用 add_node_contribution 提交(title=\(itemWord)本体,note=一句话依据,url=http(s) 来源链接)\(hint.isEmpty ? "" : ";本次重点:\(hint)");3) 收集若干条后用一段话总结本轮产出并结束回合。边界:这是增量贡献不是节点交付 — 不要 submit_node_output / attach_artifact_to_node / update_artifact / update_artifact_views(工具面已禁用),不要改节点状态或画布其它对象;同一\(itemWord)不要重复提交 — 账本已有同名条目时 add_node_contribution 会返回 duplicate:true,跳过换下一条即可。"
+        let doneWhen = node.contribution?.doneWhen?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let doneWhenClause = doneWhen.isEmpty
+            ? "本节点未设收齐判据,收口由负责人人工定夺,你不用做完成评估"
+            : "本节点的收齐判据:「\(doneWhen)」。每轮收集结束时对照账本现状自评;确实达成时调用 suggest_contribution_completion(rationale 写清依据:条数/覆盖面/质量),它只是给负责人的收口建议,不会也不应改变节点状态"
+        let instruction = "[团队共建收集会话] 你是节点「\(node.title)」(canvasId \(canvasId), nodeId \(nodeId))的专属收集会话,代表本机登录成员往该节点的共享账本贡献\(itemWord)。任务:1) 用 read_node_contract 读节点契约理解要收集什么;2) 按契约做真实的调研/收集(可联网搜索、读文件),每确认一条就立刻用 add_node_contribution 提交(title=\(itemWord)本体,note=一句话依据,url=http(s) 来源链接)\(hint.isEmpty ? "" : ";本次重点:\(hint)");3) \(doneWhenClause);4) 收集若干条后用一段话总结本轮产出并结束回合。边界:这是增量贡献不是节点交付 — 不要 submit_node_output / attach_artifact_to_node / update_artifact / update_artifact_views(工具面已禁用),不要改节点状态或画布其它对象;同一\(itemWord)不要重复提交 — 账本已有同名条目时 add_node_contribution 会返回 duplicate:true,跳过换下一条即可。"
 
         let registryKey = contributionSessionKey(canvasId: canvasId, nodeId: nodeId)
         let trackedSessionId = contributionSessionId(forKey: registryKey)

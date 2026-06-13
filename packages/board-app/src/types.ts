@@ -1378,6 +1378,8 @@ export interface PlanningNode {
 export interface NodeContributionConfig {
   policy: string
   itemLabel?: string | null
+  /** 收齐判据(自然语言)。收集会话每轮自评,达成发建议收口信号;空 = 纯手动收口。 */
+  doneWhen?: string | null
 }
 
 /** One entry in a node's shared contribution ledger (cloud-side, attributed). */

@@ -551,6 +551,7 @@ export function NodeInspectorModal({
             isOwner={role === 'owner'}
             teamMembers={teamMembers}
             currentUserId={access?.actorId ?? null}
+            canCloseout={role === 'owner' || (access?.actorId != null && node.doerId === access.actorId)}
             onOpenSession={onOpenSession}
             onGraphStateChanged={onGraphStateChanged}
           />

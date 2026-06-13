@@ -3746,6 +3746,7 @@
 
 /* Teams · 多人增量贡献 — inspector「团队共建」段:owner 开关行 / 账本列表
  *  (头像 + 标题 + 备注 + 归属) / 轻量添加表单。*/
+.planner-contrib__policy { flex-wrap: wrap; }
 .planner-contrib__policy {
   display: flex; align-items: center; gap: 8px;
   color: var(--text-dim); font-size: 12px;
@@ -3915,6 +3916,63 @@
   font-size: 10.5px;
 }
 .planner-contrib__collector-state.is-alive { color: #7aa2f7; }
+
+/* 建议收口横幅 — AI 自评达标,等收口人定夺。 */
+.planner-contrib__suggestion {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(224, 175, 104, 0.5);
+  border-radius: 6px;
+  background: rgba(224, 175, 104, 0.1);
+  font-size: 11.5px;
+}
+.planner-contrib__suggestion > svg { flex-shrink: 0; margin-top: 1px; color: #e0af68; }
+.planner-contrib__suggestion span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.planner-contrib__suggestion strong { font-size: 11.5px; }
+.planner-contrib__suggestion em {
+  font-style: normal;
+  color: var(--text-dim, rgba(168, 165, 155, 0.85));
+  font-size: 11px;
+  line-height: 1.45;
+}
+.planner-contrib__suggestion button {
+  margin-left: auto; flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid rgba(158, 206, 106, 0.55);
+  border-radius: 5px;
+  background: rgba(158, 206, 106, 0.15);
+  color: var(--text);
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+}
+.planner-contrib__suggestion button:disabled { opacity: 0.5; cursor: default; }
+/* 无信号时的常驻收口按钮(收口人可见,弱化版)。 */
+.planner-contrib__closeout-btn {
+  padding: 5px 10px;
+  border: 1px solid rgba(158, 206, 106, 0.4);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim, rgba(168, 165, 155, 0.9));
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.planner-contrib__closeout-btn:hover:not(:disabled) {
+  background: rgba(158, 206, 106, 0.12);
+  color: var(--text);
+}
+/* 收齐判据输入(owner 配置区第二行)。 */
+.planner-contrib__donewhen-input {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: 5px;
+  background: rgba(168, 165, 155, 0.05);
+  color: var(--text);
+  font-size: 11px;
+}
 
 /* agent 产出标记 — 归属行前的小机器人。 */
 .planner-contrib__via-agent {

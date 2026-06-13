@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   submitPlannerNodeContribution: vi.fn(),
   updatePlannerNodeContribution: vi.fn(),
   startPlannerContributionSession: vi.fn(),
+  completePlannerNodeContribution: vi.fn(),
 }))
 
 vi.mock('../../api', async () => {
@@ -18,6 +19,7 @@ vi.mock('../../api', async () => {
     submitPlannerNodeContribution: apiMocks.submitPlannerNodeContribution,
     updatePlannerNodeContribution: apiMocks.updatePlannerNodeContribution,
     startPlannerContributionSession: apiMocks.startPlannerContributionSession,
+    completePlannerNodeContribution: apiMocks.completePlannerNodeContribution,
   }
 })
 
@@ -51,6 +53,7 @@ describe('NodeContributionsSection', () => {
     apiMocks.submitPlannerNodeContribution.mockReset()
     apiMocks.updatePlannerNodeContribution.mockReset()
     apiMocks.startPlannerContributionSession.mockReset()
+    apiMocks.completePlannerNodeContribution.mockReset()
   })
 
   it('renders the attributed ledger when the node is open for team contributions', async () => {
@@ -198,7 +201,7 @@ describe('NodeContributionsSection', () => {
       expect(apiMocks.updatePlannerNodeContribution).toHaveBeenCalledWith(
         'canvas-1',
         'node-1',
-        { policy: 'team', itemLabel: null },
+        { policy: 'team', itemLabel: null, doneWhen: null },
       )
     })
     // 关闭态不拉账本。
@@ -239,6 +242,51 @@ describe('NodeContributionsSection', () => {
       'noreferrer',
     )
     openSpy.mockRestore()
+  })
+
+  it('surfaces the AI completion suggestion and lets the closeout holder complete', async () => {
+    apiMocks.fetchPlannerNodeContributions.mockResolvedValue({
+      contributions: [
+        { id: 'c1', title: 'Modal', submittedBy: 'u-alice', createdAt: new Date().toISOString() },
+      ],
+      completionSuggestion: { by: 'u-alice', rationale: '已收 52 家,覆盖 7 个赛道', at: new Date().toISOString() },
+    })
+    apiMocks.completePlannerNodeContribution.mockResolvedValue({ nodes: [] })
+    render(
+      <NodeContributionsSection
+        canvasId="canvas-1"
+        node={makeNode({ policy: 'team', doneWhen: '50 家且来源齐全' })}
+        isOwner={false}
+        teamMembers={TEAM}
+        canCloseout
+      />,
+    )
+    expect(await screen.findByText('AI 建议收口')).toBeTruthy()
+    expect(screen.getByText('已收 52 家,覆盖 7 个赛道')).toBeTruthy()
+    // 收口按钮在横幅里(canCloseout)。
+    expect(screen.getAllByText('完成收集').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('freezes the panel after closeout (node done)', async () => {
+    apiMocks.fetchPlannerNodeContributions.mockResolvedValue({
+      contributions: [
+        { id: 'c1', title: 'Modal', submittedBy: 'u-alice', createdAt: new Date().toISOString() },
+      ],
+    })
+    const node = { ...makeNode({ policy: 'team', itemLabel: 'startup' }), status: 'done' } as never
+    render(
+      <NodeContributionsSection
+        canvasId="canvas-1"
+        node={node}
+        isOwner={false}
+        teamMembers={TEAM}
+        canCloseout
+      />,
+    )
+    expect(await screen.findByText(/已收口 · 账本已冻结为节点输出/)).toBeTruthy()
+    // 冻结:不再有收集 CTA / 手动添加。
+    expect(screen.queryByText(/开始 AI 收集/)).toBeNull()
+    expect(screen.queryByText('手动添加一条')).toBeNull()
   })
 
   it('shows members a hint when the owner has not opened contributions', () => {
