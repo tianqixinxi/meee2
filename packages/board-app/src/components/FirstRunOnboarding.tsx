@@ -18,8 +18,8 @@ const SETUP_STEPS = [
   {
     id: 'providers',
     label: 'Providers',
-    title: 'Connect installed providers',
-    detail: 'Claude Code and Codex must be detected before meee2 can receive real sessions.',
+    title: 'Choose a local provider',
+    detail: 'Install and configure at least one local runtime: Claude Code or Codex.',
     checkIds: ['provider.claude', 'provider.codex'],
   },
   {

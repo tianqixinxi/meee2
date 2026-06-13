@@ -211,6 +211,8 @@ struct SyncTeamDTO: Encodable {
 
 struct UserProfileDTO: Encodable {
     let connected: Bool
+    /// 本地凭证已被服务端吊销，需要重新登录（此时 connected 恒为 false）
+    let authExpired: Bool
     let userId: String
     let displayName: String
     let userName: String

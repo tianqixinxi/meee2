@@ -124,6 +124,17 @@ cp Resources/AppIcon.icns /Applications/meee2.app/Contents/Resources/AppIcon.icn
 cp Bridge/claude-hook-bridge.sh /Applications/meee2.app/Contents/Resources/Bridge/claude-hook-bridge.sh 2>/dev/null
 chmod +x /Applications/meee2.app/Contents/Resources/Bridge/claude-hook-bridge.sh 2>/dev/null
 
+# Sync the MCP bridge server — resolveServerScriptPath() reads it from the
+# bundle, and startup staging copies the BUNDLE version to ~/.meee2/mcp-meee2/
+# for the Claude plugin launcher. Without this sync the bundle keeps an old
+# server.js forever and every new MCP tool "vanishes": readiness then fails
+# with "missing required planner tools" even though the repo has the tool.
+mkdir -p /Applications/meee2.app/Contents/Resources/Bridge/mcp-meee2
+for f in server.js package.json package-lock.json; do
+  cp "Bridge/mcp-meee2/$f" "/Applications/meee2.app/Contents/Resources/Bridge/mcp-meee2/$f" 2>/dev/null
+done
+chmod +x /Applications/meee2.app/Contents/Resources/Bridge/mcp-meee2/server.js 2>/dev/null
+
 # Sign in the right order:
 #   1) inner dylibs first (codesign rejects re-signing a bundle whose
 #      contents change signature later)

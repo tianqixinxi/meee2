@@ -1,14 +1,13 @@
 // UI-simplification — artifact-mode Inspector body.
 //
-// 当 nodeKind === 'artifact' 时,NodeInspectorModal 走这个分支:
-//   - Header(state badge + title) — 由调用方渲染 modal shell
-//   - 产物预览/编辑区 (PayloadBodySwitch,按 ArtifactPayload.type 分发)
-//   - 状态行(state badge + blockers)
-//   - 版本(VersionTimeline,横向 chip)
+// 当 nodeKind === 'artifact' 时,NodeInspectorModal 走这个分支,按
+// 数据源 → 视图 → 预览 → 版本 → 来源 → 操作 的顺序渲染:
+//   - 数据源(绑定事实,seed/mirrored 可配,执行产物只读)
+//   - 视图(命名/派生 view 清单)
+//   - 预览(ArtifactViewTabs / PayloadBodySwitch;版本行可把预览切到历史 snapshot)
+//   - 版本(VersionChainList,真实 version 链 + snapshot 成因 + 上游会话链接)
 //   - 来源(SourceLineagePanel,只读 lineage)
-//   - 卡片样式(widget chip popover,artifact 节点收窄 allowed chips)
 //   - 操作(ArtifactActionsBar,artifact-only 动作)
-//   - 版本与足迹(FootprintTimeline,version chain + 上游 session 链接)
 //
 // step / session / subCanvas 路径走 NodeInspectorModal 主体不变,这里彻底隔离。
 
@@ -18,22 +17,23 @@ import {
   ArrowUpRight,
   Database,
   Eye,
-  FileText,
   GitCompare,
   Layers,
   Pencil,
   Plug,
   RefreshCw,
   Route,
-  Settings2,
   Sparkles,
   Trash2,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getPlannerArtifactContent, proposePlannerGraphChange } from '../../api'
+import { getPlannerArtifactContent, listArtifactVersions, proposePlannerGraphChange } from '../../api'
 import { useToast } from '../../App'
 import { resolvedArtifactPayload } from '../../lib/artifactPayload'
-import { TypedPayloadPreview } from '../artifacts/TypedPayloadPreview'
+import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
+import { getViewSchema } from '../../integrations/viewSchemas'
+import { stableId } from './plannerGraphAdapter'
+import { ArtifactViewTabs, resolveArtifactViews } from '../artifacts/ArtifactViewTabs'
 import type {
   ArtifactPayload,
   ArtifactReviewStatus,
@@ -43,9 +43,8 @@ import type {
   PlanProposal,
   PlannerArtifact,
   PlannerArtifactContent,
+  PlannerArtifactVersion,
   PlanningNode,
-  Widget,
-  WidgetKind,
 } from '../../types'
 
 interface Props {
@@ -68,33 +67,6 @@ interface Props {
   onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
 }
 
-// artifact 节点上,卡片样式 popover 收窄到三个有意义的 widget(design 约定)。
-const ARTIFACT_WIDGET_OPTIONS: ReadonlyArray<{
-  kind: WidgetKind | 'standard'
-  label: string
-  tooltip: string
-}> = [
-  {
-    kind: 'standard',
-    label: '标准',
-    tooltip: '不渲染 widget,显示节点本身(标题 / 状态)',
-  },
-  {
-    kind: 'artifact-preview',
-    label: '产物预览',
-    tooltip: '内嵌预览(markdown / 文件),适合 PRD / PR / 报告',
-  },
-  {
-    kind: 'kanban',
-    label: '看板',
-    tooltip: '把上游数据 / 子画板按 status 分成列',
-  },
-  {
-    kind: 'inbox',
-    label: '收件箱',
-    tooltip: '把数据扁平展开,按最近活动倒序',
-  },
-]
 
 // design spec ui_surface §dataSource — artifact 二模 enum (2026-05-28 简化).
 // 与 widget.source 正交并行: artifact.dataSource 决定 payload 权威来源 (data 层),
@@ -229,6 +201,29 @@ export function isOutputArtifactNode(node: PlanningNode): boolean {
   return hasUpstreamProducers || hasDeclaredInputs
 }
 
+/**
+ * 从虚拟 io-artifact 节点 id 反推生产节点 id。
+ * id 形如 `io-artifact-<producerId>-<direction>-<stableId(ref)>`,producerId
+ * 与 ref slug 都含连字符,不能盲目正则切 — 用节点自己声明的 artifactRefs 逐个
+ * 算出 slug 后从尾部精确剥离。非虚拟节点 / 剥离失败返回 null。
+ */
+export function virtualArtifactProducerId(node: PlanningNode): string | null {
+  const prefix = 'io-artifact-'
+  if (!node.id.startsWith(prefix)) return null
+  const rest = node.id.slice(prefix.length)
+  for (const ref of node.artifactRefs ?? []) {
+    const slug = stableId(ref)
+    for (const direction of ['output', 'input'] as const) {
+      const suffix = `-${direction}-${slug}`
+      if (rest.endsWith(suffix)) {
+        const producerId = rest.slice(0, rest.length - suffix.length)
+        if (producerId) return producerId
+      }
+    }
+  }
+  return null
+}
+
 export function InspectorArtifactBody({
   node,
   canvasId,
@@ -255,18 +250,33 @@ export function InspectorArtifactBody({
         : []
 
   // 同节点 + reference 同槽的 artifacts,按时间倒序;最新的一条作为主预览。
-  const nodeArtifacts = useMemo(
-    () =>
-      artifacts
-        .filter((art) => art.nodeId === node.id)
-        .sort((a, b) => {
-          const ta = Date.parse(String(a.createdAt))
-          const tb = Date.parse(String(b.createdAt))
-          return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
-        }),
-    [artifacts, node.id],
-  )
+  //
+  // 虚拟 io-artifact 节点(「查看输出」展开)的 id 是派生 id(io-artifact-…),
+  // 而 artifact 挂在生产节点的 id 上 — 直接按 node.id 过滤永远是空,inspector
+  // 退化成「手填空白编辑器 + 版本链还没产生」的假象。回退按 (生产节点 id +
+  // reference) 匹配 — 槽位键本来就是二元组,只按 reference 全画布捞会让共享
+  // 通用引用(report.md / output)的两个生产者互相串台。生产节点 id 从虚拟
+  // id 精确剥离(用节点声明的 refs 反推 slug,见 virtualArtifactProducerId);
+  // 剥不出来就不回退,宁可空也不串。
+  const nodeArtifacts = useMemo(() => {
+    const byNodeId = artifacts.filter((art) => art.nodeId === node.id)
+    const refs = node.artifactRefs ?? []
+    const producerId = virtualArtifactProducerId(node)
+    const pool = byNodeId.length > 0
+      ? byNodeId
+      : producerId
+        ? artifacts.filter((art) => art.nodeId === producerId && refs.includes(art.reference))
+        : []
+    return [...pool].sort((a, b) => {
+      const ta = Date.parse(String(a.createdAt))
+      const tb = Date.parse(String(b.createdAt))
+      return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
+    })
+  }, [artifacts, node])
   const latestArtifact = nodeArtifacts[0] ?? null
+  // 经 refs 回退匹配到的产物 = 由别的节点产出 → 这是执行产物的可视化面,
+  // 数据来源配置器 / 手填编辑器一律不该出现(canvas-spec §7.4 的虚拟节点版)。
+  const producedElsewhere = nodeArtifacts.length > 0 && nodeArtifacts.every((a) => a.nodeId !== node.id)
 
   // 用户点版本 chip → 主预览切换到那个版本;默认显示 latest。
   // PR #91 codex P2: initialize from prop when caller (card chip) requested a specific
@@ -299,15 +309,86 @@ export function InspectorArtifactBody({
   }, [activeArtifact, canvasId, contentByArtifactId])
   const activeArtifactContent = activeArtifact ? contentByArtifactId[activeArtifact.id] ?? undefined : undefined
 
+  // 版本链 — 真实链来自 version 行(每次 submit / update_artifact 追加一条),
+  // 不是 latest-per-slot 的 head 镜像。按产物自身的 nodeId 查(虚拟节点的
+  // 派生 id 查不到链)。
+  const [versionChain, setVersionChain] = useState<PlannerArtifactVersion[] | null>(null)
+  useEffect(() => {
+    if (!activeArtifact) {
+      setVersionChain(null)
+      return undefined
+    }
+    let cancelled = false
+    listArtifactVersions(canvasId, activeArtifact.nodeId, activeArtifact.reference)
+      .then((res) => {
+        if (!cancelled) setVersionChain(res.versions ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setVersionChain([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeArtifact, canvasId])
+
+  // 版本回放 — 点版本行把「预览」切到那一版的 snapshot(payload_inline),
+  // 再点一次或点「回到最新」复位。切换主产物(多槽位 chip)时也复位。
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
+  useEffect(() => {
+    setSelectedVersionId(null)
+  }, [activeArtifact?.id])
+  const selectedVersion = useMemo(
+    () => versionChain?.find((v) => v.version_id === selectedVersionId) ?? null,
+    [versionChain, selectedVersionId],
+  )
+  const selectedVersionNumber = useMemo(() => {
+    if (!selectedVersion || !versionChain) return null
+    const idx = versionChain.findIndex((v) => v.version_id === selectedVersion.version_id)
+    return idx >= 0 ? versionChain.length - idx : null
+  }, [selectedVersion, versionChain])
+  // 历史回放体:payload_inline 盖掉 head 的 payload/typedPayload。content(blob
+  // 全文)属于 head,回放时不沿用 — 否则新内容串进旧版本。inline 缺失(纯 blob
+  // 引用)时回放不出来,预览区给提示并继续显示最新。
+  const selectedVersionHasInline = selectedVersion ? selectedVersion.payload_inline != null : false
+  const previewArtifact = useMemo(() => {
+    if (!activeArtifact || !selectedVersion || selectedVersion.payload_inline == null) {
+      return activeArtifact
+    }
+    return { ...activeArtifact, payload: selectedVersion.payload_inline, typedPayload: null }
+  }, [activeArtifact, selectedVersion])
+  const previewingHistory = Boolean(selectedVersion) && selectedVersionHasInline
+
+  // 视图清单 — 产物自带的命名视图(update_artifact_views 固化)或按 payload
+  // 形状派生的默认视图。预览区(ArtifactViewTabs)渲染的就是这一组。
+  const artifactViews = useMemo(
+    () => (activeArtifact ? resolveArtifactViews(activeArtifact, activeArtifactContent ?? null) : []),
+    [activeArtifact, activeArtifactContent],
+  )
+  const hasSavedViews = Boolean(activeArtifact?.views?.length)
+
   // canvas-spec §7.4 — only source/seed artifacts are hand-fillable. See
   // isSeedAuthorableNode above. Gates both the AuthoredFirstArtifactEditor and
   // the per-version 「编辑」 toggles: a step node with upstream inputs producing
   // an execution product → NOT authorable; its output renders read-only.
-  const isSeedAuthorable = useMemo(() => isSeedAuthorableNode(node), [node])
+  const isSeedAuthorable = useMemo(() => isSeedAuthorableNode(node), [node]) && !producedElsewhere
 
   // canvas-spec §7 — OUTPUT artifact 的 Inspector 是**可视化**面,不绑数据源。
   // gate 下面整段「数据来源」picker / Attach data source(见 isOutputArtifactNode)。
-  const isOutputArtifact = useMemo(() => isOutputArtifactNode(node), [node])
+  const isOutputArtifact = useMemo(() => isOutputArtifactNode(node), [node]) || producedElsewhere
+
+  // artifact = 数据源(绑定)+ view:绑定事实从产物自身投影(integration
+  // entity → connector / 外部链接 / fields),不依赖节点上的配置。
+  const bindingEntity = useMemo(
+    () => (latestArtifact ? artifactToIntegrationEntity(latestArtifact) : undefined),
+    [latestArtifact],
+  )
+  const bindingSchema = useMemo(() => {
+    if (!bindingEntity) return undefined
+    const sep = bindingEntity.schemaId.indexOf(':')
+    return sep > 0
+      ? getViewSchema(bindingEntity.schemaId.slice(0, sep), bindingEntity.schemaId.slice(sep + 1))
+      : undefined
+  }, [bindingEntity])
 
   // 编辑切换(仅 markdown / prd / kanban 类型可编辑;v0.1 是占位 — 编辑器尚未上)。
   const [editMode, setEditMode] = useState(false)
@@ -372,23 +453,6 @@ export function InspectorArtifactBody({
       })
   }
 
-  // 卡片样式(widget chip)popover。
-  const [widgetDraft, setWidgetDraft] = useState<Widget | null>(node.widget ?? null)
-  const [widgetSaving, setWidgetSaving] = useState(false)
-  const [widgetError, setWidgetError] = useState<string | null>(null)
-  const [widgetPopoverOpen, setWidgetPopoverOpen] = useState(false)
-  const widgetPopoverRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!widgetPopoverOpen) return
-    const onMouseDown = (event: MouseEvent) => {
-      const ref = widgetPopoverRef.current
-      if (!ref) return
-      if (event.target instanceof Node && ref.contains(event.target)) return
-      setWidgetPopoverOpen(false)
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [widgetPopoverOpen])
 
   // dataSource picker — design spec ui_surface.inspector_picker (chip 3-option, auto-save).
   // 默认值: 旧节点缺省 → 'authored' (rollout 兼容)。
@@ -431,40 +495,6 @@ export function InspectorArtifactBody({
       .catch((err) => {
         setDataSourceSaving(false)
         setDataSourceError((err as Error).message || '保存失败')
-      })
-  }
-
-  const handlePickWidgetKind = (kind: WidgetKind | 'standard') => {
-    setWidgetError(null)
-    const next: Widget | null =
-      kind === 'standard'
-        ? null
-        : {
-            kind,
-            // artifact 节点的智能默认 source — 自己的 payload 就是数据,
-            // upstream artifact 也是合理的(被聚合)。
-            source: widgetDraft?.source ?? { inputKind: 'upstream', inputIndex: 0 },
-            mapping: widgetDraft?.mapping,
-          }
-    setWidgetDraft(next)
-    setWidgetSaving(true)
-    proposePlannerGraphChange(canvasId, {
-      summary: next
-        ? `Set widget to ${next.kind} on ${node.title}`
-        : `Clear widget on ${node.title}`,
-      changes: [{ kind: 'updateNode', nodeId: node.id, widget: next }],
-    })
-      .then((proposal) => {
-        setWidgetSaving(false)
-        if (!proposal) {
-          setWidgetError('服务端没返回提议')
-          return
-        }
-        onProposalCreated?.(proposal)
-      })
-      .catch((err) => {
-        setWidgetSaving(false)
-        setWidgetError((err as Error).message || '保存失败')
       })
   }
 
@@ -556,11 +586,52 @@ export function InspectorArtifactBody({
         </div>
       )}
 
+      {/* 1. 数据源 — artifact = 数据源(绑定)+ view。有产物时先回答
+          「这份数据绑定在哪」:integration 投影出 connector / 外部链接 /
+          关键事实,只读;非 integration 产物给出产出方式 + 引用。 */}
+      {bindingEntity && latestArtifact ? (
+        <div className="planner-node-modal__section">
+          <h3>
+            <Database size={13} aria-hidden /> 数据源
+          </h3>
+          <div className="planner-artifact-binding">
+            <span className="planner-artifact-binding__connector">
+              <Plug size={11} aria-hidden /> {bindingEntity.schemaId}
+            </span>
+            <BindingFacts entity={bindingEntity} />
+            {bindingUrl(bindingEntity) ? (
+              <a href={bindingUrl(bindingEntity)!} target="_blank" rel="noreferrer">
+                {bindingUrl(bindingEntity)}
+              </a>
+            ) : (
+              <code title="内部槽位引用 — 版本链按它归并">{latestArtifact.reference}</code>
+            )}
+            {bindingSchema && (
+              <small className="planner-node-modal__view-hint">
+                视图 schema:{bindingSchema.integrationId}:{bindingSchema.entityKind} · {bindingSchema.preview.summary}
+              </small>
+            )}
+          </div>
+        </div>
+      ) : latestArtifact ? (
+        <div className="planner-node-modal__section">
+          <h3>
+            <Database size={13} aria-hidden /> 数据源
+          </h3>
+          <div className="planner-artifact-binding">
+            <span className="planner-artifact-binding__connector">
+              {isOutputArtifact ? '上游执行产物 — 由 step/会话产出,只读' : '手填种子 — 本节点自带 payload'}
+            </span>
+            <code title="槽位引用 — 版本链按它归并">{latestArtifact.reference}</code>
+          </div>
+        </div>
+      ) : null}
+
       {/* 数据来源 picker — design spec ui_surface.inspector_picker.
           chip 2-option (authored / mirrored), auto-save.
           canvas-spec §7 — OUTPUT artifact 是可视化面、不绑数据源:这段只对
-          seed/源 与已镜像的 dataSource artifact 渲染(见 isOutputArtifact)。 */}
-      {!isOutputArtifact && (
+          **还没有产物**的 seed/mirrored artifact 节点渲染(配置态)。 */}
+      {!isOutputArtifact && !latestArtifact && (
       <div className="planner-node-modal__section">
         <h3>
           <Database size={13} aria-hidden /> 数据来源
@@ -664,11 +735,38 @@ export function InspectorArtifactBody({
       </div>
       )}
 
-      {/* 产物预览 / 编辑区 — artifact 节点核心 */}
+      {/* 2. 视图 — 这份数据有哪些投影。命名视图由 agent 经 update_artifact_views
+          固化;没有命名视图时按 payload 形状派生(Integration / Table / Raw …)。
+          预览区渲染的 tab 即这一组。 */}
+      {activeArtifact && artifactViews.length > 0 && (
+        <div className="planner-node-modal__section">
+          <h3>
+            <Layers size={13} aria-hidden /> 视图
+          </h3>
+          <div className="planner-node-modal__widget-kind-chips">
+            {artifactViews.map((item) => (
+              <span
+                key={item.view.id}
+                className="planner-node-modal__widget-kind-chip is-selected"
+                title={`kind: ${item.view.kind}`}
+              >
+                {item.view.title}
+              </span>
+            ))}
+          </div>
+          <div className="planner-node-modal__view-hint">
+            {hasSavedViews
+              ? '产物自带的命名视图(update_artifact_views 写入,跨卡片/检查器/产物库一致)。'
+              : '按 payload 形状派生的默认视图 — agent 可用 update_artifact_views 固化命名视图。'}
+          </div>
+        </div>
+      )}
+
+      {/* 3. 预览 — artifact 节点核心(按视图 tab 渲染) */}
       <div className="planner-node-modal__section planner-node-modal__artifact-body">
         <h3>
-          <FileText size={13} aria-hidden /> 产物
-          {canEditPayload && (
+          <Eye size={13} aria-hidden /> 预览
+          {canEditPayload && !previewingHistory && (
             <button
               type="button"
               className="planner-node-modal__artifact-edit-toggle"
@@ -679,11 +777,31 @@ export function InspectorArtifactBody({
             </button>
           )}
         </h3>
-        {activeArtifact && (
+        {/* 版本回放横幅 — 预览正显示历史 snapshot,提醒 + 一键回到最新。 */}
+        {previewingHistory && (
+          <div className="planner-node-modal__version-replay-banner">
+            <span>
+              正在回放历史版本{selectedVersionNumber != null ? ` v${selectedVersionNumber}` : ''} 的快照
+            </span>
+            <button type="button" onClick={() => setSelectedVersionId(null)}>
+              回到最新
+            </button>
+          </div>
+        )}
+        {/* 选了版本但没有内联快照(payload 只剩 blob 引用)— 回放不出来,如实说。 */}
+        {selectedVersion && !selectedVersionHasInline && (
+          <div className="planner-node-modal__version-replay-banner is-missing">
+            <span>这一版没有内联快照,无法回放 — 下面显示的仍是最新内容</span>
+            <button type="button" onClick={() => setSelectedVersionId(null)}>
+              知道了
+            </button>
+          </div>
+        )}
+        {previewArtifact && (
           <PayloadBodySwitch
-            artifact={activeArtifact}
-            content={activeArtifactContent}
-            editMode={editMode && canEditPayload}
+            artifact={previewArtifact}
+            content={previewingHistory ? undefined : activeArtifactContent}
+            editMode={editMode && canEditPayload && !previewingHistory}
           />
         )}
         {/* authored 模式编辑器:不论是否已有产物,都保留(2026-05-29 fix Q3)。
@@ -725,16 +843,30 @@ export function InspectorArtifactBody({
         )}
       </div>
 
-      {/* 版本 (VersionTimeline) */}
+      {/* 4. 版本 — 真实版本链(每次 submit / update_artifact 追加一条),
+          含提交方与来源;多槽位时上方 chip 切换主预览。 */}
       {nodeArtifacts.length >= 1 && (
         <div className="planner-node-modal__section">
           <h3>
             <GitCompare size={13} aria-hidden /> 版本
+            {versionChain != null && <em className="planner-node-modal__view-saving">共 {versionChain.length} 版</em>}
           </h3>
-          <VersionTimeline
-            artifacts={nodeArtifacts}
-            activeId={activeArtifact?.id ?? null}
-            onPick={(id) => setSelectedArtifactId(id)}
+          {nodeArtifacts.length > 1 && (
+            <VersionTimeline
+              artifacts={nodeArtifacts}
+              activeId={activeArtifact?.id ?? null}
+              onPick={(id) => setSelectedArtifactId(id)}
+            />
+          )}
+          <VersionChainList
+            versions={versionChain}
+            fallbackArtifacts={nodeArtifacts}
+            sessionId={node.sessionId ?? null}
+            nodeId={node.id}
+            selectedVersionId={selectedVersionId}
+            onSelectVersion={setSelectedVersionId}
+            onOpenSession={onOpenSession}
+            onClose={onClose}
           />
         </div>
       )}
@@ -748,64 +880,6 @@ export function InspectorArtifactBody({
           <SourceLineagePanel upstreamNodeIds={upstreamNodeIds} />
         </div>
       )}
-
-      {/* 卡片样式 — widget chip popover(收窄 allowed chips) */}
-      <div className="planner-node-modal__group-label" ref={widgetPopoverRef}>
-        <span>卡片样式</span>
-        <small>artifact 节点的画板呈现</small>
-        <span className="planner-node-modal__widget-summary">
-          {describeArtifactWidget(widgetDraft)}
-        </span>
-        <button
-          type="button"
-          className={`planner-node-modal__widget-toggle${widgetPopoverOpen ? ' is-open' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            setWidgetPopoverOpen((open) => !open)
-          }}
-          aria-expanded={widgetPopoverOpen}
-          aria-label="调整卡片样式"
-          title="调整卡片样式"
-        >
-          <Settings2 size={12} aria-hidden />
-        </button>
-        {widgetPopoverOpen && (
-          <div className="planner-node-modal__widget-popover" role="dialog" aria-label="卡片样式">
-            <div className="planner-node-modal__widget-popover-header">
-              <Eye size={12} aria-hidden /> 样式
-              {widgetSaving && <em className="planner-node-modal__view-saving">保存中…</em>}
-              {widgetError && (
-                <em className="planner-node-modal__view-error" title={widgetError}>
-                  !
-                </em>
-              )}
-            </div>
-            <div className="planner-node-modal__widget-kind-chips">
-              {ARTIFACT_WIDGET_OPTIONS.map((option) => {
-                const selected =
-                  option.kind === 'standard'
-                    ? widgetDraft == null
-                    : widgetDraft?.kind === option.kind
-                return (
-                  <button
-                    key={option.kind}
-                    type="button"
-                    className={`planner-node-modal__widget-kind-chip${selected ? ' is-selected' : ''}`}
-                    disabled={widgetSaving}
-                    onClick={() => handlePickWidgetKind(option.kind)}
-                    title={option.tooltip}
-                  >
-                    {option.label}
-                  </button>
-                )
-              })}
-            </div>
-            <div className="planner-node-modal__view-hint">
-              {describeArtifactWidget(widgetDraft)}
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* 操作 (ArtifactActionsBar) */}
       <div className="planner-node-modal__section">
@@ -912,20 +986,153 @@ export function InspectorArtifactBody({
         {actionError && <p className="planner-node-actions__error">{actionError}</p>}
       </div>
 
-      {/* 版本与足迹 (FootprintTimeline) */}
-      <div className="planner-node-modal__group-label planner-node-modal__group-label--footprint">
-        <span>版本与足迹</span>
-        <small>footprint · 版本链 + 上游会话</small>
-      </div>
-      <div className="planner-node-modal__section planner-node-modal__footprint">
-        <FootprintTimeline
-          artifacts={nodeArtifacts}
-          node={node}
-          onOpenSession={onOpenSession}
-          onClose={onClose}
-        />
-      </div>
     </>
+  )
+}
+
+// 数据源绑定的关键事实(tab / rows / columns / updated …)— 来自
+// artifactToIntegrationEntity 铺进 entity payload 的 typedPayload.fields。
+function BindingFacts({ entity }: { entity: { payload: unknown } }) {
+  const payload = entity.payload && typeof entity.payload === 'object' && !Array.isArray(entity.payload)
+    ? entity.payload as Record<string, unknown>
+    : null
+  if (!payload) return null
+  const facts = ['tab', 'rows', 'columns', 'updated']
+    .map((key) => {
+      const value = payload[key]
+      if (typeof value === 'string' && value.trim()) return `${key} ${value}`
+      if (typeof value === 'number' && Number.isFinite(value)) return `${key} ${value}`
+      return null
+    })
+    .filter((item): item is string => Boolean(item))
+  if (facts.length === 0) return null
+  return <span className="planner-artifact-binding__facts">{facts.join(' · ')}</span>
+}
+
+function bindingUrl(entity: { payload: unknown }): string | null {
+  const payload = entity.payload && typeof entity.payload === 'object' && !Array.isArray(entity.payload)
+    ? entity.payload as Record<string, unknown>
+    : null
+  const url = payload?.url
+  return typeof url === 'string' && url.trim() ? url : null
+}
+
+// snapshot 成因 — 这一版是怎么来的。判定优先级:
+//   1. metadata.source === 'updateArtifact' → 直接写入(update_artifact MCP /
+//      同步快照按钮派发的同步会话都走这条路)
+//   2. metadata 带 title/kind/status(submit 路径随提交写的展示元数据)→ 节点提交
+//   3. 兜底按提交方:integration → 外部同步;human → 人工提交;其余 → 节点提交
+function versionCauseLabel(
+  meta: Record<string, unknown> | null,
+  submittedByKind: string,
+): string {
+  const source = typeof meta?.source === 'string' ? meta.source : null
+  if (source === 'updateArtifact') return '直接更新(update_artifact / 同步)'
+  if (source) return source
+  if (meta && ('title' in meta || 'kind' in meta || 'status' in meta)) return '节点提交'
+  if (submittedByKind === 'integration') return '外部同步'
+  if (submittedByKind === 'human') return '人工提交'
+  return '节点提交'
+}
+
+// 版本链列表 — 真实 version 行(submit / update_artifact 各追加一条)。
+// 链还没回来(null)显示加载;空链回退显示 latest-per-slot head(老画布的
+// attach 不写 version 行,head 至少证明产物存在)。
+// 每行可点 — 点了把「预览」切到那一版的 snapshot,再点一次取消回放。
+function VersionChainList({
+  versions,
+  fallbackArtifacts,
+  sessionId,
+  nodeId,
+  selectedVersionId,
+  onSelectVersion,
+  onOpenSession,
+  onClose,
+}: {
+  versions: PlannerArtifactVersion[] | null
+  fallbackArtifacts: PlannerArtifact[]
+  sessionId: string | null
+  nodeId: string
+  selectedVersionId: string | null
+  onSelectVersion: (versionId: string | null) => void
+  onOpenSession?: (sessionId: string, nodeId: string) => void
+  onClose: () => void
+}) {
+  const openSessionRow = sessionId && onOpenSession && (
+    <li>
+      <button
+        type="button"
+        className="planner-node-modal__open-session"
+        onClick={() => {
+          onOpenSession(sessionId, nodeId)
+          onClose()
+        }}
+      >
+        → 打开上游会话
+      </button>
+    </li>
+  )
+  if (versions == null) {
+    return <p className="planner-node-modal__empty">加载版本链…</p>
+  }
+  if (versions.length === 0) {
+    if (fallbackArtifacts.length === 0) {
+      return <p className="planner-node-modal__empty">(版本链为空 — 还没有任何提交)</p>
+    }
+    return (
+      <ul className="planner-node-modal__footprint-list">
+        {fallbackArtifacts.map((art, idx) => (
+          <li key={art.id}>
+            <Archive size={11} aria-hidden />
+            <strong>{positionTagLabel(art.positionTag ?? (idx === 0 ? 'latest' : 'candidate'))}</strong>
+            <span>{formatDateShort(art.createdAt)}</span>
+          </li>
+        ))}
+        {openSessionRow}
+      </ul>
+    )
+  }
+  const submitterLabel: Record<string, string> = {
+    agent: 'agent',
+    human: '人工',
+    system: '系统',
+    integration: 'integration',
+  }
+  return (
+    <ul className="planner-node-modal__footprint-list">
+      {versions.map((version, idx) => {
+        const meta = version.metadata && typeof version.metadata === 'object' && !Array.isArray(version.metadata)
+          ? version.metadata as Record<string, unknown>
+          : null
+        const isSelected = version.version_id === selectedVersionId
+        const hasInline = version.payload_inline != null
+        return (
+          <li key={version.version_id}>
+            <button
+              type="button"
+              className={`planner-node-modal__version-row${isSelected ? ' is-active' : ''}`}
+              onClick={() => onSelectVersion(isSelected ? null : version.version_id)}
+              title={
+                isSelected
+                  ? '取消回放,回到最新'
+                  : hasInline
+                    ? '把预览切到这一版的快照'
+                    : '这一版没有内联快照,无法回放预览'
+              }
+            >
+              <Archive size={11} aria-hidden />
+              <em>v{versions.length - idx}</em>
+              <strong>{submitterLabel[version.submitted_by_kind] ?? version.submitted_by_kind}</strong>
+              <span className="planner-artifact-binding__facts">
+                {versionCauseLabel(meta, version.submitted_by_kind)}
+              </span>
+              <span>{formatDateShort(version.created_at)}</span>
+            </button>
+          </li>
+        )
+      })}
+      {openSessionRow}
+    </ul>
   )
 }
 
@@ -1069,10 +1276,10 @@ function PayloadBodySwitch({
           return <KanbanPayloadEditor payload={typed} />
       }
     }
-    return <TypedPayloadPreview payload={typed} />
+    return <ArtifactViewTabs artifact={artifact} content={content} />
   }
   // 旧 PlannerArtifactPayloadType 兜底 — text / html / json / file。
-  return <LegacyPayloadPreview artifact={artifact} />
+  return <ArtifactViewTabs artifact={artifact} content={content} />
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,50 +1442,6 @@ function SourceLineagePanel({ upstreamNodeIds }: { upstreamNodeIds: string[] }) 
   )
 }
 
-// ---------------------------------------------------------------------------
-// FootprintTimeline — 版本链 + 上游 session 链接占位。
-// ---------------------------------------------------------------------------
-function FootprintTimeline({
-  artifacts,
-  node,
-  onOpenSession,
-  onClose,
-}: {
-  artifacts: PlannerArtifact[]
-  node: PlanningNode
-  onOpenSession?: (sessionId: string, nodeId: string) => void
-  onClose: () => void
-}) {
-  if (artifacts.length === 0) {
-    return <p className="planner-node-modal__empty">(暂无足迹 — 版本链还没产生)</p>
-  }
-  return (
-    <ul className="planner-node-modal__footprint-list">
-      {artifacts.map((art, idx) => (
-        <li key={art.id}>
-          <Archive size={11} aria-hidden />
-          <strong>{positionTagLabel(art.positionTag ?? (idx === 0 ? 'latest' : 'candidate'))}</strong>
-          <em>v{artifacts.length - idx}</em>
-          <span>{formatDateShort(art.createdAt)}</span>
-        </li>
-      ))}
-      {node.sessionId && onOpenSession && (
-        <li>
-          <button
-            type="button"
-            className="planner-node-modal__open-session"
-            onClick={() => {
-              onOpenSession(node.sessionId!, node.id)
-              onClose()
-            }}
-          >
-            → 打开上游会话
-          </button>
-        </li>
-      )}
-    </ul>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1292,19 +1455,6 @@ function describeDataSourceMode(mode: ArtifactDataSourceMode): string {
   }
 }
 
-function describeArtifactWidget(widget: Widget | null): string {
-  if (!widget) return '标准 · 显示节点本身(标题 / 状态)'
-  switch (widget.kind) {
-    case 'artifact-preview':
-      return '产物预览 · 内嵌渲染产物正文'
-    case 'kanban':
-      return '看板 · 按列分组展示'
-    case 'inbox':
-      return '收件箱 · 按活动倒序'
-    default:
-      return widget.kind
-  }
-}
 
 function positionTagLabel(tag: string): string {
   switch (tag) {

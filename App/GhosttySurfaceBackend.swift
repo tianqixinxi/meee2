@@ -52,6 +52,15 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
         }
     }
 
+    func deliverPrompt(id: String, text: String) -> PromptDeliveryOutcome {
+        (try? runOnMain {
+            guard let session = resolveSession(id: id) else {
+                return PromptDeliveryOutcome.sessionNotFound
+            }
+            return session.deliverPrompt(text) ? .delivered : .busy
+        }) ?? .sessionNotFound
+    }
+
     func snapshot(id: String) -> TerminalSessionSnapshot? {
         try? runOnMain {
             resolveSession(id: id)?.snapshot()
@@ -90,6 +99,7 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
             canvasId: request.canvasId,
             nodeId: request.nodeId,
             initialPrompt: request.initialPrompt,
+            initialPromptSettleCeiling: request.initialPromptSettleCeiling,
             onExit: { [weak self] surfaceId in
                 self?.markExited(surfaceId: surfaceId)
             },
@@ -222,6 +232,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private let terminalView: TerminalView
     private let terminalController: GhosttyTerminal.TerminalController
     private let initialPrompt: String?
+    private let initialPromptSettleCeiling: TimeInterval?
     private let onExit: @MainActor (String) -> Void
     private let onStatusChange: @MainActor (String, String) -> Void
     private let createdAt = Date()
@@ -229,6 +240,9 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var status = InternalTerminalLifecycle.starting.rawValue
     private var didSendCommand = false
     private var didSendInitialPrompt = false
+    /// deliverPrompt 的提交窗口守卫:打字到 Return 落键之间为 true,期间的
+    /// 重复投递被拒绝(P2 — 防止两条指令拼进同一个 composer)。
+    private var pendingPromptSubmit = false
     private var detached = false
     private var lastLayoutFrame: NSRect = .zero
 
@@ -263,6 +277,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         canvasId: String?,
         nodeId: String?,
         initialPrompt: String?,
+        initialPromptSettleCeiling: TimeInterval? = nil,
         onExit: @escaping @MainActor (String) -> Void,
         onStatusChange: @escaping @MainActor (String, String) -> Void
     ) throws {
@@ -275,6 +290,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         self.canvasId = canvasId
         self.nodeId = nodeId
         self.initialPrompt = Self.normalizedPromptForPaste(initialPrompt)
+        self.initialPromptSettleCeiling = initialPromptSettleCeiling
         self.onExit = onExit
         self.onStatusChange = onStatusChange
         self.terminalController = Self.makeTerminalController()
@@ -383,6 +399,36 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         logPerf("write_input", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
     }
 
+    /// 打字 + 提交。writeInput 的裸 "\n" 在 agent TUI 的 composer 里是插入
+    /// 换行而非提交(实测:artifact sync 复用投递的指令一直躺在输入框里,
+    /// 会话纹丝不动);真正的提交是 Return 键。复刻 initial-prompt 投递的
+    /// 提交节奏:打字后 400ms 按 Return,150ms 后补一次(首次可能被渲染吞)。
+    /// 返回 false = 上一条 prompt 还在提交窗口内(P2:此刻再打字会把两条
+    /// 文本拼进同一个 composer,被第一个 Return 当一条畸形请求提交)。
+    func deliverPrompt(_ text: String) -> Bool {
+        guard !detached, !pendingPromptSubmit else { return false }
+        pendingPromptSubmit = true
+        let startedAt = Date()
+        terminalView.sendText(text)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
+            guard let self else { return }
+            guard !self.detached else {
+                self.pendingPromptSubmit = false
+                return
+            }
+            self.pressReturnKey(reason: "deliver_prompt_submit")
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+                guard let self else { return }
+                self.pendingPromptSubmit = false
+                guard !self.detached else { return }
+                self.pressReturnKey(reason: "deliver_prompt_submit_retry")
+            }
+        }
+        touch()
+        logPerf("deliver_prompt", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
+        return true
+    }
+
     func fitToCurrentSize() {
         guard !detached else { return }
         terminalView.layoutSubtreeIfNeeded()
@@ -434,7 +480,10 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         // the TUI as "ready". Hard ceiling delivers anyway even if no signal ever
         // arrives.
         let settleWindow: TimeInterval = 0.8
-        let ceiling: TimeInterval = 20.0
+        // 默认 20s 兜底适合 fresh session;大会话 --resume 的加载远超 20s,
+        // 调用方(artifact sync 等)可放宽 — settle 在加载安静后自然触发,
+        // 上限只防"永远没有活动信号"的极端情况。
+        let ceiling: TimeInterval = initialPromptSettleCeiling ?? 20.0
         let firstProbe: DispatchTimeInterval = .milliseconds(700)
 
         func probe() {

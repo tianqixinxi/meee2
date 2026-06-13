@@ -40,7 +40,7 @@ import type {
   PlannerArtifactContent,
   PlannerArtifactVersion,
 } from '../types'
-import { TypedPayloadPreview } from './artifacts/TypedPayloadPreview'
+import { ArtifactViewTabs } from './artifacts/ArtifactViewTabs'
 
 type StateFilter = ArtifactDisplayState | 'all'
 type CanvasFilter = string | 'all'
@@ -630,8 +630,8 @@ function ArtifactDetailPanel({
             <Loader2 size={14} className="spin" aria-hidden />
             <span>{t('artifacts.loadingLatest')}</span>
           </div>
-        ) : resolvedArtifactPayload(item.latest, content) ? (
-          <TypedPayloadPreview payload={resolvedArtifactPayload(item.latest, content)!} />
+        ) : resolvedArtifactPayload(item.latest, content) || content || item.latest.payload != null ? (
+          <ArtifactViewTabs artifact={item.latest} content={content} />
         ) : (
           <ArtifactContentPreview content={content} t={t} />
         )}
@@ -813,9 +813,13 @@ function ArtifactRenderedContent({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const typedPayload = resolvedArtifactPayload(artifact, content)
-  if (typedPayload) return <TypedPayloadPreview payload={typedPayload} />
-  if (!content) return <div className="artifacts-preview">{t('artifacts.openDetailsPrompt')}</div>
-  if (content.type === 'html') {
+  // typedPayload 在手时不需要 content 也能渲染(openContentPreview 对带
+  // typedPayload 的 artifact 会跳过 loadContent 直接开 modal)— 只有真的
+  // 什么都没有才提示去加载。
+  if (!content && !typedPayload && artifact.payload == null) {
+    return <div className="artifacts-preview">{t('artifacts.openDetailsPrompt')}</div>
+  }
+  if (content?.type === 'html' && !artifact.views?.length) {
     return (
       <iframe
         className="artifacts-html-preview"
@@ -825,8 +829,8 @@ function ArtifactRenderedContent({
       />
     )
   }
-  if (content.type === 'json' || content.type === 'kanban') {
-    return <pre className="artifacts-preview">{formatJsonPreview(content)}</pre>
+  if (typedPayload || content || artifact.payload != null) {
+    return <ArtifactViewTabs artifact={artifact} content={content} />
   }
   return <ArtifactContentPreview content={content} t={t} />
 }

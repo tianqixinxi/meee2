@@ -1445,6 +1445,138 @@ final class PlannerCoreTests: XCTestCase {
         }
     }
 
+    // MARK: - propose_add_node(proposal 子功能:节点会话提议新增 step)
+
+    func testProposeAddNodeCreatesPendingProposalWithOriginAndAppliesAfterApproval() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let origin = record.nodes[0]
+
+        let proposal = try PlannerBoardBridge.proposeAddNode(
+            originNodeId: origin.id,
+            originSessionId: "session-xyz",
+            title: "bugfix: sheet snapshot rendering",
+            goal: "bug fixed and verified",
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(proposal.status, .pending)
+        XCTAssertEqual(proposal.originNodeId, origin.id)
+        XCTAssertEqual(proposal.originSessionId, "session-xyz")
+        XCTAssertEqual(proposal.changes.count, 1)
+        let change = try XCTUnwrap(proposal.changes.first)
+        XCTAssertEqual(change.kind, .addNode)
+        let newNode = try XCTUnwrap(change.node)
+        XCTAssertEqual(newNode.title, "bugfix: sheet snapshot rendering")
+        // 缺省依赖发起节点 —— 画布上呈现 主→子 边。
+        XCTAssertEqual(newNode.dependsOnNodeIds, [origin.id])
+        XCTAssertEqual(newNode.schema.goal, "bug fixed and verified")
+        XCTAssertEqual(newNode.source, .session)
+
+        // pending 提案不落图。
+        let before = try PlannerBoardBridge.canvasState(
+            for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        XCTAssertFalse(before.nodes.contains { $0.id == newNode.id })
+
+        // owner approve + apply 后才落图(复用既有提案管线)。
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id, for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id, for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        let after = try PlannerBoardBridge.canvasState(
+            for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        XCTAssertTrue(after.nodes.contains { $0.id == newNode.id })
+    }
+
+    func testProposeAddNodeIsDoerScopedToOwnNode() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        // doer "A" 可以从自己的节点(node-1)发起提案。
+        _ = try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[0].id,
+            originSessionId: nil,
+            title: "follow-up step",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "A"
+        )
+
+        // 从别人的节点(node-2, doer B)发起 → 拒绝。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[1].id,
+            originSessionId: nil,
+            title: "should fail",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "A"
+        )) { error in
+            guard case PlannerCoreError.permissionDenied = error else {
+                return XCTFail("expected permissionDenied, got \(error)")
+            }
+        }
+    }
+
+    func testProposeAddNodeValidationErrorsSurfaceToCaller() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        // 空标题 → 报错(透传给 agent 自纠)。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[0].id,
+            originSessionId: nil,
+            title: "   ",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        ))
+
+        // 发起节点不存在 → nodeNotFound。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: "missing-node",
+            originSessionId: nil,
+            title: "x",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .nodeNotFound("missing-node"))
+        }
+
+        // 显式依赖不存在的上游 → 校验拒绝,提案不落库。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[0].id,
+            originSessionId: nil,
+            title: "dep check",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: ["nope"],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        ))
+    }
+
     func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
         let defaults = UserDefaults.standard
         let oldConnected = defaults.object(forKey: "meee2Connected")
@@ -4348,6 +4480,264 @@ final class PlannerCoreTests: XCTestCase {
                 return XCTFail("expected artifactNotFound, got \(error)")
             }
         }
+    }
+
+    func testArtifactViewsUpdateSeparatelyFromDataVersions() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeId = "canvas-a-node-1"
+        let reference = "artifact://ideas"
+
+        _ = try PlannerBoardBridge.attachArtifact(
+            nodeId: nodeId,
+            kind: .generic,
+            title: "Ideas",
+            reference: reference,
+            status: "attached",
+            payload: .object([
+                "type": .string("json"),
+                "json": .string(#"[{"title":"A"},{"title":"B"}]"#)
+            ]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let beforeVersions = try PlannerBoardBridge.store.artifactVersions(
+            canvasId: "canvas-a",
+            nodeId: nodeId,
+            reference: reference
+        ).count
+        let beforeEvents = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: "canvas-a").events.count
+
+        let views = try PlannerBoardBridge.updateArtifactViews(
+            reference: reference,
+            views: [
+                PlannerArtifactView(
+                    id: "table",
+                    title: "Table",
+                    kind: .table,
+                    columns: ["title"]
+                ),
+                PlannerArtifactView(
+                    id: "list",
+                    title: "List",
+                    kind: .list
+                )
+            ],
+            deleteViewIds: [],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(views.count, 1)
+        XCTAssertEqual(views.first?.views?.map(\.id), ["table", "list"])
+        let afterViewVersions = try PlannerBoardBridge.store.artifactVersions(
+            canvasId: "canvas-a",
+            nodeId: nodeId,
+            reference: reference
+        ).count
+        let afterViewEvents = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: "canvas-a").events.count
+        XCTAssertEqual(afterViewVersions, beforeVersions, "view-only updates must not append artifact data versions")
+        XCTAssertGreaterThan(afterViewEvents, beforeEvents, "view-only updates should still emit a canvas event")
+
+        let dataUpdated = try PlannerBoardBridge.updateArtifact(
+            reference: reference,
+            title: "Ideas updated",
+            payload: .object([
+                "type": .string("json"),
+                "json": .string(#"[{"title":"C"}]"#)
+            ]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(dataUpdated.first?.views?.map(\.id), ["table", "list"])
+
+        let pruned = try PlannerBoardBridge.updateArtifactViews(
+            reference: reference,
+            views: [
+                PlannerArtifactView(
+                    id: "table",
+                    title: "Grid",
+                    kind: .table,
+                    columns: ["title"]
+                )
+            ],
+            deleteViewIds: ["list"],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(pruned.first?.views?.map(\.title), ["Grid"])
+        XCTAssertEqual(pruned.first?.views?.map(\.id), ["table"])
+    }
+
+    func testSubmitNodeOutputPreservesArtifactViewsOnSlotReplacement() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeId = "canvas-a-node-1"
+        let reference = "artifact://ideas"
+
+        _ = try PlannerBoardBridge.attachArtifact(
+            nodeId: nodeId,
+            kind: .generic,
+            title: "Ideas",
+            reference: reference,
+            status: "attached",
+            payload: .object([
+                "type": .string("json"),
+                "json": .string(#"[{"title":"A"}]"#)
+            ]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.updateArtifactViews(
+            reference: reference,
+            views: [
+                PlannerArtifactView(
+                    id: "table",
+                    title: "Table",
+                    kind: .table,
+                    columns: ["title"]
+                )
+            ],
+            deleteViewIds: [],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: nodeId,
+            output: PlannerNodeOutput(
+                nodeId: nodeId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Ideas refreshed", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .generic,
+                        title: "Ideas refreshed",
+                        reference: reference,
+                        payload: .object([
+                            "type": .string("json"),
+                            "json": .string(#"[{"title":"B"}]"#)
+                        ]),
+                        routeTo: []
+                    )
+                ],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let updated = try XCTUnwrap(result.graph.artifacts.first { $0.reference == reference })
+        XCTAssertEqual(updated.title, "Ideas refreshed")
+        XCTAssertEqual(updated.views?.map(\.id), ["table"])
+    }
+
+    func testArtifactViewUpdatesRejectDuplicateIds() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeId = "canvas-a-node-1"
+        let reference = "artifact://duplicate-view"
+
+        _ = try PlannerBoardBridge.attachArtifact(
+            nodeId: nodeId,
+            kind: .generic,
+            title: "Ideas",
+            reference: reference,
+            status: "attached",
+            payload: .object(["type": .string("json"), "json": .string("[]")]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertThrowsError(try PlannerBoardBridge.updateArtifactViews(
+            reference: reference,
+            views: [
+                PlannerArtifactView(id: "same", title: "Table", kind: .table),
+                PlannerArtifactView(id: "same", title: "List", kind: .list)
+            ],
+            deleteViewIds: [],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            guard case PlannerCoreError.invalidNodeOutput(let message) = error else {
+                return XCTFail("expected invalidNodeOutput, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Duplicate artifact view id"))
+        }
+    }
+
+    func testArtifactDataWritesRejectInlineViews() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        XCTAssertThrowsError(try PlannerBoardBridge.attachArtifact(
+            nodeId: "canvas-a-node-1",
+            kind: .generic,
+            title: "Bad",
+            reference: "artifact://bad-views",
+            status: "attached",
+            payload: .object([
+                "type": .string("json"),
+                "json": .string("[]"),
+                "views": .array([])
+            ]),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            guard case PlannerCoreError.invalidNodeOutput(let message) = error else {
+                return XCTFail("expected invalidNodeOutput, got \(error)")
+            }
+            XCTAssertTrue(message.contains("update_artifact_views"))
+        }
+    }
+
+    func testJsonArtifactPayloadsReadBackAsDisplayableContent() throws {
+        let stringPayload = PlannerArtifact(
+            id: "artifact-json-string",
+            canvasId: "canvas-a",
+            nodeId: "node-a",
+            kind: .generic,
+            title: "JSON String",
+            reference: "json-string",
+            status: "attached",
+            createdAt: Date(),
+            payload: .object([
+                "type": .string("json"),
+                "json": .string(#"[{"title":"A"}]"#)
+            ])
+        )
+        XCTAssertEqual(try PlannerArtifactStorage.content(for: stringPayload).content, #"[{"title":"A"}]"#)
+
+        let arrayPayload = PlannerArtifact(
+            id: "artifact-json-data",
+            canvasId: "canvas-a",
+            nodeId: "node-a",
+            kind: .generic,
+            title: "JSON Data",
+            reference: "json-data",
+            status: "attached",
+            createdAt: Date(),
+            payload: .object([
+                "type": .string("json"),
+                "data": .array([
+                    .object(["title": .string("A")]),
+                    .object(["title": .string("B")])
+                ])
+            ])
+        )
+        let content = try XCTUnwrap(PlannerArtifactStorage.content(for: arrayPayload).content)
+        XCTAssertTrue(content.contains(#""title":"A""#))
+        XCTAssertTrue(content.contains(#""title":"B""#))
     }
 
     /// Regression (PERF): the dead-session demotion branch must be idempotent.

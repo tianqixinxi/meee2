@@ -879,6 +879,24 @@ export interface PlannerArtifact {
    * shows a pending badge + Promote button when this is 'pending'.
    */
   reviewStatus?: ArtifactReviewStatus
+  views?: PlannerArtifactView[] | null
+}
+
+/** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /
+ *  badge+detail 行)。`payload`:typed payload 的结构化预览(prd tldr /
+ *  check-result 统计…)。两者缺位时,这些 artifact 的派生默认 view 只能标成
+ *  raw → 渲染成 JSON dump / 原文,结构化语义全丢。 */
+export type PlannerArtifactViewKind = 'table' | 'list' | 'kanban' | 'raw' | 'json' | 'integration' | 'payload'
+
+export interface PlannerArtifactView {
+  id: string
+  title: string
+  kind: PlannerArtifactViewKind
+  sourcePath?: string | null
+  columns?: string[] | null
+  filter?: unknown
+  sort?: unknown
+  groupBy?: unknown
 }
 
 export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'
@@ -1419,6 +1437,10 @@ export interface PlanProposal {
   summary: string
   changes: PlanChange[]
   status: PlanProposalStatus
+  /** propose_add_node · 提案来源归属:节点工作会话经 MCP 发起时携带,
+   *  缺省 ⇒ owner / planner-agent 渠道。UI 据此显示「来自节点 X 的提议」。 */
+  originNodeId?: string
+  originSessionId?: string
 }
 
 export type NodeRunState = 'draft' | 'ready' | 'working' | 'blocked' | 'done'

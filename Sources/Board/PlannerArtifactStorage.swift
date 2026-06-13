@@ -26,6 +26,12 @@ enum PlannerArtifactStorage {
             return payload
         }
 
+        if object["views"] != nil {
+            throw PlannerCoreError.invalidNodeOutput(
+                "Artifact views must be updated with update_artifact_views; artifact data writes cannot include views."
+            )
+        }
+
         if let file = object["file"]?.objectValue,
            let rawPath = file["path"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
            !rawPath.isEmpty {
@@ -260,9 +266,17 @@ enum PlannerArtifactStorage {
             return object["text"]?.stringValue
         }
         if type == PlannerArtifactPayloadType.json.rawValue {
-            return object["json"]?.stringValue
+            if let json = object["json"]?.stringValue { return json }
+            if let data = object["data"] ?? object["value"] ?? object["items"] {
+                return stringify(data)
+            }
         }
         return nil
+    }
+
+    private static func stringify(_ value: BoardJSONValue) -> String? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }
 

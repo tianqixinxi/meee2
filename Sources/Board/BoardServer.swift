@@ -625,6 +625,9 @@ public final class BoardServer {
         server.DELETE["/api/planner/canvases/:id/nodes/:nodeId"] = BoardServer.cors(BoardAPI.deletePlannerNode)
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)
+        // proposal 子功能 · propose_add_node:节点会话提议新增 step(产物 pending,
+        // 走既有 approve/apply/reject 管线;MCP propose_add_node 调这里)。
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/propose-add-node"] = BoardServer.cors(BoardAPI.proposePlannerAddNode)
         server.POST["/api/planner/canvases/:id/scene/actions"] = BoardServer.cors(BoardAPI.runCanvasSceneAction)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
         server.GET["/api/planner/canvases/:id/artifacts/:artifactId/content"] = BoardServer.cors(BoardAPI.getPlannerArtifactContent)
@@ -632,6 +635,10 @@ public final class BoardServer {
         // session(MCP get_artifact/update_artifact)与人工同走这两个端点。
         server.GET["/api/planner/canvases/:id/artifacts/latest"] = BoardServer.cors(BoardAPI.getLatestPlannerArtifacts)
         server.POST["/api/planner/canvases/:id/artifacts/update"] = BoardServer.cors(BoardAPI.updatePlannerArtifact)
+        // 手动同步:给 artifact 所在节点的绑定会话投递「写穿」指令(operator
+        // → session inbox),由会话用 MCP get_artifact/update_artifact 刷新快照。
+        server.POST["/api/planner/canvases/:id/artifacts/sync"] = BoardServer.cors(BoardAPI.syncPlannerArtifact)
+        server.POST["/api/planner/canvases/:id/artifacts/views"] = BoardServer.cors(BoardAPI.updatePlannerArtifactViews)
         // UI-1 (ENG-3) — artifact version chain read API.
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/artifact-versions"] = BoardServer.cors(BoardAPI.listPlannerArtifactVersions)
         server.GET["/api/planner/canvases/:id/artifact-versions/:versionId"] = BoardServer.cors(BoardAPI.getPlannerArtifactVersion)

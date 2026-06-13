@@ -575,6 +575,52 @@ enum PlannerArtifactProducer: String, Codable, Equatable {
     case integration
 }
 
+enum PlannerArtifactViewKind: String, Codable, Equatable, CaseIterable {
+    case table
+    case list
+    case kanban
+    case raw
+    case json
+    /// integration payload 的投影体(前端经 integration view-schema 渲染:
+    /// Sheets 格子 / badge + detail 行)。缺这个 kind 时 integration artifact
+    /// 只能派生 raw view → JSON dump。
+    case integration
+    /// typed payload 的结构化预览(prd tldr / check-result 统计…)。派生默认
+    /// view 用 — 否则结构化产物被标成 raw,有原文时直接吐原文丢掉语义。
+    case payload
+}
+
+struct PlannerArtifactView: Codable, Equatable {
+    var id: String
+    var title: String
+    var kind: PlannerArtifactViewKind
+    var sourcePath: String?
+    var columns: [String]?
+    var filter: BoardJSONValue?
+    var sort: BoardJSONValue?
+    var groupBy: BoardJSONValue?
+
+    init(
+        id: String,
+        title: String,
+        kind: PlannerArtifactViewKind,
+        sourcePath: String? = nil,
+        columns: [String]? = nil,
+        filter: BoardJSONValue? = nil,
+        sort: BoardJSONValue? = nil,
+        groupBy: BoardJSONValue? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self.sourcePath = sourcePath
+        self.columns = columns
+        self.filter = filter
+        self.sort = sort
+        self.groupBy = groupBy
+    }
+}
+
 struct PlannerArtifact: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -606,6 +652,9 @@ struct PlannerArtifact: Codable, Equatable {
     /// slot chain (chain length). Pairs with `versionIndex` so the UI can show
     /// e.g. `v2 / 3`. Derived at read time; `nil` when unknown.
     var versionCount: Int?
+    /// Artifact-owned named projections over this artifact's data. Views are
+    /// presentation metadata, not artifact data versions.
+    var views: [PlannerArtifactView]?
 
     init(
         id: String,
@@ -621,7 +670,8 @@ struct PlannerArtifact: Codable, Equatable {
         runId: String? = nil,
         reviewStatus: String? = nil,
         versionIndex: Int? = nil,
-        versionCount: Int? = nil
+        versionCount: Int? = nil,
+        views: [PlannerArtifactView]? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -637,6 +687,7 @@ struct PlannerArtifact: Codable, Equatable {
         self.reviewStatus = reviewStatus
         self.versionIndex = versionIndex
         self.versionCount = versionCount
+        self.views = views
     }
 }
 
@@ -1884,6 +1935,11 @@ struct PlanProposal: Codable, Equatable {
     /// initialization (`PlanProposal(id:canvasId:summary:changes:status:)`)
     /// still type-checks.
     var warnings: [String]?
+    /// propose_add_node · 提案来源归属:发起方是哪个节点的工作会话。nil ⇒ owner /
+    /// planner-agent 渠道(既有提案)。权限按发起节点的 requireNodeUpdate 门控
+    /// (doer 只能从自己的节点发起),UI 据此显示「来自节点 X 的提议」。
+    var originNodeId: String?
+    var originSessionId: String?
 }
 
 enum NodeRunState: String, Codable, Equatable {
@@ -2814,6 +2870,13 @@ enum PlannerPermissionAction: String {
 }
 
 enum PlannerPermission {
+    /// 本地 planner RBAC 的行动者身份。
+    ///
+    /// 故意 **不看** `authExpired`：nil 在下游（`access(for:)` 等）的语义是
+    /// 「纯本地模式 → owner 全权」，token 过期时返回 nil 会把 team 成员在
+    /// 本地镜像画布上提权成 owner。过期窗口内保留最后已知身份反而是权限
+    /// 最小的选择 —— 人没换，重新登录拿回的还是同一个 userId；身份只在
+    /// 显式断开（disconnect 清空 settings.json）时清除。
     static func currentActorId() -> String? {
         let defaults = UserDefaults.standard
         let onlineSettings = OnlineProxy.loadSettings()
@@ -6234,6 +6297,87 @@ final class PlannerStore {
         }
     }
 
+    func updateArtifactViews(
+        canvasId: String,
+        artifactId: String? = nil,
+        reference: String? = nil,
+        views: [PlannerArtifactView],
+        deleteViewIds: [String] = [],
+        submittedBy: String? = nil
+    ) throws -> [PlannerArtifact] {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            let targets = matchArtifacts(record.artifacts, artifactId: artifactId, reference: reference)
+            guard !targets.isEmpty else {
+                throw PlannerCoreError.artifactNotFound(artifactId ?? reference ?? "(no selector)")
+            }
+            let normalizedViews = try normalizeArtifactViews(views)
+            let deletes = Set(deleteViewIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+            guard !normalizedViews.isEmpty || !deletes.isEmpty else {
+                throw PlannerCoreError.invalidNodeOutput("updateArtifactViews requires views or deleteViewIds")
+            }
+
+            var updated: [PlannerArtifact] = []
+            for target in targets {
+                guard let idx = record.artifacts.firstIndex(where: { $0.id == target.id }) else { continue }
+                var next = record.artifacts[idx]
+                var byId: [String: PlannerArtifactView] = [:]
+                var order: [String] = []
+                for view in next.views ?? [] {
+                    let id = view.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !id.isEmpty, !deletes.contains(id) else { continue }
+                    if byId[id] == nil { order.append(id) }
+                    byId[id] = view
+                }
+                for view in normalizedViews {
+                    if byId[view.id] == nil { order.append(view.id) }
+                    byId[view.id] = view
+                }
+                let merged = order.compactMap { byId[$0] }
+                next.views = merged.isEmpty ? nil : merged
+                record.artifacts[idx] = next
+                updated.append(next)
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .artifactAttached,
+                nodeId: targets.first?.nodeId,
+                summary: "Artifact views updated",
+                artifactRefs: Array(Set(updated.map(\.reference)))
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return updated
+        }
+    }
+
+    private func normalizeArtifactViews(_ views: [PlannerArtifactView]) throws -> [PlannerArtifactView] {
+        var seen = Set<String>()
+        return try views.map { view in
+            let id = view.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else {
+                throw PlannerCoreError.invalidNodeOutput("Artifact view id cannot be empty.")
+            }
+            guard seen.insert(id).inserted else {
+                throw PlannerCoreError.invalidNodeOutput("Duplicate artifact view id '\(id)'.")
+            }
+            let title = view.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PlannerArtifactView(
+                id: id,
+                title: title.isEmpty ? id : title,
+                kind: view.kind,
+                sourcePath: {
+                    let value = view.sourcePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return value.isEmpty ? nil : value
+                }(),
+                columns: view.columns?.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
+                filter: view.filter,
+                sort: view.sort,
+                groupBy: view.groupBy
+            )
+        }
+    }
+
     private func matchArtifacts(
         _ artifacts: [PlannerArtifact],
         artifactId: String?,
@@ -7785,6 +7929,9 @@ final class PlannerStore {
             }
             if let existingSlot = result.first(where: { sameArtifactSlot($0, next) }) {
                 next.id = existingSlot.id
+                if next.views == nil {
+                    next.views = existingSlot.views
+                }
             }
             result.removeAll { existing in
                 existing.id == next.id || sameArtifactSlot(existing, next)
@@ -8456,6 +8603,75 @@ enum PlannerBoardBridge {
         )
     }
 
+    /// proposal 子功能 · propose_add_node:运行节点的工作会话提议新增一个 step。
+    ///
+    /// 与 `graphChangeProposal`(owner-only `.createProposal`)不同,这里按
+    /// **发起节点** 做 `requireNodeUpdate` 门控 —— doer 可从自己的节点发起
+    /// (职责≡权限),但产物仍是 pending 提案,必须 owner approve+apply 才落图。
+    /// 校验失败往上抛,MCP 层原样透传给 agent 自纠
+    /// (meee2-ai-is-claude-harness-self-correct)。
+    ///
+    /// 新节点默认 `dependsOnNodeIds = [originNodeId]`(画布上呈现 主→子 边,
+    /// 调用方可显式传 `[]` 表示无依赖),执行皮肤(executionMode / executorType /
+    /// doer)继承发起节点 —— triage 类主节点孵化出的子 step 默认同一执行形态。
+    static func proposeAddNode(
+        originNodeId: String,
+        originSessionId: String?,
+        title: String,
+        goal: String?,
+        summary: String?,
+        dependsOnNodeIds: [String]?,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let origin = state.nodes.first(where: { $0.id == originNodeId }) else {
+            throw PlannerCoreError.nodeNotFound(originNodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: origin, access: state.access)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            throw PlannerCoreError.invalidNodeOutput("propose_add_node requires a non-empty title for the new step")
+        }
+        let trimmedGoal = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposalUUID = UUID().uuidString.lowercased()
+        let node = PlanningNode(
+            id: "\(canvasId)-node-\(proposalUUID)",
+            canvasId: canvasId,
+            title: trimmedTitle,
+            schema: NodeSchema(
+                inputs: [origin.title],
+                outputs: ["\(trimmedTitle) output"],
+                goal: (trimmedGoal?.isEmpty == false ? trimmedGoal! : trimmedTitle)
+            ),
+            contextSources: [],
+            executionMode: origin.executionMode,
+            executorType: origin.executorType,
+            doerId: origin.doerId,
+            status: .ready,
+            source: .session,
+            dependsOnNodeIds: dependsOnNodeIds ?? [originNodeId],
+            nodeKind: .step
+        )
+        let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var proposal = PlanProposal(
+            id: "proposal-\(canvasId)-node-\(proposalUUID)",
+            canvasId: canvasId,
+            summary: (trimmedSummary?.isEmpty == false ? trimmedSummary! : "Add step \"\(trimmedTitle)\" (proposed from node \(origin.title))"),
+            changes: [.addNode(node)],
+            status: .pending
+        )
+        proposal.originNodeId = originNodeId
+        proposal.originSessionId = originSessionId
+        return try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+    }
+
     /// Execution-layer action: bind a session to a node DIRECTLY (no proposal,
     /// no owner approval). Gated only by `requireNodeUpdate`. Returns the
     /// updated graph state — same shape as `attachArtifact` / `updateNodeLayout`.
@@ -8646,6 +8862,7 @@ enum PlannerBoardBridge {
             payload: normalizedPayload
         )
         _ = try store.attachArtifact(artifact, canvasId: canvasId)
+        try validateArtifactReadback([artifact])
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
@@ -8707,7 +8924,36 @@ enum PlannerBoardBridge {
                 submittedByKind: submittedByKind
             )
         }
+        try validateArtifactReadback(updated)
         return updated
+    }
+
+    static func updateArtifactViews(
+        artifactId: String? = nil,
+        reference: String? = nil,
+        views: [PlannerArtifactView],
+        deleteViewIds: [String] = [],
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [PlannerArtifact] {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        let targets = try store.findArtifacts(canvasId: canvasId, artifactId: artifactId, reference: reference)
+        guard !targets.isEmpty else {
+            throw PlannerCoreError.artifactNotFound(artifactId ?? reference ?? "(no selector)")
+        }
+        for target in targets {
+            guard let node = state.nodes.first(where: { $0.id == target.nodeId }) else { continue }
+            try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        }
+        return try store.updateArtifactViews(
+            canvasId: canvasId,
+            artifactId: artifactId,
+            reference: reference,
+            views: views,
+            deleteViewIds: deleteViewIds,
+            submittedBy: actorUserId
+        )
     }
 
     static func updateNodeStatus(
@@ -8895,6 +9141,13 @@ enum PlannerBoardBridge {
             submittedByKind: submittedByKind,
             submittedBy: submittedBy
         )
+        try validateArtifactReadback(submitted.record.artifacts.filter { artifact in
+            normalizedOutput.artifacts.contains { outputArtifact in
+                artifact.nodeId == nodeId
+                    && artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+                        == outputArtifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        })
         // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
         // bridge layer so the engine path stays pure (BoardAPI is the place
         // that actually spawns terminals — see `recordPlannerDispatchIntent`
@@ -8947,6 +9200,12 @@ enum PlannerBoardBridge {
             versionIndex: submitted.version?.versionIndex,
             autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
         )
+    }
+
+    private static func validateArtifactReadback(_ artifacts: [PlannerArtifact]) throws {
+        for artifact in artifacts {
+            _ = try PlannerArtifactStorage.content(for: artifact)
+        }
     }
 
     private static func artifactRequirementHint(for node: PlanningNode, artifacts: [PlannerArtifact]) -> String? {

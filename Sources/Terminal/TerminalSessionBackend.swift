@@ -13,6 +13,11 @@ public struct TerminalSessionRequest: Equatable {
     public let canvasId: String?
     public let nodeId: String?
     public let initialPrompt: String?
+    /// initialPrompt 就绪门控的硬上限(秒)。nil = 后端默认(20s,适合 fresh
+    /// session 的快速启动)。大会话 `--resume` 的 TUI 加载可能远超 20s —
+    /// 上限到点的「盲打」会把 prompt 敲进还没渲染好的界面而丢失;这类调用方
+    /// 应给更长的耐心(settle 检测在加载安静后自然触发,上限只是最后兜底)。
+    public let initialPromptSettleCeiling: TimeInterval?
     public let preferredSessionId: String?
     public let cols: UInt16
     public let rows: UInt16
@@ -24,6 +29,7 @@ public struct TerminalSessionRequest: Equatable {
         canvasId: String?,
         nodeId: String?,
         initialPrompt: String?,
+        initialPromptSettleCeiling: TimeInterval? = nil,
         preferredSessionId: String? = nil,
         cols: UInt16 = 120,
         rows: UInt16 = 30
@@ -34,6 +40,7 @@ public struct TerminalSessionRequest: Equatable {
         self.canvasId = canvasId
         self.nodeId = nodeId
         self.initialPrompt = initialPrompt
+        self.initialPromptSettleCeiling = initialPromptSettleCeiling
         self.preferredSessionId = preferredSessionId
         self.cols = cols
         self.rows = rows
@@ -102,8 +109,23 @@ public protocol TerminalSessionBackend {
     func resizeSession(id: String, cols: UInt16, rows: UInt16)
     func focusSession(id: String)
     func writeInput(id: String, data: Data)
+    /// 向已就绪的 agent REPL 投递一条要**提交执行**的 prompt。和 writeInput
+    /// 的区别:writeInput 是裸字节,文本里的 "\n" 在 TUI composer 里是插入
+    /// 换行而非提交;deliverPrompt 负责「打字 + 按 Return 键」的完整提交
+    /// 动作(节奏与 initialPrompt 的就绪门控投递一致)。提交排程期间(打字
+    /// 到 Return 落键的窗口)的重复投递会被拒绝为 .busy — 否则第二条文本
+    /// 会打进同一个 composer,被第一个 Return 拼成一条畸形请求提交。
+    func deliverPrompt(id: String, text: String) -> PromptDeliveryOutcome
     func snapshot(id: String) -> TerminalSessionSnapshot?
     func listSnapshots() -> [TerminalSessionSnapshot]
+}
+
+/// deliverPrompt 的投递结果。调用方据此如实上报:busy 不是失败,是
+/// 「上一条还在提交窗口里」的去重信号。
+public enum PromptDeliveryOutcome {
+    case delivered
+    case busy
+    case sessionNotFound
 }
 
 public enum TerminalSessionBackendMetadata {
@@ -276,6 +298,11 @@ public final class TerminalSessionBackendRegistry {
         guard let backend = backendForExistingSession(id: id) else { return false }
         backend.writeInput(id: id, data: data)
         return true
+    }
+
+    public func deliverPrompt(id: String, text: String) -> PromptDeliveryOutcome {
+        guard let backend = backendForExistingSession(id: id) else { return .sessionNotFound }
+        return backend.deliverPrompt(id: id, text: text)
     }
 
     public func snapshot(id: String) -> TerminalSessionSnapshot? {

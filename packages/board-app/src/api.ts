@@ -26,6 +26,7 @@ import type {
   PlanProposal,
   PlannerActivity,
   PlannerArtifact,
+  PlannerArtifactView,
   PlannerArtifactKind,
   PlannerCanvasState,
   PlannerGraphEdge,
@@ -1623,6 +1624,32 @@ export function ensurePlannerNodeInternalSession(
   )
 }
 
+export interface PlannerArtifactSyncResult {
+  ok: boolean
+  sessionId: string
+  reference: string
+  /** created = 新派发专属同步会话;reused = 指令打进已有专属会话;
+   *  pending = 专属会话还在启动,本次点击已去重。 */
+  action: 'created' | 'reused' | 'pending'
+  detail: string
+}
+
+/** Direct artifact-layer manual sync — 派发该 reference 的专属轻量同步会话
+ *  (不绑节点、不进节点工作账本),由它用 MCP get_artifact/update_artifact
+ *  核对外部对象并刷新快照。不需要节点先有绑定会话。 */
+export function syncPlannerArtifact(
+  canvasId: string,
+  input: { reference?: string; artifactId?: string; hint?: string },
+): Promise<PlannerArtifactSyncResult> {
+  return jsonRequest<PlannerArtifactSyncResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/sync`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
 export function updatePlannerNodeGate(
   canvasId: string,
   nodeId: string,
@@ -1852,6 +1879,24 @@ export function attachPlannerArtifactToNode(
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function updatePlannerArtifactViews(
+  canvasId: string,
+  input: {
+    artifactId?: string
+    reference?: string
+    views?: PlannerArtifactView[]
+    deleteViewIds?: string[]
+  },
+): Promise<{ updated: PlannerArtifact[] }> {
+  return jsonRequest<{ updated: PlannerArtifact[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/views`,
     {
       method: 'POST',
       body: JSON.stringify(input),

@@ -2868,6 +2868,149 @@
   border-bottom: 1px dashed rgba(168, 165, 155, 0.12);
 }
 
+/* artifact inspector「数据源」绑定卡片 — connector / 关键事实 / 链接,只读。 */
+.planner-artifact-binding {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(18, 18, 16, 0.25);
+  font-size: 12px;
+}
+
+.planner-artifact-binding__connector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.planner-artifact-binding__facts {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.planner-artifact-binding a {
+  color: var(--accent, #34a853);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.planner-artifact-binding code {
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+/* artifact inspector「版本」链 — 行即按钮,点击把预览回放到该版 snapshot。 */
+.planner-node-modal__version-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.planner-node-modal__version-row:hover {
+  background: rgba(168, 165, 155, 0.08);
+  color: var(--text);
+}
+
+.planner-node-modal__version-row.is-active {
+  border-color: rgba(52, 168, 83, 0.45);
+  background: rgba(52, 168, 83, 0.08);
+  color: var(--text);
+}
+
+.planner-node-modal__version-row em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* 预览区的版本回放横幅 — 提醒当前看的是历史 snapshot + 一键回到最新。 */
+.planner-node-modal__version-replay-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(52, 168, 83, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(52, 168, 83, 0.08);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.planner-node-modal__version-replay-banner.is-missing {
+  border-color: rgba(214, 153, 77, 0.4);
+  background: rgba(214, 153, 77, 0.08);
+}
+
+.planner-node-modal__version-replay-banner button {
+  padding: 2px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.3);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.planner-node-modal__version-replay-banner button:hover {
+  background: rgba(168, 165, 155, 0.12);
+}
+
+/* 手动同步(写穿契约一键触发)— 按钮 + 内联结果反馈。 */
+.planner-node__integration-sync {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.planner-node__integration-sync-btn {
+  font-size: 10px;
+  padding: 3px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(28, 28, 25, 0.5);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.planner-node__integration-sync-btn:hover:not(:disabled) {
+  border-color: #34a853;
+  color: var(--text);
+}
+
+.planner-node__integration-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.planner-node__integration-sync small {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.planner-node__integration-sync small.planner-node__integration-sync-err {
+  color: var(--danger, #c4554d);
+}
+
 .planner-node__html-preview {
   width: 100%;
   height: 210px;
@@ -5557,6 +5700,11 @@
   margin: 0;
   color: var(--text-dim);
   font-size: 12px;
+}
+
+/* propose_add_node · 来源归属行:节点会话发起的提案在审批模态标出来源 */
+.planner-proposal-modal__header p.planner-proposal-modal__origin {
+  color: var(--accent-hover);
 }
 
 .planner-proposal-modal__body {

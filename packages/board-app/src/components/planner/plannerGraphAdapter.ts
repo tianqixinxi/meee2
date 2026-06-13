@@ -579,7 +579,9 @@ function ioArtifactNodeId(nodeId: string, direction: IOArtifactDirection, item: 
   return `io-artifact-${nodeId}-${direction}-${stableId(item)}`
 }
 
-function stableId(value: string): string {
+// Exported: InspectorArtifactBody 用它从虚拟 io-artifact 节点 id 反推生产
+// 节点 id(id = io-artifact-<producerId>-<direction>-<stableId(ref)>)。
+export function stableId(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
   return normalized || 'item'
 }

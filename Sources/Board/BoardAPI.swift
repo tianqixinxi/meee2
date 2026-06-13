@@ -520,6 +520,7 @@ enum BoardAPI {
                 command: launchCommand,
                 canvasId: canvasId,
                 nodeId: nodeId,
+                // resume 丢弃 initialPrompt:恢复的对话已有上下文,不应重打 dispatch prompt。
                 initialPrompt: resumeSessionId == nil ? initialPrompt : nil,
                 preferredSessionId: reusablePreferredSessionId
             )
@@ -2022,67 +2023,16 @@ enum BoardAPI {
                     // dispatch meee2:open-session 把终端拉到前台）。
                     surface = existingSurface
                 } else {
-                    // 绑定的会话已死。早前 BUG 1.2 在 openOnly 时直接报 session_ended
-                    // 让用户手动重新派发,但那是个死胡同(toast 无动作,卡片当下也没有
-                    // 重新派发入口)。owner 决策(2026-06-01):「打开会话查看进展」点到
-                    // 死会话应当直接续上 —— 能拿到 provider resume id 就 `--resume`
-                    // 找回原对话上下文(ClaudePlugin 在 hook 回来时已把真实 claude
-                    // session id 链进 SessionTerminalStore);拿不到就在同 cwd fresh
-                    // recreate(优雅降级,遗留 ghostty 绑定没存底层 session id 时走这条)。
-                    // openOnly 不再是死胡同,与 create/replace 在 dead 分支上汇合。
-                    try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
-                    let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
-                    let command = resumeSessionId.map {
-                        plannerResumeCommand(for: existingNode, sessionId: $0)
-                    }
-                        ?? plannerFreshCommand(for: existingNode)
-                    let canResume = resumeSessionId != nil
-                    action = canResume ? "resume" : "recreate"
-                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
-                    let provider = AgentLaunchCommand.provider(forCommand: command)
-                    surface = try createInternalSessionSurface(
-                        provider: provider,
-                        cwd: cwd,
-                        command: command,
-                        createIfMissing: true,
+                    // 绑定的会话已死 → 自愈复活(见 reviveNodeSessionSurface)。
+                    let revival = try reviveNodeSessionSurface(
                         canvasId: canvasId,
-                        nodeId: nodeId,
-                        initialPrompt: canResume ? nil : plannerDispatchPrompt(for: existingNode, canvasId: canvasId, cwd: cwd),
-                        preferredSessionId: preferredSessionId
+                        node: existingNode,
+                        deadSessionId: sessionId,
+                        explicitCwd: body?.cwd,
+                        access: state.access
                     )
-                    if canResume {
-                        _ = PlannerSessionRunStateBridge.observeBound(
-                            sessionId: surface.sessionId,
-                            status: .active
-                        )
-                    } else {
-                        _ = PlannerSessionRunStateBridge.observe(
-                            sessionId: surface.sessionId,
-                            purpose: "planner:\(nodeId)",
-                            status: .active
-                        )
-                    }
-                    // recreate/resume 出新 surface 后,必须把节点 sessionId 重绑到
-                    // 这个活 surface —— 否则节点仍指向旧的死 id,下次「打开会话」又
-                    // 查不到活会话、再 recreate,表现为「每次点都新建一个 session」。
-                    // 重绑后下次 open 命中上面 isReusableInternalSurface 分支直接复用
-                    // /聚焦。resume 时 surface.sessionId 即旧 id,这里跳过(no-op)。
-                    if surface.sessionId != sessionId {
-                        // allowReplace: 我们就在「绑定会话已死」分支里,这次重绑是
-                        // 自愈式替换死 surface。死会话的 runState 可能还停在 .running
-                        // (death 未及时写回),不放行会被 hasActiveSession 守卫拦成
-                        // activeSessionExists,导致节点永久卡死、每次点都 recreate。
-                        _ = try PlannerBoardBridge.bindSession(
-                            nodeId: nodeId,
-                            sessionId: surface.sessionId,
-                            for: canvasId,
-                            snapshot: BoardLayoutStore.shared.snapshot(),
-                            actorUserId: PlannerPermission.currentActorId(),
-                            allowReplace: true
-                        )
-                    }
-                    BoardServer.shared.broadcastStateChanged()
+                    surface = revival.surface
+                    action = revival.resumed ? "resume" : "recreate"
                     state = try PlannerBoardBridge.graphState(
                         for: canvasId,
                         snapshot: BoardLayoutStore.shared.snapshot(),
@@ -2152,6 +2102,66 @@ enum BoardAPI {
     private static func isReusableInternalSurface(_ surface: TerminalSessionSnapshot) -> Bool {
         surface.status == InternalTerminalLifecycle.starting.rawValue
             || surface.status == InternalTerminalLifecycle.running.rawValue
+    }
+
+    /// 死会话自愈(owner 决策 2026-06-01):能拿到 provider resume id 就
+    /// `--resume` 找回原对话上下文;拿不到就在同 cwd fresh recreate(优雅降级)。
+    /// recreate 出新 id 时把节点重绑到活 surface(allowReplace:死会话的
+    /// runState 可能还停在 .running,不放行会被 hasActiveSession 拦成
+    /// activeSessionExists、节点永久卡死)。任何需要节点会话活着的入口都走
+    /// 同一条复活路径。
+    private static func reviveNodeSessionSurface(
+        canvasId: String,
+        node: PlanningNode,
+        deadSessionId: String,
+        explicitCwd: String?,
+        access: PlannerAccess
+    ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool, providerSessionId: String?) {
+        try PlannerPermission.requireNodeUpdate(on: node, access: access)
+        let cwd = try explicitSessionCwd(explicitCwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        let resumeSessionId = providerResumeSessionId(forPlannerSessionId: deadSessionId)
+        let command = resumeSessionId.map {
+            plannerResumeCommand(for: node, sessionId: $0)
+        }
+            ?? plannerFreshCommand(for: node)
+        let canResume = resumeSessionId != nil
+        let preferredSessionId = isProviderResumeSessionId(deadSessionId) || canResume ? deadSessionId : nil
+        let provider = AgentLaunchCommand.provider(forCommand: command)
+        let surface = try createInternalSessionSurface(
+            provider: provider,
+            cwd: cwd,
+            command: command,
+            createIfMissing: true,
+            canvasId: canvasId,
+            nodeId: node.id,
+            // recreate 用 dispatch prompt 开场;resume 的对话已有上下文,不打扰。
+            initialPrompt: canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
+            preferredSessionId: preferredSessionId
+        )
+        if canResume {
+            _ = PlannerSessionRunStateBridge.observeBound(
+                sessionId: surface.sessionId,
+                status: .active
+            )
+        } else {
+            _ = PlannerSessionRunStateBridge.observe(
+                sessionId: surface.sessionId,
+                purpose: "planner:\(node.id)",
+                status: .active
+            )
+        }
+        if surface.sessionId != deadSessionId {
+            _ = try PlannerBoardBridge.bindSession(
+                nodeId: node.id,
+                sessionId: surface.sessionId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId(),
+                allowReplace: true
+            )
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return (surface, canResume, resumeSessionId)
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -2401,6 +2411,240 @@ enum BoardAPI {
                 status: body.status,
                 payload: body.payload,
                 submittedByKind: PlannerArtifactVersionSubmitterKind(rawValue: body.submittedByKind ?? "human") ?? .human,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(Envelope(updated: updated))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// Direct artifact-layer manual sync — 把写穿契约的手动触发做成一键。
+    /// 快照刷新是 reference 级的 sync 动作,不是节点工作(2026-06-11 定,PRD
+    /// slug `google-sheets-tracker-template`「刷新路径」):不路由进任何节点的
+    /// 工作会话 — 节点 transcript 是该节点的工作账本,簿记式刷新会污染它,还受
+    /// 节点会话生命周期与节点级权限面牵制。改为派发**专属轻量 sync 会话**:
+    /// 每 reference 至多一条,活着复用、死了重建,不绑节点;节点变更工具在
+    /// 命令层禁用(--disallowedTools),「不动节点」靠结构不靠会话自觉。
+    /// app 自己仍不碰外部系统(无凭证,integration 层 schema+view 边界),
+    /// 核对与回写归 session(get_artifact → 核对外部对象 → update_artifact)。
+    static func syncPlannerArtifact(_ req: HttpRequest) -> HttpResponse {
+        struct SyncRequest: Decodable {
+            let artifactId: String?
+            let reference: String?
+            /// 可选的人工补充(如「真表现在 12 行」),拼进指令帮会话少跑一步。
+            let hint: String?
+        }
+        struct SyncResponse: Encodable {
+            let ok: Bool
+            let sessionId: String
+            let reference: String
+            /// created = 新派发专属会话;reused = 指令打进已有专属会话;
+            /// pending = 专属会话仍在启动并执行开场指令,本次点击去重未投递。
+            let action: String
+            let detail: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: SyncRequest.self),
+              body.artifactId?.isEmpty == false || body.reference?.isEmpty == false else {
+            return errorResponse("invalid_json", "body must carry artifactId or reference", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.canvasState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            let targets = try PlannerBoardBridge.findArtifacts(
+                artifactId: body.artifactId,
+                reference: body.reference,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let reference = targets.first?.reference else {
+                throw PlannerCoreError.artifactNotFound(body.artifactId ?? body.reference ?? "(no selector)")
+            }
+            // 同步是 artifact 执行面的动作,权限对齐 attach/update:owner 直通;
+            // doer 需要共享该 reference 的槽位里有授权给自己的节点。会话路由
+            // 本身不再依赖任何节点。
+            if state.access.role != .owner {
+                let slotNodes = targets.compactMap { target in
+                    state.nodes.first(where: { $0.id == target.nodeId })
+                }
+                let authorized = slotNodes.contains { node in
+                    (try? PlannerPermission.requireNodeUpdate(on: node, access: state.access)) != nil
+                }
+                guard authorized else {
+                    throw PlannerCoreError.permissionDenied(
+                        action: PlannerPermissionAction.updateAssignedNode.rawValue,
+                        role: state.access.role
+                    )
+                }
+            }
+
+            let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
+            // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
+            let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
+
+            // 投递矩阵 — 专属会话每 reference 至多一条:
+            //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY
+            //                          (空闲立即执行,忙碌则排成下一轮输入)
+            //   surface 活着但 hook 未链接(启动窗口内)→ 刚派发还在启动,开场
+            //                          指令在就绪门控队列里,此刻再打字会落进
+            //                          半渲染的 TUI 而丢失 → 去重
+            //   其余 → 收掉旧 pane(如还在),fresh spawn,指令作开场 prompt
+            // 「claude 活着」不能用 resolvePluginSession(surfaceId) 判:surface
+            // 一建立 recordManagedSession 就造出 .active 的合成 SessionData,
+            // 解析得到不证明 hook 注册过。真正的注册证据是 hook 事件把 provider
+            // session id 链到 surface(providerResumeSessionIdForManagedSurface),
+            // 活着的证据是该 provider 会话未走到 .dead(进程没了)/.completed
+            // (sessionEnd,REPL 已退出只剩 shell — 此时打字等于执行乱码命令)。
+            let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
+            let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
+            let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
+            let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
+            let providerSession = providerSessionId.flatMap(resolvePluginSession)
+            let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+            // spawn 后超时仍未链接 hook = 启动即崩的僵尸 pane;放着会让每次
+            // 点击都误判「启动中」,必须收掉重建。
+            let bootTimeout: TimeInterval = 120
+            let stillBooting = providerSessionId == nil
+                && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
+            let response: SyncResponse
+            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
+                // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
+                // composer 里是插入换行不是提交,指令会一直躺在输入框里。
+                switch TerminalSessionBackendRegistry.shared.deliverPrompt(
+                    id: trackedSessionId,
+                    text: instruction
+                ) {
+                case .delivered:
+                    response = SyncResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        reference: reference,
+                        action: "reused",
+                        detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
+                    )
+                case .busy:
+                    // 上一条同步指令还在提交窗口里 — 连点去重,不能再打字
+                    // (两条文本会被同一个 Return 拼成一条畸形请求)。
+                    response = SyncResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        reference: reference,
+                        action: "pending",
+                        detail: "上一条同步指令正在提交,本次点击已去重。"
+                    )
+                case .sessionNotFound:
+                    return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
+                }
+            } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
+                response = SyncResponse(
+                    ok: true,
+                    sessionId: trackedSessionId,
+                    reference: reference,
+                    action: "pending",
+                    detail: "专属同步会话正在启动并执行同步指令,无需重复触发。"
+                )
+            } else {
+                if let trackedSessionId, liveSurface != nil {
+                    _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+                }
+                let surface = try createInternalSessionSurface(
+                    provider: "claude",
+                    cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
+                    command: artifactSyncLaunchCommand(),
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    // 专属 sync 会话不绑节点:进不了节点账本、不挂节点会话三态,
+                    // 也不参与 planner run-state(不调 observe)。
+                    nodeId: nil,
+                    initialPrompt: instruction
+                )
+                recordArtifactSyncSession(surface.sessionId, forKey: registryKey)
+                response = SyncResponse(
+                    ok: true,
+                    sessionId: surface.sessionId,
+                    reference: reference,
+                    action: "created",
+                    detail: "已派发专属同步会话,完成后卡片自动更新。"
+                )
+            }
+            NSLog("[ArtifactSync] reference=\(reference) -> session=\(response.sessionId.prefix(12)) action=\(response.action)")
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(response)
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    // MARK: - Artifact sync 专属会话注册表
+
+    /// (canvasId, reference) → 专属 sync 会话 id。进程内存即可:app 重启后旧
+    /// surface 已不在,下一次同步自然 fresh spawn,无需持久化。
+    private static let artifactSyncSessionsLock = NSLock()
+    private static var artifactSyncSessions: [String: String] = [:]
+
+    private static func artifactSyncSessionKey(canvasId: String, reference: String) -> String {
+        "\(canvasId)|\(reference)"
+    }
+
+    private static func artifactSyncSessionId(forKey key: String) -> String? {
+        artifactSyncSessionsLock.lock()
+        defer { artifactSyncSessionsLock.unlock() }
+        return artifactSyncSessions[key]
+    }
+
+    private static func recordArtifactSyncSession(_ sessionId: String, forKey key: String) {
+        artifactSyncSessionsLock.lock()
+        defer { artifactSyncSessionsLock.unlock() }
+        artifactSyncSessions[key] = sessionId
+    }
+
+    /// sync 会话的启动命令:full-access 基础上在命令层禁用节点变更工具。两套
+    /// 同名 MCP 注册(meee2 插件 / app 自注册)都要覆盖,漏一套等于没禁。
+    private static func artifactSyncLaunchCommand() -> String {
+        let banned = ["submit_node_output", "attach_artifact_to_node", "update_artifact_views"]
+        let rules = banned
+            .flatMap { ["mcp__meee2__\($0)", "mcp__plugin_meee2_meee2__\($0)"] }
+            .map { "\"\($0)\"" }
+            .joined(separator: " ")
+        return AgentLaunchCommand.fullAccessCommand(forProvider: "claude") + " --disallowedTools \(rules)"
+    }
+
+    static func updatePlannerArtifactViews(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateArtifactViewsRequest: Decodable {
+            let artifactId: String?
+            let reference: String?
+            let views: [PlannerArtifactView]?
+            let deleteViewIds: [String]?
+        }
+        struct Envelope: Encodable { let updated: [PlannerArtifact] }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateArtifactViewsRequest.self),
+              body.artifactId?.isEmpty == false || body.reference?.isEmpty == false else {
+            return errorResponse("invalid_json", "body must carry artifactId or reference plus views/deleteViewIds", status: 400)
+        }
+        do {
+            let updated = try PlannerBoardBridge.updateArtifactViews(
+                artifactId: body.artifactId,
+                reference: body.reference,
+                views: body.views ?? [],
+                deleteViewIds: body.deleteViewIds ?? [],
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
@@ -3556,6 +3800,50 @@ enum BoardAPI {
         }
     }
 
+    /// proposal 子功能 · propose_add_node:节点工作会话经 MCP 提议新增 step。
+    /// 产物是 pending 提案(走既有 approve/apply/reject 管线),不直接落图。
+    /// 校验/权限错误原样回给调用方 —— MCP 把错误体透传给 agent 自纠。
+    static func proposePlannerAddNode(_ req: HttpRequest) -> HttpResponse {
+        struct ProposeAddNodeRequest: Decodable {
+            let title: String?
+            let goal: String?
+            let summary: String?
+            let dependsOnNodeIds: [String]?
+            let sessionId: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: ProposeAddNodeRequest.self)
+        guard let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return errorResponse(
+                "invalid_proposal",
+                "propose_add_node requires a non-empty `title` for the new step; optional: `goal`, `summary`, `dependsOnNodeIds` (defaults to the proposing node)",
+                status: 400
+            )
+        }
+        do {
+            let proposal = try PlannerBoardBridge.proposeAddNode(
+                originNodeId: nodeId,
+                originSessionId: body?.sessionId,
+                title: title,
+                goal: body?.goal,
+                summary: body?.summary,
+                dependsOnNodeIds: body?.dependsOnNodeIds,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func openKanbanItemSubCanvas(_ req: HttpRequest) -> HttpResponse {
         struct OpenKanbanItemRequest: Decodable {
             let title: String?
@@ -4068,7 +4356,12 @@ enum BoardAPI {
     static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
         let settings = readMeee2OnlineSettings()
         let defaults = UserDefaults.standard
-        let connected = defaults.bool(forKey: "meee2Connected")
+        // 凭证态以 settings.json 为准:authExpired 由任一二进制形态在 refresh
+        // 被吊销时写入,两种形态(bundled app / debug 二进制)都要立即退出
+        // 「已连接」展示,引导重新登录,而不是顶着 401 假装在线。
+        let authExpired = (settings["authExpired"] as? Bool) ?? false
+        let fileConnected = (settings["online"] as? Bool) ?? false
+        let connected = (defaults.bool(forKey: "meee2Connected") || fileConnected) && !authExpired
         let userName = connected
             ? defaultString(defaults, key: "meee2UserName", fallback: settings["userName"])
             : ""
@@ -4092,6 +4385,7 @@ enum BoardAPI {
 
         return jsonResponse(UserProfileDTO(
             connected: connected,
+            authExpired: authExpired,
             userId: userId,
             displayName: displayName,
             userName: userName,
@@ -4482,11 +4776,14 @@ enum BoardAPI {
         return components.url!
     }
 
-    private static func clearMeee2OnlineSettings() {
+    /// 主动断开：清空当前偏好域 + settings.json（含 token，文件是凭证唯一
+    /// 真相）。SettingsView 的 Disconnect 也走这里，保证两个入口语义一致。
+    static func clearMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         for key in [
             "meee2Connected",
             "meee2Online",
+            "meee2AuthExpired",
             "meee2TeamId",
             "meee2TeamName",
             "meee2Teams",
@@ -4506,8 +4803,10 @@ enum BoardAPI {
             defaults.removeObject(forKey: key)
         }
 
-        let settings: [String: Any] = [
-            "meee2": [
+        // 断开 = 整文件重置（token 一并清掉）；忽略文件现值，但仍须持锁
+        // 与在飞刷新串行，避免清理与轮换落盘交错出半新半旧状态
+        OnlineProxy.rewriteSettingsFile { _ in
+            [
                 "enabled": false,
                 "online": false,
                 "teams": [],
@@ -4518,12 +4817,6 @@ enum BoardAPI {
                 "machineId": Host.current().name ?? "unknown",
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
-        ]
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
         }
     }
 
@@ -4540,14 +4833,12 @@ enum BoardAPI {
                 "role": team.role ?? ""
             ]
         }
-        let meee2Settings: [String: Any] = [
+        let base: [String: Any] = [
             "enabled": true,
             "online": defaults.bool(forKey: "meee2Connected"),
             "supabaseUrl": normalizedSupabaseUrl,
             "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
             "onlineBaseUrl": defaults.string(forKey: "meee2OnlineBaseUrl") ?? "",
-            "accessToken": defaults.string(forKey: "meee2OnlineAccessToken") ?? "",
-            "refreshToken": defaults.string(forKey: "meee2OnlineRefreshToken") ?? "",
             "teamId": defaults.string(forKey: "meee2TeamId") ?? "",
             "userId": defaults.string(forKey: "meee2UserId") ?? "",
             "userName": defaults.string(forKey: "meee2UserName") ?? "",
@@ -4561,13 +4852,15 @@ enum BoardAPI {
             "machineId": Host.current().name ?? "unknown",
             "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
         ]
-        let settings: [String: Any] = ["meee2": meee2Settings]
-
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
+        // token / authExpired 在凭证锁内重读 settings.json 合并(rewrite
+        // 内部持锁):偏好域不再存 token,不持锁的 read-then-write 会把并发
+        // 刷新刚轮换的凭证冲回已吊销的旧 token family
+        OnlineProxy.rewriteSettingsFile { credentials in
+            var meee2 = base
+            meee2["accessToken"] = credentials.accessToken
+            meee2["refreshToken"] = credentials.refreshToken
+            meee2["authExpired"] = credentials.authExpired
+            return meee2
         }
     }
 
