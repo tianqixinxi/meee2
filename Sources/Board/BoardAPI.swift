@@ -489,6 +489,221 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    // MARK: - Session Projects
+
+    private struct SessionProjectDTO: Encodable {
+        let id: String
+        let name: String
+        let path: String
+        let preferredProvider: String
+        let explicit: Bool
+        let createdAt: Date
+        let updatedAt: Date
+        let lastUsedAt: Date?
+
+        init(_ record: SessionProjectRecord) {
+            self.id = record.id
+            self.name = record.name
+            self.path = record.path
+            self.preferredProvider = record.preferredProvider.rawValue
+            self.explicit = record.explicit
+            self.createdAt = record.createdAt
+            self.updatedAt = record.updatedAt
+            self.lastUsedAt = record.lastUsedAt
+        }
+    }
+
+    private struct SessionProjectsEnvelope: Encodable {
+        let projects: [SessionProjectDTO]
+    }
+
+    static func listSessionProjects(_ req: HttpRequest) -> HttpResponse {
+        let projects = SessionProjectStore.shared
+            .list()
+            .map(SessionProjectDTO.init)
+        return jsonResponse(SessionProjectsEnvelope(projects: projects))
+    }
+
+    static func createSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct CreateRequest: Decodable {
+            let path: String
+            let name: String?
+            let preferredProvider: String?
+        }
+        guard let body = decodeJSONBody(req, as: CreateRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"path\": String}", status: 400)
+        }
+        do {
+            let record = try SessionProjectStore.shared.upsert(
+                path: body.path,
+                name: body.name,
+                preferredProvider: body.preferredProvider
+            )
+            return jsonResponse(SessionProjectDTO(record), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("project_create_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func forgetSessionProject(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        do {
+            try SessionProjectStore.shared.forget(projectId: id)
+            return jsonResponse(OkEnvelope(ok: true))
+        } catch {
+            return errorResponse("project_not_found", error.localizedDescription, status: 404)
+        }
+    }
+
+    static func pickSessionProjectDirectory(_ req: HttpRequest) -> HttpResponse {
+        struct PickResponse: Encodable {
+            let ok: Bool
+            let path: String?
+        }
+        #if os(macOS)
+        var selectedPath: String?
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = false
+            panel.resolvesAliases = true
+            panel.message = "Select a project folder"
+            let finish: (NSApplication.ModalResponse) -> Void = { response in
+                if response == .OK {
+                    selectedPath = panel.url?.path
+                }
+                semaphore.signal()
+            }
+            if let window = NSApp.keyWindow {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                panel.begin(completionHandler: finish)
+            }
+        }
+        _ = semaphore.wait(timeout: .distantFuture)
+        return jsonResponse(PickResponse(ok: selectedPath != nil, path: selectedPath))
+        #else
+        return errorResponse("unsupported", "directory picker is macOS only", status: 501)
+        #endif
+    }
+
+    static func createSessionProjectSession(_ req: HttpRequest) -> HttpResponse {
+        struct SpawnRequest: Decodable {
+            let path: String?
+            let provider: String?
+            let initialPrompt: String?
+        }
+        struct SpawnResponse: Encodable {
+            let ok: Bool
+            let project: SessionProjectDTO
+            let surface: BoardSessionSurfaceDTO
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: SpawnRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        do {
+            let knownProject = SessionProjectStore.shared
+                .list()
+                .first { $0.id == id }
+            guard let projectPath = knownProject?.path, !projectPath.isEmpty else {
+                throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "project not found: \(id)"])
+            }
+            let cwd = try explicitSessionCwd(projectPath) ?? projectPath
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else {
+                throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
+            }
+            let project = try SessionProjectStore.shared.markUsed(
+                projectId: id,
+                path: projectPath,
+                provider: provider
+            )
+            let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: prompt?.isEmpty == false ? prompt : nil
+            )
+            return jsonResponse(
+                SpawnResponse(ok: true, project: SessionProjectDTO(project), surface: BoardSessionSurfaceDTO(surface)),
+                status: 201,
+                reason: "Created"
+            )
+        } catch {
+            return errorResponse("project_session_spawn_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createTemporarySession(_ req: HttpRequest) -> HttpResponse {
+        struct SpawnRequest: Decodable {
+            let provider: String?
+            let initialPrompt: String?
+        }
+        struct SpawnResponse: Encodable {
+            let ok: Bool
+            let cwd: String
+            let surface: BoardSessionSurfaceDTO
+        }
+        let body = decodeJSONBody(req, as: SpawnRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        do {
+            let cwd = try createTemporarySessionWorkspace()
+            let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: prompt?.isEmpty == false ? prompt : nil
+            )
+            return jsonResponse(
+                SpawnResponse(ok: true, cwd: cwd, surface: BoardSessionSurfaceDTO(surface)),
+                status: 201,
+                reason: "Created"
+            )
+        } catch {
+            return errorResponse("temporary_session_spawn_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func createTemporarySessionWorkspace(now: Date = Date()) throws -> String {
+        let root = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("workspaces", isDirectory: true)
+            .appendingPathComponent("temporary", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let timestamp = formatter.string(from: now)
+
+        for _ in 0..<5 {
+            let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(6)
+            let candidate = root.appendingPathComponent("\(timestamp)-\(suffix)", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: false)
+                return candidate.path
+            }
+        }
+        throw NSError(domain: "BoardAPI", code: 500, userInfo: [NSLocalizedDescriptionKey: "failed to allocate temporary session workspace"])
+    }
+
     private static func createInternalSessionSurface(
         provider: String,
         cwd: String,

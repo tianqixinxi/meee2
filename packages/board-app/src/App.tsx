@@ -11,6 +11,7 @@ import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView } from './components/ArtifactsView'
+import { SessionLauncherView } from './components/SessionLauncherView'
 import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -415,7 +416,7 @@ export default function App() {
     plannerState: currentPlannerState,
     boardState: boardState.state,
   })
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [sessionTerminalTarget, setSessionTerminalTarget] = useState<SessionOpenTarget | null>(null)
@@ -1247,7 +1248,13 @@ export default function App() {
               {readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.
             </Notice>
           )}
-          {workspaceMode === 'planner' ? (
+          {workspaceMode === 'session' ? (
+            <SessionLauncherView
+              state={boardState.state}
+              onSessionCreated={() => boardState.forceRefresh()}
+              onToast={pushToast}
+            />
+          ) : workspaceMode === 'planner' ? (
             activeWorkspaceCanvasKind === 'monitor' ? (
               <PlannerGraph
                 canvasId={activeWorkspaceCanvasId}
