@@ -60,6 +60,7 @@ import type {
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
 } from './types'
+import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
 
 declare global {
@@ -1134,6 +1135,7 @@ export interface SessionSurface {
   command: string
   canvasId?: string | null
   nodeId?: string | null
+  sessionScope?: 'meee2' | 'canvas' | 'node' | 'external' | string
   status: 'starting' | 'running' | 'exited' | 'failed' | string
   pid?: number | null
   exitCode?: number | null
@@ -1191,6 +1193,7 @@ export function createProjectSession(input: {
   path?: string
   provider: SpawnProvider
   permissionMode?: AgentPermissionMode
+  planMode?: boolean
   initialPrompt?: string
 }): Promise<{ ok: boolean; project: SessionProject; surface: SessionSurface }> {
   return jsonRequest<{ ok: boolean; project: SessionProject; surface: SessionSurface }>(
@@ -1201,6 +1204,7 @@ export function createProjectSession(input: {
         path: input.path,
         provider: input.provider,
         permissionMode: input.permissionMode,
+        planMode: input.planMode,
         initialPrompt: input.initialPrompt,
       }),
     },
@@ -1263,6 +1267,7 @@ export function openNativeTerminalSurface(input: {
   sessionId?: string
   rect?: NativeTerminalRect
   type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus' | 'prewarm'
+  theme?: 'light' | 'dark'
   traceId?: string
   clickStartedAtMs?: number
   sentAtMs?: number
@@ -1275,6 +1280,7 @@ export function openNativeTerminalSurface(input: {
     surfaceId: input.surfaceId,
     sessionId: input.sessionId,
     rect: input.rect,
+    theme: input.theme,
     traceId: input.traceId,
     clickStartedAtMs: input.clickStartedAtMs,
     sentAtMs: input.sentAtMs,
@@ -1289,6 +1295,7 @@ export function syncNativeSessionsWorkspace(input: {
   mode?: 'full' | 'terminal'
   sessionId?: string | null
   surfaceId?: string | null
+  theme?: 'light' | 'dark'
   traceId?: string
   clickStartedAtMs?: number
   sentAtMs?: number
@@ -1303,6 +1310,7 @@ export function syncNativeSessionsWorkspace(input: {
     rect: input.rect,
     sessionId: input.sessionId ?? undefined,
     surfaceId: input.surfaceId ?? undefined,
+    theme: input.theme,
     traceId: input.traceId,
     clickStartedAtMs: input.clickStartedAtMs,
     sentAtMs: input.sentAtMs,
@@ -2485,6 +2493,7 @@ export function disconnectMeee2Online(): Promise<{ ok: boolean }> {
 
 export interface AppSettings {
   theme: 'system' | 'light' | 'dark'
+  themeProfile: ThemeProfile
   locale: 'en' | 'zh-CN'
   devMode?: boolean
   showIsland: boolean
@@ -2509,6 +2518,24 @@ export function fetchAppSettings(): Promise<AppSettings> {
   if (PLANNER_DEMO_MODE) {
     return Promise.resolve({
       theme: 'system',
+      themeProfile: {
+        schemaVersion: 1,
+        presetId: 'claude',
+        light: {
+          accentColor: '#B95F43',
+          backgroundColor: '#F4F1EA',
+          sidebarColor: '#FBF8F1',
+          foregroundColor: '#25211D',
+          contrast: 55,
+        },
+        dark: {
+          accentColor: '#CC785C',
+          backgroundColor: '#262624',
+          sidebarColor: '#2C2B29',
+          foregroundColor: '#F5F4EF',
+          contrast: 58,
+        },
+      },
       locale: 'en',
       devMode: true,
       showIsland: true,

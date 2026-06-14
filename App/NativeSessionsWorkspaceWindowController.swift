@@ -66,6 +66,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private var lastRailSignature = ""
     private var pendingReloadWorkItem: DispatchWorkItem?
     private var terminalOnlyMode = false
+    private var terminalTheme = "dark"
 
     init() {
         registry = TerminalPaneRegistry(hostView: terminalHostView)
@@ -96,6 +97,12 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         } else {
             reloadRows()
         }
+    }
+
+    func applyTerminalTheme(_ theme: String) {
+        let normalized = theme == "light" ? "light" : "dark"
+        terminalTheme = normalized
+        registry.applyTheme(normalized)
     }
 
     func activate(
@@ -392,7 +399,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         selectedRailId = NativeSessionRailItem.internalId(for: surface)
         updateRowSelection()
         emptyTerminalLabel.isHidden = true
-        if !registry.focus(surface: surface, tracePayload: tracePayload) {
+        if !registry.focus(surface: surface, theme: terminalTheme, tracePayload: tracePayload) {
             emptyTerminalLabel.stringValue = "Unable to open terminal surface"
             emptyTerminalLabel.isHidden = false
         }
@@ -593,7 +600,7 @@ private final class TerminalPaneRegistry {
         self.hostView = hostView
     }
 
-    func focus(surface: TerminalSessionSnapshot, tracePayload: [String: Any]? = nil) -> Bool {
+    func focus(surface: TerminalSessionSnapshot, theme: String, tracePayload: [String: Any]? = nil) -> Bool {
         let startedAt = Self.timestampMillis()
         let key = surface.surfaceId
         let retiringKey = activeKey != key ? activeKey : nil
@@ -638,6 +645,7 @@ private final class TerminalPaneRegistry {
         activeKey = key
         remember(key)
         attach(controller)
+        controller.applyTheme(theme)
         controller.focus()
         retire(controller: retiringController, key: retiringKey)
         scheduleStabilizedLayouts(for: key, tracePayload: tracePayload)
@@ -670,6 +678,10 @@ private final class TerminalPaneRegistry {
         cancelStabilizedLayouts()
         activeController?.hide()
         activeKey = nil
+    }
+
+    func applyTheme(_ theme: String) {
+        controllers.values.forEach { $0.applyTheme(theme) }
     }
 
     private var activeController: NativeTerminalPaneControlling? {
@@ -789,6 +801,7 @@ protocol NativeTerminalPaneControlling: AnyObject {
     func detach()
     func matches(surfaceId: String, sessionId: String?) -> Bool
     func scrollWheel(with event: NSEvent)
+    func applyTheme(_ theme: String)
 }
 
 extension NativeTerminalPaneControlling {
@@ -804,6 +817,10 @@ extension NativeTerminalPaneControlling {
         guard !paneView.isHidden else { return }
         paneView.window?.makeFirstResponder(paneView)
         paneView.scrollWheel(with: event)
+    }
+
+    func applyTheme(_ theme: String) {
+        _ = theme
     }
 }
 

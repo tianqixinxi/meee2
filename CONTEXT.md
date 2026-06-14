@@ -44,6 +44,10 @@ _Avoid_: Island setup flow, menu bar checklist
 The React-based main workspace surface inside the meee2 app, covering Canvas, Monitor, Settings, Artifacts, Templates, Team, and Integrations. Web Board notification design is separate from native macOS attention surfaces.
 _Avoid_: Native overlay, Dynamic Island, system notification
 
+**Web Board Theme Profile**:
+A local appearance preference that changes how the Web Board presents color and contrast on one Mac, including the Board sidebar surface color. A Web Board Theme Profile does not define Canvas rendering semantics, plugin identity colors, team-shared settings, or Native Attention Surface styling.
+_Avoid_: Canvas Render Profile, plugin theme, team design system, Dynamic Island theme
+
 **Native Attention Surface**:
 A macOS-level meee2 surface such as Dynamic Island, menu bar overlay, NSAlert, or system notification. Native Attention Surfaces are reserved for cross-window or urgent attention and are not the default home for Web Board UI feedback.
 _Avoid_: Web toast, canvas banner, inline form error

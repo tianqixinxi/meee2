@@ -71,6 +71,25 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
     }
 
+    func testLaunchCommandSupportsPlanModeForBothProviders() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "fullAccess", planMode: true),
+            "claude --permission-mode plan"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "plan"),
+            "claude --permission-mode plan"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest", planMode: true),
+            "codex -c 'collaboration_mode=\"plan\"' --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "plan"),
+            "codex -c 'collaboration_mode=\"plan\"' --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+        )
+    }
+
     func testResumeCommandUsesProviderResumeSyntax() {
         XCTAssertEqual(
             AgentLaunchCommand.resumeCommand(forProvider: "claude", sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"),

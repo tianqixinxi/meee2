@@ -6,12 +6,26 @@ public enum TerminalSessionBackendKind: String, Codable {
     case external = "external"
 }
 
+public enum Meee2SessionScope: String, Codable {
+    case meee2
+    case canvas
+    case node
+    case external
+
+    public static func managed(canvasId: String?, nodeId: String?) -> Meee2SessionScope {
+        if nodeId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return .node }
+        if canvasId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return .canvas }
+        return .meee2
+    }
+}
+
 public struct TerminalSessionRequest: Equatable {
     public let provider: String
     public let cwd: String
     public let command: String
     public let canvasId: String?
     public let nodeId: String?
+    public let sessionScope: Meee2SessionScope
     public let initialPrompt: String?
     /// initialPrompt 就绪门控的硬上限(秒)。nil = 后端默认(20s,适合 fresh
     /// session 的快速启动)。大会话 `--resume` 的 TUI 加载可能远超 20s —
@@ -28,6 +42,7 @@ public struct TerminalSessionRequest: Equatable {
         command: String,
         canvasId: String?,
         nodeId: String?,
+        sessionScope: Meee2SessionScope? = nil,
         initialPrompt: String?,
         initialPromptSettleCeiling: TimeInterval? = nil,
         preferredSessionId: String? = nil,
@@ -39,6 +54,7 @@ public struct TerminalSessionRequest: Equatable {
         self.command = command
         self.canvasId = canvasId
         self.nodeId = nodeId
+        self.sessionScope = sessionScope ?? Meee2SessionScope.managed(canvasId: canvasId, nodeId: nodeId)
         self.initialPrompt = initialPrompt
         self.initialPromptSettleCeiling = initialPromptSettleCeiling
         self.preferredSessionId = preferredSessionId
@@ -58,6 +74,7 @@ public struct TerminalSessionSnapshot: Codable, Equatable {
     public let provider: String
     public let canvasId: String?
     public let nodeId: String?
+    public let sessionScope: Meee2SessionScope
     public let createdAt: Date
     public let updatedAt: Date
     public let fallbackReason: String?
@@ -73,6 +90,7 @@ public struct TerminalSessionSnapshot: Codable, Equatable {
         provider: String,
         canvasId: String?,
         nodeId: String?,
+        sessionScope: Meee2SessionScope? = nil,
         createdAt: Date,
         updatedAt: Date,
         fallbackReason: String? = nil
@@ -87,6 +105,7 @@ public struct TerminalSessionSnapshot: Codable, Equatable {
         self.provider = provider
         self.canvasId = canvasId
         self.nodeId = nodeId
+        self.sessionScope = sessionScope ?? Meee2SessionScope.managed(canvasId: canvasId, nodeId: nodeId)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.fallbackReason = fallbackReason
@@ -177,6 +196,7 @@ public enum TerminalSessionBackendMetadata {
             provider: snapshot.provider,
             canvasId: snapshot.canvasId,
             nodeId: snapshot.nodeId,
+            sessionScope: snapshot.sessionScope.rawValue,
             backend: snapshot.backend.rawValue,
             fallbackReason: snapshot.fallbackReason
         )
@@ -200,6 +220,7 @@ public enum TerminalSessionBackendMetadata {
             provider: snapshot.provider,
             canvasId: snapshot.canvasId,
             nodeId: snapshot.nodeId,
+            sessionScope: snapshot.sessionScope.rawValue,
             backend: snapshot.backend.rawValue,
             fallbackReason: snapshot.fallbackReason
         )

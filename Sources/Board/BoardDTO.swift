@@ -61,6 +61,10 @@ struct SessionDTO: Encodable {
     let openTarget: String
     /// "active" | "hidden" | "archived" — local operator visibility state.
     let controlState: String
+    /// "meee2" | "canvas" | "node" | "external" — coarse UI bucket for
+    /// Session workspace grouping. This intentionally stays simpler than the
+    /// full canvas membership model.
+    let sessionScope: String
 
     /// 当前后台在跑的 Claude Code 子 agent / task（Agent run_in_background / Monitor / Bash run_in_background）。
     /// 主 agent status 和这个字段是正交维度：主可以是 idle 而后台同时有 N 条在跑。
@@ -232,6 +236,7 @@ struct AppSettingsScreenDTO: Encodable {
 
 struct AppSettingsDTO: Encodable {
     let theme: String
+    let themeProfile: WebBoardThemeProfileDTO
     let locale: String
     let devMode: Bool
     let showIsland: Bool
@@ -715,6 +720,46 @@ enum BoardDTOBuilder {
         )
     }
 
+    private static func sessionScope(
+        sessionId: String,
+        surfaceId: String? = nil,
+        terminalInfo: SessionTerminalInfo? = nil,
+        terminalKind: String? = nil
+    ) -> Meee2SessionScope {
+        if let raw = terminalInfo?.sessionScope,
+           let stored = Meee2SessionScope(rawValue: raw) {
+            return stored
+        }
+        if terminalInfo?.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return .node
+        }
+        if terminalInfo?.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return .canvas
+        }
+
+        let ids = [
+            sessionId,
+            surfaceId,
+            terminalInfo?.cmuxSurfaceId,
+            terminalInfo?.providerResumeSessionId
+        ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !ids.isEmpty {
+            let idSet = Set(ids)
+            if BoardLayoutStore.shared.snapshot().memberships.contains(where: { membership in
+                membership.visible && idSet.contains(membership.sessionId)
+            }) {
+                return .canvas
+            }
+        }
+
+        if terminalKind == "internal" {
+            return .meee2
+        }
+        return .external
+    }
+
     private static func syncInfoIndex() -> SyncInfoIndex? {
         syncInfoCacheLock.lock()
         if let cached = syncInfoIndexCache,
@@ -1007,6 +1052,12 @@ enum BoardDTOBuilder {
         let openTarget = orphanedInternalResume ? "web-fallback" : "external"
         let sync = syncInfo(forSessionId: session.id)
         let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
+        let scope = sessionScope(
+            sessionId: session.id,
+            terminalInfo: SessionTerminalStore.shared.get(sessionId: session.id)
+                ?? SessionTerminalStore.shared.get(sessionId: realSessionId),
+            terminalKind: terminalKind
+        )
 
         return SessionDTO(
             id: session.id,
@@ -1038,6 +1089,7 @@ enum BoardDTOBuilder {
             nativeWorkspaceAvailable: false,
             openTarget: openTarget,
             controlState: controlState.rawValue,
+            sessionScope: scope.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
             clientKind: clientKind,
@@ -1076,6 +1128,11 @@ enum BoardDTOBuilder {
 
         let sync = syncInfo(forSessionId: m.cliSessionId)
         let controlState = SessionControlStore.shared.state(for: [m.cliSessionId])
+        let scope = sessionScope(
+            sessionId: m.cliSessionId,
+            terminalInfo: SessionTerminalStore.shared.get(sessionId: m.cliSessionId),
+            terminalKind: "external"
+        )
 
         return SessionDTO(
             id: m.cliSessionId,
@@ -1107,6 +1164,7 @@ enum BoardDTOBuilder {
             nativeWorkspaceAvailable: false,
             openTarget: "external",
             controlState: controlState.rawValue,
+            sessionScope: scope.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "desktop",
@@ -1155,6 +1213,12 @@ enum BoardDTOBuilder {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
         let controlState = SessionControlStore.shared.state(for: controlIds)
+        let scope = sessionScope(
+            sessionId: sessionData.sessionId,
+            surfaceId: terminalInfo?.cmuxSurfaceId,
+            terminalInfo: terminalInfo,
+            terminalKind: "internal"
+        )
 
         return SessionDTO(
             id: sessionData.sessionId,
@@ -1195,6 +1259,7 @@ enum BoardDTOBuilder {
             nativeWorkspaceAvailable: false,
             openTarget: "web-fallback",
             controlState: controlState.rawValue,
+            sessionScope: scope.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "cli",
@@ -1222,9 +1287,8 @@ enum BoardDTOBuilder {
             }
         }()
         let sync = syncInfo(forSessionId: surface.sessionId)
-        let providerResumeId = validProviderResumeSessionId(
-            SessionTerminalStore.shared.get(sessionId: surface.sessionId)?.providerResumeSessionId
-        )
+        let terminalInfo = SessionTerminalStore.shared.get(sessionId: surface.sessionId)
+        let providerResumeId = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId)
         let controlIds = [surface.sessionId, surface.surfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -1232,6 +1296,12 @@ enum BoardDTOBuilder {
         let backend = TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? surface.backend
         let nativeWorkspaceAvailable = backend == .ghosttySurface
         let termProgram = nativeWorkspaceAvailable ? "meee2-ghostty-surface" : "meee2-internal"
+        let scope = sessionScope(
+            sessionId: surface.sessionId,
+            surfaceId: surface.surfaceId,
+            terminalInfo: terminalInfo,
+            terminalKind: "internal"
+        )
         return SessionDTO(
             id: surface.sessionId,
             title: "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)",
@@ -1262,6 +1332,7 @@ enum BoardDTOBuilder {
             nativeWorkspaceAvailable: nativeWorkspaceAvailable,
             openTarget: nativeWorkspaceAvailable ? "native-workspace" : "web-fallback",
             controlState: controlState.rawValue,
+            sessionScope: scope.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "cli",
@@ -1341,6 +1412,7 @@ enum BoardDTOBuilder {
             nativeWorkspaceAvailable: surface.nativeWorkspaceAvailable,
             openTarget: surface.openTarget,
             controlState: surface.controlState,
+            sessionScope: surface.sessionScope,
             backgroundAgents: surface.backgroundAgents,
             latestRecap: surface.latestRecap,
             clientKind: surface.clientKind,
