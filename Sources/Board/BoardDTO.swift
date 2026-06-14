@@ -1317,7 +1317,7 @@ enum BoardDTOBuilder {
             lastActivity: iso8601.string(from: surface.updatedAt),
             usageStats: nil,
             tasks: [],
-            currentTask: surface.nodeId.map { "Node \($0)" },
+            currentTask: sessionData?.currentTask ?? surface.nodeId.map { "Node \($0)" },
             pendingPermissionTool: sessionData?.pendingPermissionTool,
             pendingPermissionMessage: sessionData?.pendingPermissionMessage,
             ghosttyTerminalId: nil,
