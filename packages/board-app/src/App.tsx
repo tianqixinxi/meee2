@@ -10,7 +10,7 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
-import { ArtifactsView } from './components/ArtifactsView'
+import { ArtifactsView, type ArtifactSessionFilter } from './components/ArtifactsView'
 import { SessionLauncherView } from './components/SessionLauncherView'
 import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
 import { IntegrationsView } from './components/IntegrationsView'
@@ -417,6 +417,7 @@ export default function App() {
     boardState: boardState.state,
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
+  const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [sessionTerminalTarget, setSessionTerminalTarget] = useState<SessionOpenTarget | null>(null)
@@ -1178,7 +1179,13 @@ export default function App() {
   }, [boardSessionSignature, refreshCanvases])
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
+    if (nextMode === 'artifacts') setArtifactSessionFilter(null)
     setWorkspaceMode(nextMode)
+  }, [])
+
+  const handleOpenSessionArtifacts = useCallback((_session: Session, _title: string, filter: ArtifactSessionFilter) => {
+    setArtifactSessionFilter(filter)
+    setWorkspaceMode('artifacts')
   }, [])
 
   const refreshUserProfile = useCallback(() => {
@@ -1252,6 +1259,7 @@ export default function App() {
             <SessionLauncherView
               state={boardState.state}
               onSessionCreated={() => boardState.forceRefresh()}
+              onOpenSessionArtifacts={handleOpenSessionArtifacts}
               onToast={pushToast}
             />
           ) : workspaceMode === 'planner' ? (
@@ -1317,6 +1325,8 @@ export default function App() {
             <ArtifactsView
               canvases={workspaceCanvases}
               activeCanvasId={activeWorkspaceCanvasId}
+              sessionFilter={artifactSessionFilter}
+              onClearSessionFilter={() => setArtifactSessionFilter(null)}
               onOpenCanvas={(canvasId) => {
                 handleSetActiveCanvas(canvasId)
                 setWorkspaceMode('planner')

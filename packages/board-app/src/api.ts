@@ -1220,6 +1220,7 @@ export function createTemporarySession(input: TemporarySessionCreateInput): Prom
 
 export function reopenLauncherSession(input: {
   sessionId: string
+  providerResumeSessionId?: string | null
   provider?: SpawnProvider | string | null
   cwd?: string | null
 }): Promise<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }> {
@@ -1228,6 +1229,7 @@ export function reopenLauncherSession(input: {
     {
       method: 'POST',
       body: JSON.stringify({
+        providerResumeSessionId: input.providerResumeSessionId ?? undefined,
         provider: input.provider ?? undefined,
         cwd: input.cwd ?? undefined,
       }),

@@ -35,6 +35,8 @@ const project: SessionProject = {
   lastUsedAt: null,
 }
 
+const providerResumeSessionId = '8db44e39-685d-47ab-bd0e-5e97386ded80'
+
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 'session-a',
@@ -55,6 +57,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     terminalKind: 'internal',
     terminalBackend: 'ghostty-surface',
     surfaceId: 'surface-a',
+    providerResumeSessionId,
     surfaceStatus: 'running',
     nativeWorkspaceAvailable: true,
     openTarget: 'native-workspace',
@@ -125,10 +128,10 @@ describe('SessionLauncherView', () => {
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     const launcher = document.querySelector('.session-launcher') as HTMLElement
-    expect(launcher.style.getPropertyValue('--session-launcher-sidebar-width')).toBe('324px')
+    expect(launcher.style.getPropertyValue('--session-launcher-sidebar-width')).toBe('280px')
 
     fireEvent.pointerDown(screen.getByRole('button', { name: '调整会话侧边栏宽度' }), {
-      clientX: 324,
+      clientX: 280,
       pointerId: 1,
     })
     const moveEvent = new Event('pointermove') as PointerEvent
@@ -184,6 +187,9 @@ describe('SessionLauncherView', () => {
     const sessionButton = await screen.findByRole('button', { name: '新增 Session 原生 Terminal' })
     expect(within(sessionButton).queryByText(/running|小时前|分钟前|天前|周前/)).not.toBeInTheDocument()
     expect(within(sessionButton).getByText(/小时|分|刚刚/)).toBeInTheDocument()
+    expect(sessionButton).toHaveAttribute('title', expect.stringContaining('新增 Session 原生 Terminal'))
+    expect(sessionButton).toHaveAttribute('title', expect.stringContaining('/Users/kai/Code/meee2-workspace'))
+    expect(sessionButton).toHaveAttribute('title', expect.stringContaining('Codex'))
     fireEvent.click(sessionButton)
 
     await waitFor(() => {
@@ -195,6 +201,38 @@ describe('SessionLauncherView', () => {
       }))
     })
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
+  })
+
+  it('restores the selected native terminal session after leaving and returning to the session page', async () => {
+    const first = renderWithI18n(<SessionLauncherView state={makeState()} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(await screen.findByRole('button', { name: '新增 Session 原生 Terminal' }))
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'session-a',
+        surfaceId: 'surface-a',
+      }))
+    })
+    expect(localStorage.getItem('meee2.sessionLauncher.lastSelection')).toContain('session-a')
+
+    first.unmount()
+    api.syncNativeSessionsWorkspace.mockClear()
+
+    const returned = renderWithI18n(<SessionLauncherView state={makeState()} />)
+
+    await waitFor(() => {
+      expect(returned.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('新增 Session 原生 Terminal')
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'session-a',
+        surfaceId: 'surface-a',
+      }))
+    })
+    expect(returned.container.querySelector('.session-launcher__main')).not.toHaveTextContent('我们应该在meee2-workspace中做些什么？')
   })
 
   it('shows pinned sessions globally without duplicating them in the project group', async () => {
@@ -440,7 +478,7 @@ describe('SessionLauncherView', () => {
     expect(screen.queryByText('隐藏临时会话')).not.toBeInTheDocument()
   })
 
-  it('selects only the clicked temporary session when sessions have no surface id without reopening it', async () => {
+  it('reopens only the clicked temporary session when sessions have no live surface id', async () => {
     const temporarySessions = [
       makeSession({
         id: 'temp-a',
@@ -448,6 +486,7 @@ describe('SessionLauncherView', () => {
         title: 'Claude Code',
         recentMessages: [{ role: 'user', text: '临时问题 A' }],
         surfaceId: null,
+        providerResumeSessionId: '7c9a9e9e-1111-4111-8111-111111111111',
         surfaceStatus: 'exited',
       }),
       makeSession({
@@ -456,24 +495,37 @@ describe('SessionLauncherView', () => {
         title: 'Claude Code',
         recentMessages: [{ role: 'user', text: '临时问题 B' }],
         surfaceId: null,
+        providerResumeSessionId: '7c9a9e9e-2222-4222-8222-222222222222',
         surfaceStatus: 'exited',
       }),
     ]
-    const { container } = renderWithI18n(<SessionLauncherView state={makeState(temporarySessions)} />)
+    renderWithI18n(<SessionLauncherView state={makeState(temporarySessions)} />)
 
     fireEvent.click(await screen.findByRole('button', { name: '临时问题 B' }))
 
-    const selectedItems = container.querySelectorAll('.session-launcher__session-item.is-selected')
-    expect(selectedItems).toHaveLength(1)
-    expect(selectedItems[0]).toHaveTextContent('临时问题 B')
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    expect(api.syncNativeSessionsWorkspace).not.toHaveBeenCalledWith(expect.objectContaining({
-      phase: 'show',
-      sessionId: expect.any(String),
-    }))
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenCalledWith({
+        sessionId: 'temp-b',
+        providerResumeSessionId: '7c9a9e9e-2222-4222-8222-222222222222',
+        provider: 'codex',
+        cwd: '/Users/kai/.meee2/workspaces/temporary/b',
+      })
+    })
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'restored-session',
+        surfaceId: 'restored-surface',
+      }))
+    })
   })
 
-  it('does not auto-reopen a stale launcher session when selected', async () => {
+  it('reopens a stale launcher session when selected', async () => {
+    let resolveReopen: (value: Awaited<ReturnType<typeof api.reopenLauncherSession>>) => void = () => {}
+    api.reopenLauncherSession.mockReturnValueOnce(new Promise((resolve) => {
+      resolveReopen = resolve
+    }))
     const staleSession = makeSession({
       id: 'stale-session',
       title: 'Claude Code',
@@ -485,6 +537,7 @@ describe('SessionLauncherView', () => {
       nativeWorkspaceAvailable: false,
       openTarget: 'web-fallback',
       surfaceId: null,
+      providerResumeSessionId,
       surfaceStatus: 'exited',
     })
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
@@ -492,12 +545,111 @@ describe('SessionLauncherView', () => {
     const row = await screen.findByRole('button', { name: '继续历史临时问题' })
     fireEvent.click(row)
 
+    expect(await screen.findByText('正在恢复原生 terminal session...')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenCalledWith({
+        sessionId: 'stale-session',
+        providerResumeSessionId,
+        provider: 'claude',
+        cwd: '/Users/kai/.meee2/workspaces/temporary/stale',
+      })
+    })
+    await act(async () => {
+      resolveReopen({
+        ok: true,
+        action: 'resume',
+        surface: {
+          provider: 'claude',
+          sessionId: 'restored-session',
+          surfaceId: 'restored-surface',
+          title: 'Claude Code - restored',
+          cwd: '/Users/kai/.meee2/workspaces/temporary/stale',
+          command: 'claude --resume restored --dangerously-skip-permissions',
+          status: 'running',
+          createdAt: '2026-06-14T00:00:00Z',
+          updatedAt: '2026-06-14T00:00:00Z',
+        },
+      })
+    })
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'restored-session',
+        surfaceId: 'restored-surface',
+      }))
+    })
+  })
+
+  it('collapses the restored live surface into the clicked historical session row', async () => {
+    const staleSession = makeSession({
+      id: 'historical-session',
+      title: 'Codex',
+      project: project.path,
+      recentMessages: [{ role: 'user', text: '继续旧的 Session' }],
+      terminalBackend: 'ghostty-surface',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+      lastActivity: new Date(Date.now() - 2 * 60_000).toISOString(),
+    })
+    const restoredSession = makeSession({
+      id: 'restored-session',
+      title: 'Codex - restored',
+      project: project.path,
+      recentMessages: [{ role: 'user', text: '新建出来的 restored surface' }],
+      surfaceId: 'restored-surface',
+      surfaceStatus: 'running',
+      nativeWorkspaceAvailable: true,
+      openTarget: 'native-workspace',
+      lastActivity: new Date(Date.now() - 30_000).toISOString(),
+    })
+    const view = renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(await screen.findByRole('button', { name: '继续旧的 Session' }))
+
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'restored-session',
+        surfaceId: 'restored-surface',
+      }))
+    })
+
+    view.rerender(<I18nProvider><SessionLauncherView state={makeState([restoredSession, staleSession])} /></I18nProvider>)
+
+    expect(await screen.findByRole('button', { name: '继续旧的 Session' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '新建出来的 restored surface' })).not.toBeInTheDocument()
+    expect(view.container.querySelectorAll('.session-launcher__session-item.is-selected')).toHaveLength(1)
+    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('继续旧的 Session')
+    expect(view.container.querySelector('.session-launcher-terminal__status')).toHaveTextContent('运行中')
+  })
+
+  it('does not recreate a stale launcher session when no provider resume id is known', async () => {
+    const staleSession = makeSession({
+      id: 'historical-session-without-provider-id',
+      recentMessages: [{ role: 'user', text: '没有 provider resume id 的旧 Session' }],
+      terminalBackend: 'ghostty-surface',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+      surfaceId: null,
+      providerResumeSessionId: null,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(await screen.findByRole('button', { name: '没有 provider resume id 的旧 Session' }))
+
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    expect(api.syncNativeSessionsWorkspace).not.toHaveBeenCalledWith(expect.objectContaining({
-      phase: 'show',
+    expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'hide',
       mode: 'terminal',
-      sessionId: expect.any(String),
-      surfaceId: expect.any(String),
     }))
     expect(await screen.findByText('这个 session 还没有可挂载的原生 terminal surface')).toBeInTheDocument()
   })
@@ -596,10 +748,13 @@ describe('SessionLauncherView', () => {
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     const sessionButton = await screen.findByRole('button', { name: '新增 Session 原生 Terminal' })
-    fireEvent.keyDown(sessionButton, { key: 'F10', shiftKey: true })
+    fireEvent.contextMenu(sessionButton, { clientX: 321, clientY: 222 })
 
     const menu = await screen.findByRole('menu', { name: '新增 Session 原生 Terminal 的会话操作' })
+    expect(menu.parentElement).toBe(document.body)
+    expect(menu).toHaveStyle({ left: '321px', top: '222px' })
     expect(within(menu).getByRole('menuitem', { name: '归档会话' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: '查看产物' })).toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: '置顶' })).toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: '重命名' })).toBeInTheDocument()
 
@@ -610,6 +765,47 @@ describe('SessionLauncherView', () => {
 
     expect(await screen.findByRole('button', { name: 'Session 标题修复' })).toBeInTheDocument()
     expect(localStorage.getItem('meee2.session.titleOverrides.v1')).toContain('Session 标题修复')
+  })
+
+  it('opens session artifacts from the context menu', async () => {
+    const session = makeSession()
+    const onOpenSessionArtifacts = vi.fn()
+    renderWithI18n(<SessionLauncherView state={makeState([session])} onOpenSessionArtifacts={onOpenSessionArtifacts} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    const sessionButton = await screen.findByRole('button', { name: '新增 Session 原生 Terminal' })
+    fireEvent.keyDown(sessionButton, { key: 'F10', shiftKey: true })
+
+    const menu = await screen.findByRole('menu', { name: '新增 Session 原生 Terminal 的会话操作' })
+    fireEvent.click(within(menu).getByRole('menuitem', { name: '查看产物' }))
+
+    expect(onOpenSessionArtifacts).toHaveBeenCalledWith(session, '新增 Session 原生 Terminal', expect.objectContaining({
+      sessionId: 'session-a',
+      providerResumeSessionId,
+      surfaceId: 'surface-a',
+      project: '/Users/kai/Code/meee2-workspace',
+      projectName: 'meee2-workspace',
+    }))
+  })
+
+  it('opens session artifacts from the terminal header action', async () => {
+    const session = makeSession({
+      currentTask: '修复 Session 标题',
+      recentMessages: [],
+    })
+    const onOpenSessionArtifacts = vi.fn()
+    renderWithI18n(<SessionLauncherView state={makeState([session])} onOpenSessionArtifacts={onOpenSessionArtifacts} />)
+
+    await screen.findByText('修复 Session 标题')
+    fireEvent.click(screen.getByRole('button', { name: '修复 Session 标题' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: '查看 修复 Session 标题 的产物' }))
+    expect(onOpenSessionArtifacts).toHaveBeenCalledWith(session, '修复 Session 标题', expect.objectContaining({
+      sessionId: 'session-a',
+      providerResumeSessionId,
+      surfaceId: 'surface-a',
+      projectName: 'meee2-workspace',
+    }))
   })
 
   it('pins and archives from the session context menu', async () => {

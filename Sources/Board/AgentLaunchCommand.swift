@@ -3,6 +3,7 @@ import Foundation
 enum AgentLaunchCommand {
     static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
     static let codexPlanModeConfig = "-c 'collaboration_mode=\"plan\"'"
+    static let codexPlanModeInstruction = "Plan mode is enabled for this Codex session. First produce a plan and ask for approval before editing files, running mutating commands, or committing. Do not implement until the user explicitly approves."
 
     static func fullAccessCommand(forProvider provider: String) -> String {
         launchCommand(forProvider: provider, permissionMode: "fullAccess")
@@ -44,6 +45,17 @@ enum AgentLaunchCommand {
         return normalizedProvider(provider) == "codex"
             ? "codex \(codexAutomationFlags) resume \(quotedSessionId)"
             : "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+    }
+
+    static func launcherInitialPrompt(forProvider provider: String, planMode: Bool, initialPrompt rawPrompt: String?) -> String? {
+        let prompt = rawPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard planMode, normalizedProvider(provider) == "codex" else {
+            return prompt.isEmpty ? nil : prompt
+        }
+        if prompt.isEmpty {
+            return codexPlanModeInstruction
+        }
+        return "\(codexPlanModeInstruction)\n\nUser request:\n\(prompt)"
     }
 
     static func normalizedProvider(_ raw: String) -> String {

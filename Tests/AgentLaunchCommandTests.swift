@@ -90,6 +90,25 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
     }
 
+    func testLauncherInitialPromptWrapsCodexPlanMode() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: true, initialPrompt: "ship the launcher fix"),
+            "\(AgentLaunchCommand.codexPlanModeInstruction)\n\nUser request:\nship the launcher fix"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: true, initialPrompt: "   "),
+            AgentLaunchCommand.codexPlanModeInstruction
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: false, initialPrompt: "  ship it  "),
+            "ship it"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "claude", planMode: true, initialPrompt: "  plan this  "),
+            "plan this"
+        )
+    }
+
     func testResumeCommandUsesProviderResumeSyntax() {
         XCTAssertEqual(
             AgentLaunchCommand.resumeCommand(forProvider: "claude", sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"),
