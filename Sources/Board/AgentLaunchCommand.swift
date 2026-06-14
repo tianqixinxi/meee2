@@ -4,9 +4,32 @@ enum AgentLaunchCommand {
     static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
 
     static func fullAccessCommand(forProvider provider: String) -> String {
-        normalizedProvider(provider) == "codex"
-            ? "codex \(codexAutomationFlags)"
-            : "claude --dangerously-skip-permissions"
+        launchCommand(forProvider: provider, permissionMode: "fullAccess")
+    }
+
+    static func launchCommand(forProvider provider: String, permissionMode rawMode: String?) -> String {
+        let provider = normalizedProvider(provider)
+        let mode = normalizedPermissionMode(rawMode)
+        if provider == "codex" {
+            switch mode {
+            case "readOnly":
+                return "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            case "onRequest", "default":
+                return "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            case "acceptEdits":
+                return "codex --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust"
+            default:
+                return "codex \(codexAutomationFlags)"
+            }
+        }
+        switch mode {
+        case "default", "onRequest", "readOnly":
+            return "claude --permission-mode default"
+        case "acceptEdits":
+            return "claude --permission-mode acceptEdits"
+        default:
+            return "claude --dangerously-skip-permissions"
+        }
     }
 
     static func resumeCommand(forProvider provider: String, sessionId: String) -> String {
@@ -18,6 +41,21 @@ enum AgentLaunchCommand {
 
     static func normalizedProvider(_ raw: String) -> String {
         raw.lowercased().contains("codex") ? "codex" : "claude"
+    }
+
+    static func normalizedPermissionMode(_ raw: String?) -> String {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "readonly", "read_only", "read-only":
+            return "readOnly"
+        case "onrequest", "on_request", "on-request", "confirm", "ask", "default":
+            return "onRequest"
+        case "acceptedits", "accept_edits", "accept-edits", "autoedit", "auto":
+            return "acceptEdits"
+        case "fullaccess", "full_access", "full-access", "bypasspermissions", "bypass", "danger":
+            return "fullAccess"
+        default:
+            return "fullAccess"
+        }
     }
 
     static func provider(forCommand command: String) -> String {

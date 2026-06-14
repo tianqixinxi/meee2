@@ -362,7 +362,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Status Bar
 
     private func setupStatusBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: 20)
 
         // 设置初始图标（无 session）
         updateStatusBarIcon(hasActiveSessions: false)
