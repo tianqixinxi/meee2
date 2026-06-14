@@ -1,27 +1,42 @@
 import {
+  Archive,
+  ArrowUp,
   ChevronDown,
+  Circle,
+  Edit3,
   Folder,
   FolderPlus,
+  FolderOpen,
   Loader2,
   MessageSquarePlus,
+  Mic,
+  MoreHorizontal,
+  PencilLine,
   Pin,
   PinOff,
-  Play,
+  Plus,
+  Shield,
   Terminal as TerminalIcon,
   Trash2,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Dispatch, ReactNode, SetStateAction } from 'react'
+import type { Dispatch, FormEvent, ReactNode, SetStateAction } from 'react'
 import {
   createProjectSession,
   createSessionProject,
   createTemporarySession,
   fetchSessionProjects,
   forgetSessionProject,
-  openNativeTerminalSurface,
   pickSessionProjectDirectory,
+  renameSessionProject,
+  reopenLauncherSession,
+  revealSessionProjectInFinder,
+  syncNativeSessionsWorkspace,
+  updateSessionControl,
   type NativeTerminalRect,
 } from '../api'
+import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
+import { nativeTerminalTargetForSession } from '../lib/sessionTerminal'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, togglePinned } from '../sessionOverrides'
 import type { BoardState, Session, SessionProject, SpawnProvider } from '../types'
@@ -36,6 +51,11 @@ type Selection =
   | { kind: 'project'; projectId: string }
   | { kind: 'temporaryDraft' }
   | { kind: 'session'; sessionId: string; surfaceId?: string | null }
+
+type RestoredTerminalTarget = {
+  sessionId: string
+  surfaceId: string
+}
 
 const DEFAULT_PROMPT = ''
 const PROVIDERS: SpawnProvider[] = ['codex', 'claude']
@@ -61,6 +81,15 @@ export function SessionLauncherView({
   const [addingFolder, setAddingFolder] = useState(false)
   const [startingProjectId, setStartingProjectId] = useState<string | null>(null)
   const [startingTemporary, setStartingTemporary] = useState(false)
+  const [projectMenuId, setProjectMenuId] = useState<string | null>(null)
+  const [renameProject, setRenameProject] = useState<SessionProject | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
+  const [revealingProjectId, setRevealingProjectId] = useState<string | null>(null)
+  const [reopeningSessionId, setReopeningSessionId] = useState<string | null>(null)
+  const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null)
+  const [locallyArchivedSessionIds, setLocallyArchivedSessionIds] = useState<Set<string>>(() => new Set())
+  const [restoredSessionTargets, setRestoredSessionTargets] = useState<Record<string, RestoredTerminalTarget>>({})
   const initializedSelectionRef = useRef(false)
   const sessions = state?.sessions ?? []
 
@@ -92,6 +121,23 @@ export function SessionLauncherView({
     return () => window.removeEventListener('meee2:session-overrides-changed', refreshPinned)
   }, [])
 
+  useEffect(() => {
+    if (!projectMenuId) return undefined
+    const closeMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-session-project-menu-root]')) return
+      setProjectMenuId(null)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setProjectMenuId(null)
+    }
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [projectMenuId])
+
   const explicitProjects = useMemo(
     () => projects.filter((project) => project.explicit),
     [projects],
@@ -104,8 +150,8 @@ export function SessionLauncherView({
   }, [explicitProjects])
 
   const activeSessions = useMemo(
-    () => sessions.filter((session) => session.controlState !== 'archived'),
-    [sessions],
+    () => sessions.filter((session) => session.controlState !== 'archived' && !locallyArchivedSessionIds.has(session.id)),
+    [locallyArchivedSessionIds, sessions],
   )
 
   const grouped = useMemo(() => {
@@ -166,8 +212,11 @@ export function SessionLauncherView({
 
   const selectedSession = useMemo(() => {
     if (selection?.kind !== 'session') return null
-    return sessions.find((session) => session.id === selection.sessionId || session.surfaceId === selection.surfaceId) ?? null
+    return sessions.find((session) => sessionMatchesSelection(session, selection)) ?? null
   }, [selection, sessions])
+  const selectedRestoredTarget = selection?.kind === 'session'
+    ? restoredSessionTargets[selection.sessionId] ?? null
+    : null
 
   const selectedProjectProvider = selectedProject
     ? providerByProjectId[selectedProject.id] ?? selectedProject.preferredProvider
@@ -179,6 +228,10 @@ export function SessionLauncherView({
   const selectProject = useCallback((project: SessionProject) => {
     setSelection({ kind: 'project', projectId: project.id })
     setExpandedProjectIds(new Set([project.id]))
+  }, [])
+
+  const openProjectComposer = useCallback((project: SessionProject) => {
+    setSelection({ kind: 'project', projectId: project.id })
   }, [])
 
   const handleAddFolder = useCallback(async () => {
@@ -202,6 +255,7 @@ export function SessionLauncherView({
   }, [onToast, selectedProjectProvider])
 
   const handleForgetProject = useCallback(async (project: SessionProject) => {
+    setProjectMenuId(null)
     try {
       await forgetSessionProject(project.id)
       setProjects((current) => current.filter((item) => item.id !== project.id))
@@ -214,6 +268,47 @@ export function SessionLauncherView({
       onToast?.('success', `Forgot ${project.name}`)
     } catch (err) {
       onToast?.('error', (err as Error).message || 'Failed to forget project')
+    }
+  }, [onToast])
+
+  const openRenameProject = useCallback((project: SessionProject) => {
+    setProjectMenuId(null)
+    setRenameProject(project)
+    setRenameValue(project.name)
+  }, [])
+
+  const handleRenameProject = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!renameProject) return
+    const nextName = renameValue.trim()
+    if (!nextName) {
+      onToast?.('error', 'Project name is required')
+      return
+    }
+    setRenamingProjectId(renameProject.id)
+    try {
+      const updated = await renameSessionProject(renameProject.id, { name: nextName })
+      setProjects((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setRenameProject(null)
+      setRenameValue('')
+      onToast?.('success', `Renamed project to ${updated.name}`)
+    } catch (err) {
+      onToast?.('error', (err as Error).message || 'Failed to rename project')
+    } finally {
+      setRenamingProjectId(null)
+    }
+  }, [onToast, renameProject, renameValue])
+
+  const handleRevealProject = useCallback(async (project: SessionProject) => {
+    setProjectMenuId(null)
+    setRevealingProjectId(project.id)
+    try {
+      await revealSessionProjectInFinder(project.id)
+      onToast?.('success', `Revealed ${project.name} in Finder`)
+    } catch (err) {
+      onToast?.('error', (err as Error).message || 'Failed to reveal project')
+    } finally {
+      setRevealingProjectId(null)
     }
   }, [onToast])
 
@@ -268,34 +363,89 @@ export function SessionLauncherView({
     }
   }, [onSessionCreated, onToast, temporaryPrompt, temporaryProvider])
 
+  const handleSelectSession = useCallback(async (session: Session) => {
+    setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
+    if (nativeTerminalTargetForSession(session).surfaceId) return
+    setReopeningSessionId(session.id)
+    try {
+      const result = await reopenLauncherSession({
+        sessionId: session.id,
+        provider: providerForSession(session),
+        cwd: session.project,
+      })
+      setRestoredSessionTargets((current) => ({
+        ...current,
+        [session.id]: {
+          sessionId: result.surface.sessionId,
+          surfaceId: result.surface.surfaceId,
+        },
+      }))
+      setSelection({
+        kind: 'session',
+        sessionId: session.id,
+        surfaceId: result.surface.surfaceId,
+      })
+      onSessionCreated?.()
+      if (result.action === 'resume') {
+        onToast?.('success', `Resumed ${sessionTitle(session)}`)
+      }
+    } catch (err) {
+      onToast?.('error', (err as Error).message || 'Failed to reopen session')
+    } finally {
+      setReopeningSessionId(null)
+    }
+  }, [onSessionCreated, onToast])
+
   const handleTogglePinned = useCallback((session: Session) => {
     const pinned = togglePinned(session.id)
     setPinnedSessionIds(loadPinnedSet())
     onToast?.('success', pinned ? 'Pinned session' : 'Unpinned session')
   }, [onToast])
 
+  const handleArchiveSession = useCallback(async (session: Session) => {
+    setArchivingSessionId(session.id)
+    setLocallyArchivedSessionIds((current) => new Set([...current, session.id]))
+    const previousSelection = selection
+    if (selection?.kind === 'session' && selection.sessionId === session.id) {
+      const ownerProject = projectForSession(session, explicitProjects)
+      setSelection(ownerProject ? { kind: 'project', projectId: ownerProject.id } : { kind: 'temporaryDraft' })
+    }
+    try {
+      await updateSessionControl(session.id, 'archive')
+      setPinnedSessionIds(loadPinnedSet())
+      setRestoredSessionTargets((current) => {
+        if (!current[session.id]) return current
+        const next = { ...current }
+        delete next[session.id]
+        return next
+      })
+      onSessionCreated?.()
+      onToast?.('success', 'Session archived')
+    } catch (err) {
+      setLocallyArchivedSessionIds((current) => {
+        const next = new Set(current)
+        next.delete(session.id)
+        return next
+      })
+      setSelection(previousSelection)
+      onToast?.('error', (err as Error).message || 'Failed to archive session')
+    } finally {
+      setArchivingSessionId(null)
+    }
+  }, [explicitProjects, onSessionCreated, onToast, selection])
+
   return (
+    <>
     <section className="session-launcher" aria-label="Session">
       <aside className="session-launcher__sidebar">
         <div className="session-launcher__sidebar-header">
           <div>
             <h1>Session</h1>
-            <span>{activeSessions.length} sessions</span>
           </div>
-          <button
-            type="button"
-            className="session-launcher__icon-button"
-            onClick={handleAddFolder}
-            disabled={addingFolder}
-            aria-label="Add folder"
-            title="Add folder"
-          >
-            {addingFolder ? <Loader2 size={16} className="spin" /> : <FolderPlus size={16} />}
-          </button>
         </div>
         {projectsError && <div className="session-launcher__error">{projectsError}</div>}
         <div className="session-launcher__project-list">
-          <SessionGroupHeader title="置顶" count={grouped.pinned.length} />
+          <SessionGroupHeader title="置顶" />
           {grouped.pinned.length > 0 ? (
             <SessionList
               groupId="pinned"
@@ -303,15 +453,31 @@ export function SessionLauncherView({
               selection={selection}
               expandedSessionGroups={expandedSessionGroups}
               onToggleExpanded={setExpandedSessionGroups}
-              onSelectSession={(session) => setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })}
+              onSelectSession={(session) => void handleSelectSession(session)}
               onTogglePinned={handleTogglePinned}
+              onArchiveSession={(session) => void handleArchiveSession(session)}
               pinnedSessionIds={pinnedSessionIds}
+              archivingSessionId={archivingSessionId}
             />
           ) : (
             <div className="session-launcher__empty session-launcher__empty--compact">暂无置顶</div>
           )}
 
-          <SessionGroupHeader title="项目" count={sortedProjects.length} />
+          <SessionGroupHeader
+            title="项目"
+            action={(
+              <button
+                type="button"
+                className="session-launcher__group-action"
+                onClick={handleAddFolder}
+                disabled={addingFolder}
+                aria-label="Add folder"
+                title="Add folder"
+              >
+                {addingFolder ? <Loader2 size={14} className="spin" /> : <FolderPlus size={14} />}
+              </button>
+            )}
+          />
           {projectsLoading ? (
             <div className="session-launcher__empty">Loading projects</div>
           ) : sortedProjects.length === 0 ? (
@@ -321,37 +487,21 @@ export function SessionLauncherView({
             const expanded = expandedProjectIds.has(project.id)
             const selected = selection?.kind === 'project' && selection.projectId === project.id
             return (
-              <div key={project.id} className="session-launcher__project-group">
-                <button
-                  type="button"
-                  className={`session-launcher__project-row${selected ? ' is-selected' : ''}`}
-                  onClick={() => selectProject(project)}
-                >
-                  <Folder size={16} aria-hidden />
-                  <span>
-                    <strong>{project.name}</strong>
-                    <small>{project.path}</small>
-                  </span>
-                </button>
-                <div className="session-launcher__project-actions">
-                  <button
-                    type="button"
-                    onClick={() => setExpandedProjectIds((current) => toggleSet(current, project.id))}
-                    aria-label={expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
-                    title={expanded ? 'Collapse' : 'Expand'}
-                  >
-                    <ChevronDown size={14} className={expanded ? 'is-open' : ''} />
-                    <span>{projectSessions.length}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleForgetProject(project)}
-                    aria-label={`Forget ${project.name}`}
-                    title="Forget project"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
+              <div key={project.id} className={`session-launcher__project-group${selected ? ' is-selected' : ''}`}>
+                <ProjectLauncherRow
+                  project={project}
+                  expanded={expanded}
+                  selected={selected}
+                  menuOpen={projectMenuId === project.id}
+                  revealing={revealingProjectId === project.id}
+                  onSelect={() => selectProject(project)}
+                  onCompose={() => openProjectComposer(project)}
+                  onToggleExpanded={() => setExpandedProjectIds((current) => toggleSet(current, project.id))}
+                  onToggleMenu={() => setProjectMenuId((current) => current === project.id ? null : project.id)}
+                  onRename={() => openRenameProject(project)}
+                  onReveal={() => void handleRevealProject(project)}
+                  onForget={() => void handleForgetProject(project)}
+                />
                 {expanded && (
                   <SessionList
                     groupId={`project:${project.id}`}
@@ -359,9 +509,12 @@ export function SessionLauncherView({
                     selection={selection}
                     expandedSessionGroups={expandedSessionGroups}
                     onToggleExpanded={setExpandedSessionGroups}
-                    onSelectSession={(session) => setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })}
+                    onSelectSession={(session) => void handleSelectSession(session)}
                     onTogglePinned={handleTogglePinned}
+                    onArchiveSession={(session) => void handleArchiveSession(session)}
                     pinnedSessionIds={pinnedSessionIds}
+                    archivingSessionId={archivingSessionId}
+                    nested
                   />
                 )}
               </div>
@@ -370,7 +523,6 @@ export function SessionLauncherView({
 
           <SessionGroupHeader
             title="临时对话"
-            count={grouped.temporary.length}
             action={(
               <button
                 type="button"
@@ -389,9 +541,11 @@ export function SessionLauncherView({
             selection={selection}
             expandedSessionGroups={expandedSessionGroups}
             onToggleExpanded={setExpandedSessionGroups}
-            onSelectSession={(session) => setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })}
+            onSelectSession={(session) => void handleSelectSession(session)}
             onTogglePinned={handleTogglePinned}
+            onArchiveSession={(session) => void handleArchiveSession(session)}
             pinnedSessionIds={pinnedSessionIds}
+            archivingSessionId={archivingSessionId}
           />
         </div>
       </aside>
@@ -399,12 +553,14 @@ export function SessionLauncherView({
         {selection?.kind === 'session' ? (
           <SessionLauncherTerminal
             session={selectedSession}
-            sessionId={selection.sessionId}
-            surfaceId={selection.surfaceId}
+            sessionId={selectedRestoredTarget?.sessionId ?? selection.sessionId}
+            surfaceId={selectedRestoredTarget?.surfaceId ?? selection.surfaceId}
+            reopening={reopeningSessionId === selection.sessionId}
           />
         ) : selection?.kind === 'temporaryDraft' ? (
           <SessionComposer
-            title="我们应该在临时工作区中构建什么？"
+            title="我们应该在临时工作区中做些什么？"
+            projectLabel="临时工作区"
             prompt={temporaryPrompt}
             provider={temporaryProvider}
             starting={startingTemporary}
@@ -414,7 +570,8 @@ export function SessionLauncherView({
           />
         ) : selectedProject ? (
           <SessionComposer
-            title={`我们应该在 ${selectedProject.name} 中构建什么？`}
+            title={`我们应该在${selectedProject.name}中做些什么？`}
+            projectLabel={selectedProject.name}
             prompt={currentProjectPrompt}
             provider={selectedProjectProvider}
             starting={startingProjectId === selectedProject.id}
@@ -435,22 +592,171 @@ export function SessionLauncherView({
         )}
       </main>
     </section>
+    {renameProject && (
+      <RenameProjectModal
+        project={renameProject}
+        value={renameValue}
+        busy={renamingProjectId === renameProject.id}
+        onValueChange={setRenameValue}
+        onCancel={() => {
+          setRenameProject(null)
+          setRenameValue('')
+        }}
+        onSubmit={(event) => void handleRenameProject(event)}
+      />
+    )}
+    </>
+  )
+}
+
+function ProjectLauncherRow({
+  project,
+  expanded,
+  selected,
+  menuOpen,
+  revealing,
+  onSelect,
+  onCompose,
+  onToggleExpanded,
+  onToggleMenu,
+  onRename,
+  onReveal,
+  onForget,
+}: {
+  project: SessionProject
+  expanded: boolean
+  selected: boolean
+  menuOpen: boolean
+  revealing: boolean
+  onSelect: () => void
+  onCompose: () => void
+  onToggleExpanded: () => void
+  onToggleMenu: () => void
+  onRename: () => void
+  onReveal: () => void
+  onForget: () => void
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        className={`session-launcher__project-row${selected ? ' is-selected' : ''}`}
+        onClick={onSelect}
+      >
+        <Folder size={16} aria-hidden />
+        <span>
+          <strong>{project.name}</strong>
+          <small>{project.path}</small>
+        </span>
+      </button>
+      <div className="session-launcher__project-actions" data-session-project-menu-root>
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          aria-label={expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
+          title={expanded ? 'Collapse' : 'Expand'}
+        >
+          <ChevronDown size={14} className={expanded ? 'is-open' : ''} />
+        </button>
+        <div className="session-launcher__project-menu-wrap">
+          <button
+            type="button"
+            onClick={onToggleMenu}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label={`More actions for ${project.name}`}
+            title="More actions"
+          >
+            <MoreHorizontal size={15} />
+          </button>
+          {menuOpen && (
+            <div className="session-launcher__project-menu" role="menu">
+              <button type="button" role="menuitem" onClick={onRename}>
+                <Edit3 size={13} aria-hidden />
+                <span>Rename</span>
+              </button>
+              <button type="button" role="menuitem" onClick={onReveal} disabled={revealing}>
+                {revealing ? <Loader2 size={13} className="spin" aria-hidden /> : <FolderOpen size={13} aria-hidden />}
+                <span>Reveal in Finder</span>
+              </button>
+              <button type="button" role="menuitem" className="is-danger" onClick={onForget}>
+                <Trash2 size={13} aria-hidden />
+                <span>Forget project - keeps files</span>
+              </button>
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onCompose}
+          aria-label={`Compose in ${project.name}`}
+          title="New session"
+        >
+          <PencilLine size={14} />
+        </button>
+      </div>
+    </>
+  )
+}
+
+function RenameProjectModal({
+  project,
+  value,
+  busy,
+  onValueChange,
+  onCancel,
+  onSubmit,
+}: {
+  project: SessionProject
+  value: string
+  busy: boolean
+  onValueChange: (value: string) => void
+  onCancel: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const trimmed = value.trim()
+  return (
+    <div className="session-launcher-modal" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onCancel()
+    }}>
+      <form className="session-launcher-modal__dialog" role="dialog" aria-modal="true" aria-label={`Rename ${project.name}`} onSubmit={onSubmit}>
+        <header>
+          <strong>Rename project</strong>
+          <span>{project.path}</span>
+        </header>
+        <label>
+          <span>Display name</span>
+          <input
+            autoFocus
+            value={value}
+            onChange={(event) => onValueChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') onCancel()
+            }}
+          />
+        </label>
+        <footer>
+          <button type="button" className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button type="submit" disabled={busy || trimmed.length === 0}>
+            {busy ? <Loader2 size={14} className="spin" /> : null}
+            <span>Rename</span>
+          </button>
+        </footer>
+      </form>
+    </div>
   )
 }
 
 function SessionGroupHeader({
   title,
-  count,
   action,
 }: {
   title: string
-  count: number
   action?: ReactNode
 }) {
   return (
     <div className="session-launcher__group-header">
       <span>{title}</span>
-      <em>{count}</em>
       {action}
     </div>
   )
@@ -464,7 +770,10 @@ function SessionList({
   onToggleExpanded,
   onSelectSession,
   onTogglePinned,
+  onArchiveSession,
   pinnedSessionIds,
+  archivingSessionId,
+  nested = false,
 }: {
   groupId: string
   sessions: Session[]
@@ -473,7 +782,10 @@ function SessionList({
   onToggleExpanded: Dispatch<SetStateAction<Set<string>>>
   onSelectSession: (session: Session) => void
   onTogglePinned: (session: Session) => void
+  onArchiveSession: (session: Session) => void
   pinnedSessionIds: Set<string>
+  archivingSessionId: string | null
+  nested?: boolean
 }) {
   const expanded = expandedSessionGroups.has(groupId)
   const visible = expanded ? sessions : sessions.slice(0, DEFAULT_VISIBLE_SESSIONS)
@@ -481,18 +793,19 @@ function SessionList({
     return <div className="session-launcher__empty session-launcher__empty--compact">暂无对话</div>
   }
   return (
-    <div className="session-launcher__session-list">
+    <div className={`session-launcher__session-list${nested ? ' session-launcher__session-list--nested' : ''}`}>
       {visible.map((session) => {
-        const active = selection?.kind === 'session'
-          && (selection.sessionId === session.id || selection.surfaceId === session.surfaceId)
+        const active = selection?.kind === 'session' && sessionMatchesSelection(session, selection)
         return (
           <SessionRow
             key={session.id}
             session={session}
             active={active}
             pinned={pinnedSessionIds.has(session.id)}
+            archiving={archivingSessionId === session.id}
             onSelect={() => onSelectSession(session)}
             onTogglePinned={() => onTogglePinned(session)}
+            onArchive={() => onArchiveSession(session)}
           />
         )
       })}
@@ -513,14 +826,18 @@ function SessionRow({
   session,
   active,
   pinned,
+  archiving,
   onSelect,
   onTogglePinned,
+  onArchive,
 }: {
   session: Session
   active: boolean
   pinned: boolean
+  archiving: boolean
   onSelect: () => void
   onTogglePinned: () => void
+  onArchive: () => void
 }) {
   const time = sessionRelativeTime(session)
   const statusLine = [session.status, time].filter(Boolean).join(' · ')
@@ -538,21 +855,34 @@ function SessionRow({
           <small>{statusLine}</small>
         </span>
       </button>
-      <button
-        type="button"
-        className="session-launcher__pin-button"
-        onClick={onTogglePinned}
-        aria-label={pinned ? `Unpin ${sessionTitle(session)}` : `Pin ${sessionTitle(session)}`}
-        title={pinned ? 'Unpin' : 'Pin'}
-      >
-        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
-      </button>
+      <div className="session-launcher__session-actions">
+        <button
+          type="button"
+          className="session-launcher__pin-button"
+          onClick={onTogglePinned}
+          aria-label={pinned ? `Unpin ${sessionTitle(session)}` : `Pin ${sessionTitle(session)}`}
+          title={pinned ? 'Unpin' : 'Pin'}
+        >
+          {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        </button>
+        <button
+          type="button"
+          className="session-launcher__archive-button"
+          onClick={onArchive}
+          disabled={archiving}
+          aria-label={`Archive ${sessionTitle(session)}`}
+          title="Archive"
+        >
+          {archiving ? <Loader2 size={13} className="spin" /> : <Archive size={13} />}
+        </button>
+      </div>
     </div>
   )
 }
 
 function SessionComposer({
   title,
+  projectLabel,
   prompt,
   provider,
   starting,
@@ -561,6 +891,7 @@ function SessionComposer({
   onStart,
 }: {
   title: string
+  projectLabel: string
   prompt: string
   provider: SpawnProvider
   starting: boolean
@@ -572,35 +903,63 @@ function SessionComposer({
     <div className="session-launcher__composer-shell">
       <div className="session-launcher__composer">
         <h2>{title}</h2>
-        <textarea
-          value={prompt}
-          onChange={(event) => onPromptChange(event.target.value)}
-          placeholder="描述你想让本地 agent 完成的工作..."
-          rows={4}
-        />
-        <div className="session-launcher__composer-footer">
-          <div className="session-launcher__runtime" role="group" aria-label="Runtime">
-            {PROVIDERS.map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={provider === item ? 'is-selected' : ''}
-                aria-pressed={provider === item}
-                onClick={() => onProviderChange(item)}
-              >
-                {spawnProviderLabel(item)}
-              </button>
-            ))}
+        <div className="session-launcher__prompt-tray">
+          <div className="session-launcher__prompt-card">
+            <textarea
+              value={prompt}
+              onChange={(event) => onPromptChange(event.target.value)}
+              placeholder="随心输入"
+              rows={4}
+            />
+            <div className="session-launcher__composer-footer">
+              <div className="session-launcher__composer-left">
+                <button type="button" className="session-launcher__composer-icon" aria-label="Add context" title="Add context">
+                  <Plus size={17} />
+                </button>
+                <button type="button" className="session-launcher__access-mode" aria-label="Full access" title="Full access">
+                  <Shield size={15} />
+                  <span>完全访问</span>
+                  <ChevronDown size={14} />
+                </button>
+              </div>
+              <div className="session-launcher__composer-right">
+                <div className="session-launcher__runtime" role="group" aria-label="Runtime">
+                  {PROVIDERS.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className={provider === item ? 'is-selected' : ''}
+                      aria-pressed={provider === item}
+                      onClick={() => onProviderChange(nextSpawnProvider(provider))}
+                      title={`Switch to ${spawnProviderLabel(nextSpawnProvider(provider))}`}
+                    >
+                      {provider === item ? <Circle size={13} /> : null}
+                      <span>{spawnProviderLabel(item)}</span>
+                      {provider === item ? <ChevronDown size={14} /> : null}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="session-launcher__composer-icon" aria-label="Voice input" title="Voice input">
+                  <Mic size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="session-launcher__start"
+                  onClick={onStart}
+                  disabled={starting}
+                  aria-label="Start session"
+                  title="Start session"
+                >
+                  {starting ? <Loader2 size={18} className="spin" /> : <ArrowUp size={20} />}
+                </button>
+              </div>
+            </div>
           </div>
-          <button
-            type="button"
-            className="session-launcher__start"
-            onClick={onStart}
-            disabled={starting}
-          >
-            {starting ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-            <span>Start session</span>
-          </button>
+          <div className="session-launcher__project-strip">
+            <Folder size={16} />
+            <span>{projectLabel}</span>
+            <ChevronDown size={15} />
+          </div>
         </div>
       </div>
     </div>
@@ -611,21 +970,34 @@ function SessionLauncherTerminal({
   session,
   sessionId,
   surfaceId,
+  reopening,
 }: {
   session: Session | null
   sessionId: string
   surfaceId?: string | null
+  reopening?: boolean
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
   const layoutTimersRef = useRef<number[]>([])
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
-  const targetSurfaceId = session?.surfaceId ?? surfaceId ?? undefined
-  const targetSessionId = session?.id ?? sessionId
+  const liveTarget = nativeTerminalTargetForSession(session)
+  const suppliedSurfaceId = surfaceId?.trim() || undefined
+  const targetSurfaceId = liveTarget.surfaceId ?? suppliedSurfaceId
+  const targetSessionId = liveTarget.sessionId ?? (targetSurfaceId ? sessionId : undefined)
+  const canOpenNativeTerminal = Boolean(targetSurfaceId && targetSessionId)
 
-  const syncTerminal = useCallback((type: 'attach' | 'layout' | 'focus' = 'layout', force = false) => {
+  const syncTerminal = useCallback((phase: 'show' | 'layout' | 'focus' = 'layout', force = false) => {
     const host = hostRef.current
-    if (!host || !targetSurfaceId) return
+    if (!host || !canOpenNativeTerminal) {
+      syncNativeSessionsWorkspace({
+        phase: 'hide',
+        mode: 'terminal',
+        webPhase: 'sessionLauncher.hide.missingTarget',
+      })
+      lastRectRef.current = null
+      return
+    }
     const rect = host.getBoundingClientRect()
     const nextRect = {
       x: Math.round(rect.left),
@@ -633,17 +1005,18 @@ function SessionLauncherTerminal({
       width: Math.round(rect.width),
       height: Math.round(rect.height),
     }
-    if (type === 'layout' && !force && sameRect(lastRectRef.current, nextRect)) return
+    if (phase === 'layout' && !force && sameRect(lastRectRef.current, nextRect)) return
     lastRectRef.current = nextRect
-    openNativeTerminalSurface({
-      type,
+    syncNativeSessionsWorkspace({
+      phase,
+      mode: 'terminal',
       surfaceId: targetSurfaceId,
       sessionId: targetSessionId,
       rect: nextRect,
       sentAtMs: Date.now(),
-      webPhase: `sessionLauncher.${type}`,
+      webPhase: `sessionLauncher.${phase}`,
     })
-  }, [targetSessionId, targetSurfaceId])
+  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId])
 
   const scheduleLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) return
@@ -655,27 +1028,28 @@ function SessionLauncherTerminal({
 
   const scheduleStabilizedLayouts = useCallback(() => {
     layoutTimersRef.current.forEach((timer) => window.clearTimeout(timer))
-    layoutTimersRef.current = [80, 180, 360, 700].map((delay) => window.setTimeout(() => {
+    layoutTimersRef.current = NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS.map((delay) => window.setTimeout(() => {
       syncTerminal('layout', true)
     }, delay))
   }, [syncTerminal])
 
   useLayoutEffect(() => {
-    syncTerminal('attach', true)
+    syncTerminal('show', true)
     scheduleStabilizedLayouts()
     const host = hostRef.current
     if (!host) return undefined
     const resizeObserver = new ResizeObserver(() => scheduleLayout())
     resizeObserver.observe(host)
-    window.addEventListener('resize', scheduleLayout)
+    const handleWindowLayout = () => scheduleLayout()
+    window.addEventListener('resize', handleWindowLayout)
+    window.addEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
     return () => {
       if (layoutFrameRef.current !== null) window.cancelAnimationFrame(layoutFrameRef.current)
       layoutTimersRef.current.forEach((timer) => window.clearTimeout(timer))
       resizeObserver.disconnect()
-      window.removeEventListener('resize', scheduleLayout)
-      if (targetSurfaceId) {
-        openNativeTerminalSurface({ type: 'hide', surfaceId: targetSurfaceId, sessionId: targetSessionId })
-      }
+      window.removeEventListener('resize', handleWindowLayout)
+      window.removeEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
+      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
       lastRectRef.current = null
     }
   }, [scheduleLayout, scheduleStabilizedLayouts, syncTerminal, targetSessionId, targetSurfaceId])
@@ -685,21 +1059,26 @@ function SessionLauncherTerminal({
     scheduleStabilizedLayouts()
   }, [scheduleStabilizedLayouts, syncTerminal])
 
+  if (!canOpenNativeTerminal) {
+    return (
+      <div className="session-launcher__terminal-empty">
+        {reopening ? <Loader2 size={18} className="spin" aria-hidden /> : <TerminalIcon size={18} aria-hidden />}
+        <strong>{session ? sessionTitle(session) : 'Session'}</strong>
+        <span>{reopening ? '正在恢复原生 terminal session...' : '这个 session 还没有可挂载的原生 terminal surface'}</span>
+      </div>
+    )
+  }
+
   return (
     <div className="session-launcher-terminal">
       <header className="session-launcher-terminal__header">
         <div>
-          <strong>{session?.title ?? 'Starting session'}</strong>
+          <strong>{session ? sessionTitle(session) : 'Starting session'}</strong>
           <span>{session?.project ?? 'Waiting for terminal surface'}</span>
         </div>
         <em>{session?.surfaceStatus ?? session?.status ?? 'starting'}</em>
       </header>
       <div ref={hostRef} className="session-launcher-terminal__host" />
-      {!targetSurfaceId && (
-        <div className="session-launcher-terminal__placeholder">
-          Preparing native terminal...
-        </div>
-      )}
     </div>
   )
 }
@@ -711,8 +1090,28 @@ function toggleSet(values: Set<string>, value: string): Set<string> {
   return next
 }
 
+function sessionMatchesSelection(session: Session, selection: Extract<Selection, { kind: 'session' }>): boolean {
+  if (session.id === selection.sessionId) return true
+  return Boolean(selection.surfaceId && session.surfaceId && selection.surfaceId === session.surfaceId)
+}
+
+function providerForSession(session: Session): SpawnProvider {
+  const raw = `${session.pluginId} ${session.pluginDisplayName} ${session.title}`.toLowerCase()
+  return raw.includes('codex') ? 'codex' : 'claude'
+}
+
+function projectForSession(session: Session, projects: SessionProject[]): SessionProject | null {
+  const path = normalizePath(session.project || '')
+  if (!path) return null
+  return projects.find((project) => normalizePath(project.path) === path) ?? null
+}
+
 function normalizePath(path: string): string {
   return path.trim().replace(/\/+$/, '')
+}
+
+function nextSpawnProvider(provider: SpawnProvider): SpawnProvider {
+  return provider === 'codex' ? 'claude' : 'codex'
 }
 
 function compareSessions(a: Session, b: Session): number {
@@ -732,9 +1131,39 @@ function projectTime(project: SessionProject): number {
 }
 
 function sessionTitle(session: Session): string {
-  const title = session.title.trim()
-  if (title) return title.replace(/\s+-\s+[^-]+$/, '')
+  const candidates = [
+    session.latestRecap?.content,
+    session.currentTask,
+    initialUserMessage(session),
+    session.title,
+  ]
+  for (const candidate of candidates) {
+    const title = cleanSessionTitle(candidate)
+    if (title) return title
+  }
   return session.pluginDisplayName || 'Session'
+}
+
+function initialUserMessage(session: Session): string | null {
+  for (const entry of session.recentMessages) {
+    if (entry.role.toLowerCase() === 'user' && entry.text.trim()) return entry.text
+  }
+  return null
+}
+
+function cleanSessionTitle(raw: string | null | undefined): string {
+  const value = raw
+    ?.replace(/\[[^\]]+\]\([^)]+\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim() ?? ''
+  if (!value) return ''
+  const firstSentence = value.split(/\n|。|[.!?]\s/)[0]?.trim() ?? value
+  const withoutSpeaker = firstSentence.replace(/^(user|assistant|human|system)\s*:\s*/i, '').trim()
+  const genericProviderTitle = /^(codex|claude code|claude)\s+-\s+[^/\\]+$/i
+  const internalNodeTitle = /^node\s+(?:node-)?[a-z0-9][a-z0-9-]{10,}(?:-transcript)?$/i
+  if (genericProviderTitle.test(withoutSpeaker)) return ''
+  if (internalNodeTitle.test(withoutSpeaker)) return ''
+  return withoutSpeaker.length > 56 ? `${withoutSpeaker.slice(0, 54).trim()}...` : withoutSpeaker
 }
 
 function sessionRelativeTime(session: Session): string {

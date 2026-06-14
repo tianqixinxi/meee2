@@ -116,6 +116,10 @@ _Avoid_: Sessions page, terminal workspace, session list modal
 A user-selected local folder used as the working directory and grouping context for starting or reopening local AI sessions. A Session Project is not a Canvas Workspace; it names where the agent runs, not where meee2 organizes visual workflow state.
 _Avoid_: Canvas, generated workspace folder, project card as session identity
 
+**Session Project Display Name**:
+A user-editable launcher label for a Session Project. Changing the Session Project Display Name does not rename, move, or reassign the underlying local folder path.
+_Avoid_: Folder rename, project path migration, session identity rename
+
 **Session Project Launcher**:
 The default Web Board surface for choosing a Session Project, selecting a Supported Provider, and starting or reopening a meee2-managed local session. It creates sessions in native terminal surfaces without automatically binding them to a Canvas Workspace.
 _Avoid_: Progress page, Canvas launcher, Session Terminal Overlay

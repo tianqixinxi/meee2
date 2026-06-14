@@ -48,4 +48,23 @@ final class SessionProjectStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.markUsed(projectId: "project-missing", path: projectDir.path, provider: "codex"))
         XCTAssertEqual(store.list().count, 0)
     }
+
+    func testRenameUpdatesDisplayNameWithoutChangingPathOrId() throws {
+        let original = try store.upsert(path: projectDir.path, name: "Original", preferredProvider: "codex")
+
+        let renamed = try store.rename(projectId: original.id, name: "  Display Name  ")
+
+        XCTAssertEqual(renamed.id, original.id)
+        XCTAssertEqual(renamed.path, original.path)
+        XCTAssertEqual(renamed.name, "Display Name")
+        XCTAssertEqual(store.list().first?.name, "Display Name")
+    }
+
+    func testRenameRejectsEmptyNameAndMissingProject() throws {
+        let original = try store.upsert(path: projectDir.path, name: "Original", preferredProvider: "codex")
+
+        XCTAssertThrowsError(try store.rename(projectId: original.id, name: "   "))
+        XCTAssertThrowsError(try store.rename(projectId: "project-missing", name: "Name"))
+        XCTAssertEqual(store.list().first?.name, "Original")
+    }
 }

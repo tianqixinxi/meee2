@@ -24,6 +24,7 @@ import type {
   SessionProject,
   SessionProjectCreateInput,
   SessionProjectList,
+  SessionProjectUpdateInput,
   SpawnProvider,
   TemporarySessionCreateInput,
   CoordinationGroup,
@@ -1159,6 +1160,19 @@ export function createSessionProject(input: SessionProjectCreateInput): Promise<
   })
 }
 
+export function renameSessionProject(id: string, input: SessionProjectUpdateInput): Promise<SessionProject> {
+  return jsonRequest<SessionProject>(`/api/session-projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function revealSessionProjectInFinder(id: string): Promise<{ ok: boolean; path: string }> {
+  return jsonRequest<{ ok: boolean; path: string }>(`/api/session-projects/${encodeURIComponent(id)}/reveal`, {
+    method: 'POST',
+  })
+}
+
 export function forgetSessionProject(id: string): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>(`/api/session-projects/${encodeURIComponent(id)}`, {
     method: 'DELETE',
@@ -1195,6 +1209,23 @@ export function createTemporarySession(input: TemporarySessionCreateInput): Prom
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export function reopenLauncherSession(input: {
+  sessionId: string
+  provider?: SpawnProvider | string | null
+  cwd?: string | null
+}): Promise<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }>(
+    `/api/session-launcher/sessions/${encodeURIComponent(input.sessionId)}/reopen`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        provider: input.provider ?? undefined,
+        cwd: input.cwd ?? undefined,
+      }),
+    },
+  )
 }
 
 export function createSessionSurface(input: {

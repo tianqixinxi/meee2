@@ -332,6 +332,10 @@ export interface SessionProjectCreateInput {
   preferredProvider?: SpawnProvider
 }
 
+export interface SessionProjectUpdateInput {
+  name: string
+}
+
 export interface TemporarySessionCreateInput {
   provider: SpawnProvider
   initialPrompt?: string

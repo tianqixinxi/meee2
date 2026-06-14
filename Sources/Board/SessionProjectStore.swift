@@ -135,6 +135,25 @@ public final class SessionProjectStore {
         }
     }
 
+    @discardableResult
+    public func rename(projectId: String, name rawName: String) throws -> SessionProjectRecord {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw NSError(domain: "SessionProjectStore", code: 400, userInfo: [NSLocalizedDescriptionKey: "project name is required"])
+        }
+        return try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            guard let index = store.projects.firstIndex(where: { $0.id == projectId }) else {
+                throw NSError(domain: "SessionProjectStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "project not found: \(projectId)"])
+            }
+            store.projects[index].name = name
+            store.projects[index].updatedAt = Date()
+            try writeToDiskLocked(store)
+            cached = store
+            return store.projects[index]
+        }
+    }
+
     public func forget(projectId: String) throws {
         try queue.sync {
             var store = cached ?? loadFromDiskLocked()

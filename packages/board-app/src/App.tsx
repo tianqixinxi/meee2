@@ -1349,6 +1349,8 @@ export default function App() {
               readinessRepairLogs={readinessRepairLogs}
               onRepairReadiness={handleRepairReadiness}
               onRefreshReadiness={refreshReadiness}
+              sessions={boardState.state?.sessions ?? []}
+              onSessionControlChanged={() => boardState.forceRefresh()}
               devMode={BOARD_DEV_MODE}
               onRestartOnboarding={restartFirstRunOnboarding}
             />
