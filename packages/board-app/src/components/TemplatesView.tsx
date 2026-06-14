@@ -532,7 +532,7 @@ export function TemplatesView({
       )}
 
       {workflowImportTarget && (
-        <TemplateModal title={`Import ${workflowImportTarget.commandName}`} subtitle="meee2 reads workflow metadata and phases to create a canvas plan. The script is not executed." onClose={() => !workflowImporting && setWorkflowImportTarget(null)}>
+        <TemplateModal title={`Import ${workflowImportTarget.commandName}`} subtitle="Meee2 reads workflow metadata and phases to create a canvas plan. The script is not executed." onClose={() => !workflowImporting && setWorkflowImportTarget(null)}>
           <input value={workflowNameDraft} onChange={(event) => setWorkflowNameDraft(event.target.value)} placeholder="Canvas name" autoFocus disabled={workflowImporting} />
           <ScopeToggle value={workflowScopeDraft} onChange={setWorkflowScopeDraft} disabled={workflowImporting} />
           <code className="claude-workflows__modal-path">{workflowImportTarget.path}</code>
@@ -877,7 +877,7 @@ function ownerIdentityForTemplate(
   ownersById: Record<string, OwnerIdentity>,
 ): OwnerIdentity {
   const ownerId = template.ownerUserId?.trim()
-  if (!ownerId) return { name: template.ownerName ?? 'meee2', avatarUrl: null, initials: 'M' }
+  if (!ownerId) return { name: template.ownerName ?? 'Meee2', avatarUrl: null, initials: 'M' }
   if (ownerId === 'local-user' || (userProfile?.connected && ownerMatchesProfile(ownerId, userProfile))) {
     const name = userProfile?.connected ? userProfile.displayName || 'You' : template.ownerName || 'You'
     return { name, avatarUrl: userProfile?.userAvatarUrl || null, initials: userProfile?.initials || initialsFor(name) }

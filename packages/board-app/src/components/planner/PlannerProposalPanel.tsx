@@ -480,7 +480,7 @@ export function PlannerProposalPanel({
         <div className="planner-dialog__messages">
           {emptyMode && !proposal && !showOmniConversation && (
             <div className="planner-dialog__onboarding" role="note">
-              <span>meee2 AI</span>
+              <span>Meee2 AI</span>
               <strong>{t('planner.emptyTitle')}</strong>
               <p>{t('planner.emptySubtitle')}</p>
             </div>
@@ -1175,7 +1175,7 @@ async function repairEmptyCanvasAIReply({
   signal: AbortSignal
   llm: ReturnType<typeof readLlmSettings>
 }): Promise<string> {
-  if (!rawText.trim()) throw new Error('meee2 AI returned an empty setup response.')
+  if (!rawText.trim()) throw new Error('Meee2 AI returned an empty setup response.')
   let repaired = ''
   for await (const ev of streamAssistantChat({
     messages: buildEmptyCanvasAIRepairMessages(canvasName, canvasTask, history, rawText),
@@ -1209,8 +1209,8 @@ function buildEmptyCanvasAIMessages(
   }))
   const prompt = {
     instruction: [
-      'You are meee2 AI helping a user start from an empty meee2 canvas.',
-      'A meee2 canvas can be a workflow, monitor, or scene. Do not assume every canvas is a dependency graph.',
+      'You are Meee2 AI helping a user start from an empty Meee2 canvas.',
+      'A Meee2 canvas can be a workflow, monitor, or scene. Do not assume every canvas is a dependency graph.',
       'First choose the canvas mental model from the user request: workflow for ordered work, monitor for operating views, scene for spatial/simulated/role-based experiences.',
       'Scene canvas rule: only AI sessions or human-owned responsibilities are nodes. Places, cards, pots, seats, routes, hotels, and similar entities are scene state, template assets, or node-scoped artifacts.',
       'For workflow plans, each plan step should become a concrete executable node card, not a generic document section.',
@@ -1283,8 +1283,8 @@ function buildEmptyCanvasAIRepairMessages(
       instruction: [
         'Convert the previous assistant response into the required meee2 empty-canvas intake JSON.',
         'Do not add new facts. Preserve the user language and intent.',
-        'A meee2 canvas can be a workflow, monitor, or scene. Do not force scene-like requests into workflow steps.',
-        'Plan steps must be executable meee2 canvas node cards or scene role nodes with inputs, operation/tool or actor, and expected outputs/artifacts.',
+        'A Meee2 canvas can be a workflow, monitor, or scene. Do not force scene-like requests into workflow steps.',
+        'Plan steps must be executable Meee2 canvas node cards or scene role nodes with inputs, operation/tool or actor, and expected outputs/artifacts.',
         'Scene plans may only use supported official scene templates: travel-squad or poker-table.',
         'Do not add a "canvas interaction/design" step unless the user explicitly asked to design the canvas UI itself.',
         'Return JSON only, no markdown fence.',
@@ -1360,7 +1360,7 @@ function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessag
       planCard,
     }
   }
-  throw new Error('meee2 AI returned an unsupported setup response.')
+  throw new Error('Meee2 AI returned an unsupported setup response.')
 }
 
 function normalizeEmptyCanvasAIReply(parsed: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -1533,7 +1533,7 @@ function buildFallbackPlanCardFromRequest(request: string, introHint?: string): 
         { title: feishu ? 'Draft the Feishu document' : 'Produce the final deliverable', body: deliverBody },
       ]
   const prompt = [
-    'Create a concrete meee2 canvas proposal from this confirmed plan.',
+    'Create a concrete Meee2 canvas proposal from this confirmed plan.',
     'Represent each step as an executable node card with dependencies.',
     `Original request: ${request}`,
     introHint?.trim() ? `Assistant context: ${introHint.trim()}` : '',
@@ -1573,8 +1573,8 @@ function formatEmptyCanvasAIError(history: PlannerChatMessage[], err: unknown): 
   const userText = latestUserRequest(history)
   const chinese = containsCJK(userText)
   return chinese
-    ? `meee2 AI 请求失败：${reason.slice(0, 220)}。没有经过 LLM 的计划不会生成；请检查 Settings 里的 LLM provider / Claude CLI 后重试。`
-    : `meee2 AI request failed: ${reason.slice(0, 220)}. No plan will be generated without an LLM-backed response; check Settings LLM provider / Claude CLI and try again.`
+    ? `Meee2 AI 请求失败：${reason.slice(0, 220)}。没有经过 LLM 的计划不会生成；请检查 Settings 里的 LLM provider / Claude CLI 后重试。`
+    : `Meee2 AI request failed: ${reason.slice(0, 220)}. No plan will be generated without an LLM-backed response; check Settings LLM provider / Claude CLI and try again.`
 }
 
 function latestUserRequest(history: PlannerChatMessage[]): string {
@@ -1663,7 +1663,7 @@ function normalizeAIPlanCard(
     ? steps
     : scenePlan
       ? sceneTemplatePlanSteps(templateId)
-      : [{ title: 'Clarify the canvas structure', body: 'Turn the conversation into a concrete meee2 canvas plan.' }]
+      : [{ title: 'Clarify the canvas structure', body: 'Turn the conversation into a concrete Meee2 canvas plan.' }]
   const modelPrompt = stringValue(plan.prompt)
   const prompt = scenePlan
     ? adaptationPrompt ?? modelPrompt ?? buildSceneAdaptationPrompt(templateId, history)
@@ -1739,7 +1739,7 @@ function buildEmptyCanvasPlanPromptFromHistory(
     .map((item) => item.markdown)
     .join('\n\n')
   return [
-    'Create a concrete meee2 canvas proposal from this confirmed plan.',
+    'Create a concrete Meee2 canvas proposal from this confirmed plan.',
     'Represent the plan as executable node cards connected by dependencies, not as generic outline sections.',
     'Each node should include a clear title, goal, inputs, outputs/artifacts, and useful executor/tool hints when inferable.',
     'Do not create meta nodes about canvas interaction, canvas design, review UI, or preview UX unless the user explicitly asked to build the canvas UI itself.',
@@ -2075,18 +2075,18 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
     return [
       'Describe the outcome you want in the box below.',
       '',
-      'meee2 AI drafts it as a proposal — you refine it and approve before anything lands in the graph.',
+      'Meee2 AI drafts it as a proposal — you refine it and approve before anything lands in the graph.',
     ].join('\n')
   }
   if (hasActionableDrift) {
     return [
       'This graph has nodes that may need attention.',
       '',
-      'Send a message — or send with the box empty — and meee2 AI will inspect the drift before proposing a fix.',
+      'Send a message — or send with the box empty — and Meee2 AI will inspect the drift before proposing a fix.',
     ].join('\n')
   }
   return [
-    'Ask meee2 AI to adjust the canvas plan in the box below.',
+    'Ask Meee2 AI to adjust the canvas plan in the box below.',
     '',
     'Natural language changes to a node schema, inputs, outputs, artifacts, gates, or task requirements become a proposal you can review and approve.',
     '',

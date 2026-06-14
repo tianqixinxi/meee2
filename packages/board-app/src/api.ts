@@ -89,7 +89,7 @@ let demoProposal: PlanProposal | null = null
 let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
   [DEMO_CANVAS_ID]: {
     id: DEMO_CANVAS_ID,
-    name: 'meee2 AI Demo',
+    name: 'Meee2 AI Demo',
     scope: 'personal',
     kind: 'monitor',
     isDefault: true,
@@ -114,7 +114,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
   [DEMO_CANVAS_ID]: [
     demoNode({
       id: 'contract',
-      title: 'meee2 AI Core Contract',
+      title: 'Meee2 AI Core Contract',
       status: 'done',
       executorType: 'human',
       executionMode: 'human',
@@ -122,7 +122,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     }),
     demoNode({
       id: 'state-api',
-      title: 'Store-backed meee2 AI State API',
+      title: 'Store-backed Meee2 AI State API',
       status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
@@ -142,7 +142,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     }),
     demoNode({
       id: 'react-flow-graph',
-      title: 'React Flow meee2 AI Graph',
+      title: 'React Flow Meee2 AI Graph',
       status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
@@ -213,7 +213,7 @@ function demoNode(input: {
     contextSources: [
       {
         kind: 'repository',
-        title: 'meee2 AI branch',
+        title: 'Meee2 AI branch',
         reference: 'codex/react-flow-planner-graph',
       },
     ],
@@ -276,7 +276,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
       id: safeCanvasId,
       ownerId: DEMO_OWNER_ID,
       title: canvas.name,
-      plannerContext: 'Static public demo of the React Flow meee2 AI Graph.',
+      plannerContext: 'Static public demo of the React Flow Meee2 AI Graph.',
     },
     nodes,
     states: nodes.map(demoNodeState),
@@ -315,7 +315,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         type: 'node.created',
         nodeId: nodes[0]?.id ?? null,
         proposalId: null,
-        summary: 'meee2 AI graph loaded from public demo fixtures.',
+        summary: 'Meee2 AI graph loaded from public demo fixtures.',
         artifactRefs: ['demo://planner'],
         createdAt: now,
       },
@@ -760,7 +760,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'engineering',
     tags: ['engineering', 'code-review', 'workflow'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -780,7 +780,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'engineering',
     tags: ['engineering', 'release', 'workflow'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -806,7 +806,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'team',
     tags: ['recap', 'ops'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -826,7 +826,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'team',
     tags: ['monitor', 'ops'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -846,7 +846,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'engineering',
     tags: ['engineering', 'workflow'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -871,7 +871,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'demo',
     tags: ['design', 'demo'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -896,7 +896,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'demo',
     tags: ['demo', 'scene', 'travel'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -949,7 +949,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'demo',
     tags: ['demo', 'scene', 'game'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -1345,7 +1345,7 @@ export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
         id: `monitor-${node.id}`,
         kind: 'node' as const,
         canvasId: node.canvasId,
-        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'meee2 AI Demo',
+        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'Meee2 AI Demo',
         nodeId: node.id,
         nodeTitle: node.title,
         proposalId: null,
@@ -1394,7 +1394,7 @@ export async function generatePlannerProposal(
   if (PLANNER_DEMO_MODE) {
     demoProposal = nextDemoProposal(
       canvasId,
-      `Generate meee2 AI graph for: ${goal || 'owner goal'}`,
+      `Generate Meee2 AI graph for: ${goal || 'owner goal'}`,
       goal ? `Owner review: ${goal}` : 'Owner review checkpoint',
     )
     return demoProposal
@@ -2277,7 +2277,7 @@ export async function setPlannerCanvasVisibility(
     return Promise.resolve({
       id: canvasId,
       ownerId: DEMO_OWNER_ID,
-      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      title: demoCanvasRecords[canvasId]?.name ?? 'Meee2 AI Demo',
       plannerContext: `canvas:${canvasId}`,
       visibility,
     })
@@ -2300,7 +2300,7 @@ export async function setPlannerCanvasDescription(
     return Promise.resolve({
       id: canvasId,
       ownerId: DEMO_OWNER_ID,
-      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      title: demoCanvasRecords[canvasId]?.name ?? 'Meee2 AI Demo',
       plannerContext: description.trim() || `canvas:${canvasId}`,
       visibility: demoCanvasRecords[canvasId]?.scope === 'team' ? 'public' : 'private',
     })

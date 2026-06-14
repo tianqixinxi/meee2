@@ -131,7 +131,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         schedulePostLaunchStartup(launchStartedAt: launchStartedAt)
     }
 
-    /// 首次启动(从未启动过 meee2)返回 true 并打标,只触发一次。让新用户自动看到
+    /// 首次启动(从未启动过 Meee2)返回 true 并打标,只触发一次。让新用户自动看到
     /// Board 里的 FirstRunOnboarding 引导 —— 菜单栏 app 双击后默认只有图标,引导窗口
     /// 本来要靠用户自己点菜单 "Open Board" 才出现,新用户根本不知道有这一步。
     private static func consumeFirstLaunchOnboardingFlag() -> Bool {
@@ -472,11 +472,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func updateStatusBarIcon(hasActiveSessions: Bool) {
-        let iconName = hasActiveSessions ? "brain.filled.head.profile" : "brain.head.profile"
+    private func updateStatusBarIcon(hasActiveSessions _: Bool) {
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: iconName, accessibilityDescription: "meee2")
+            button.image = AppIconProvider.loadStatusBarIcon()
             button.image?.isTemplate = true
+            button.imageScaling = .scaleProportionallyDown
+            button.imagePosition = .imageOnly
+            button.toolTip = "Meee2"
         }
     }
 
@@ -651,13 +653,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // ── App menu (meee2) ──
+        // ── App menu (Meee2) ──
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About meee2",
+        appMenu.addItem(withTitle: "About Meee2",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide meee2",
+        appMenu.addItem(withTitle: "Hide Meee2",
                         action: #selector(NSApplication.hide(_:)),
                         keyEquivalent: "h")
         let hideOthersItem = appMenu.addItem(withTitle: "Hide Others",
@@ -668,7 +670,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                         action: #selector(NSApplication.unhideAllApplications(_:)),
                         keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit meee2",
+        appMenu.addItem(withTitle: "Quit Meee2",
                         action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         let appMenuItem = NSMenuItem()
@@ -774,7 +776,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // ── Help ──
         let helpMenu = NSMenu(title: "Help")
-        let githubItem = helpMenu.addItem(withTitle: "meee2 on GitHub",
+        let githubItem = helpMenu.addItem(withTitle: "Meee2 on GitHub",
                                           action: #selector(openGitHubHelp(_:)),
                                           keyEquivalent: "")
         githubItem.target = self

@@ -479,7 +479,7 @@ export function SettingsView({
     try {
       await openMeee2OnlineConnect()
     } catch (err) {
-      notify('error', (err as Error).message || 'Failed to open meee2 Online')
+      notify('error', (err as Error).message || 'Failed to open Meee2 Online')
     }
   }
 
@@ -487,7 +487,7 @@ export function SettingsView({
     try {
       await openMeee2OnlineDashboard()
     } catch (err) {
-      notify('error', (err as Error).message || 'Failed to open meee2 Online')
+      notify('error', (err as Error).message || 'Failed to open Meee2 Online')
     }
   }
 
@@ -495,7 +495,7 @@ export function SettingsView({
     try {
       await disconnectMeee2Online()
       loadProfile()
-      notify('success', 'Disconnected from meee2 Online')
+      notify('success', 'Disconnected from Meee2 Online')
     } catch (err) {
       notify('error', (err as Error).message || 'Failed to disconnect')
     }
@@ -702,7 +702,7 @@ export function SettingsView({
                 </strong>
                 <span className="muted truncate" style={{ fontSize: 11 }}>
                   {profile?.connected
-                    ? (profile.userEmail || currentTeam?.name || 'meee2 Online')
+                    ? (profile.userEmail || currentTeam?.name || 'Meee2 Online')
                     : t('settings.connectOnlineHelp')}
                 </span>
               </div>

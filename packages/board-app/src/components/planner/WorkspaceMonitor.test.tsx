@@ -107,7 +107,7 @@ describe('WorkspaceMonitor comfortable view', () => {
     expect(screen.queryByRole('button', { name: 'Comfortable' })).not.toBeInTheDocument()
   })
 
-  it('keeps meee2 AI controls outside the monitor table toolbar', async () => {
+  it('keeps Meee2 AI controls outside the monitor table toolbar', async () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
@@ -121,6 +121,6 @@ describe('WorkspaceMonitor comfortable view', () => {
     )
 
     await screen.findByText('Research launch sentiment')
-    expect(screen.queryByRole('button', { name: /meee2 AI/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Meee2 AI/ })).not.toBeInTheDocument()
   })
 })

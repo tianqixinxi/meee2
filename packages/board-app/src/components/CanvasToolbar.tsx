@@ -770,8 +770,8 @@ export function CanvasToolbar({
           <button
             type="button"
             className="canvas-toolbar__nav canvas-toolbar__ai-panel-toggle"
-            aria-label={plannerDialogCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
-            title={plannerDialogCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
+            aria-label={plannerDialogCollapsed ? 'Open Meee2 AI dialog' : 'Collapse Meee2 AI dialog'}
+            title={plannerDialogCollapsed ? 'Open Meee2 AI dialog' : 'Collapse Meee2 AI dialog'}
             onClick={onTogglePlannerDialog}
           >
             {plannerDialogCollapsed ? <PanelLeftOpen size={14} aria-hidden /> : <PanelLeftClose size={14} aria-hidden />}

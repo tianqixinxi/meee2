@@ -119,6 +119,9 @@ fi
 
 # Copy app icon
 cp Resources/AppIcon.icns /Applications/meee2.app/Contents/Resources/AppIcon.icns 2>/dev/null
+for icon in Resources/meee2StatusTemplate.png Resources/meee2StatusTemplate@2x.png Resources/meee2StatusTemplate@3x.png; do
+    cp "$icon" /Applications/meee2.app/Contents/Resources/ 2>/dev/null
+done
 
 # Copy hook bridge
 cp Bridge/claude-hook-bridge.sh /Applications/meee2.app/Contents/Resources/Bridge/claude-hook-bridge.sh 2>/dev/null

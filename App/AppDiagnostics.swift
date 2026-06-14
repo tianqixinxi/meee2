@@ -15,7 +15,7 @@ enum AppDiagnostics {
     /// log file.
     static func logBootBanner() {
         let info = bootInfo()
-        MInfo("=== meee2 boot ===")
+        MInfo("=== Meee2 boot ===")
         for line in info {
             MInfo(line)
         }
@@ -58,7 +58,7 @@ enum AppDiagnostics {
         let logPath = LogManager.shared.logFileURL.path
 
         var lines: [String] = []
-        lines.append("meee2 \(version) (build \(build))")
+        lines.append("Meee2 \(version) (build \(build))")
         lines.append("Bundle: \(bundlePath)\(translocated ? "  ⚠ translocated" : "")")
         lines.append("macOS: \(osVersion)")
         lines.append("PID: \(pid)  User: \(user)")

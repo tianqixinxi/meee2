@@ -17,7 +17,7 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
             backing: .buffered,
             defer: false
         )
-        window.title = "meee2 Sessions"
+        window.title = "Meee2 Sessions"
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName(Self.frameAutosaveName)

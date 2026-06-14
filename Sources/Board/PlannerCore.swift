@@ -2806,7 +2806,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidPlannerProposalJSON:
-            return "meee2 AI proposal output is not valid JSON"
+            return "Meee2 AI proposal output is not valid JSON"
         case .proposalNotApproved:
             return "plan proposal must be approved before apply"
         case .proposalNotFound(let id):
@@ -2816,7 +2816,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
         case .canvasMismatch(let expected, let actual):
             return "proposal canvas mismatch: expected \(expected), got \(actual)"
         case .emptyProposalChanges:
-            return "meee2 AI proposal must contain at least one change"
+            return "Meee2 AI proposal must contain at least one change"
         case .missingNodeForAdd:
             return "addNode change is missing node"
         case .missingNodeId:
@@ -2834,15 +2834,15 @@ enum PlannerCoreError: LocalizedError, Equatable {
         case .monitorClearNotAllowed(let id):
             return "monitor canvas cannot be cleared: \(id)"
         case .permissionDenied(let action, let role):
-            return "meee2 AI \(action) is not allowed for \(role.rawValue)"
+            return "Meee2 AI \(action) is not allowed for \(role.rawValue)"
         case .crossCanvasNodeReference(let nodeId, let expectedCanvas):
-            return "meee2 AI proposal references node \(nodeId) outside canvas \(expectedCanvas)"
+            return "Meee2 AI proposal references node \(nodeId) outside canvas \(expectedCanvas)"
         case .unknownNodeKind(let kind):
-            return "meee2 AI proposal uses unknown node kind: \(kind)"
+            return "Meee2 AI proposal uses unknown node kind: \(kind)"
         case .sessionKindNoLongerCreatable(let nodeId):
             return "node \(nodeId) uses nodeKind='session', which is deprecated for new nodes; create a 'step' node with dispatch.runner='claude' instead"
         case .unknownChangeKind(let kind):
-            return "meee2 AI proposal uses unknown change kind: \(kind)"
+            return "Meee2 AI proposal uses unknown change kind: \(kind)"
         case .invalidNodeOutput(let hint):
             return hint
         case .activeSessionExists(let nodeId):
@@ -3361,10 +3361,10 @@ final class PlannerCoreService {
             PlanningNode(
                 id: "\(canvasId)-node-1",
                 canvasId: canvasId,
-                title: "meee2 AI LLM Spike",
+                title: "Meee2 AI LLM Spike",
                 schema: NodeSchema(
                     inputs: ["owner goal", "canvas context"],
-                    outputs: ["initial meee2 AI proposal"],
+                    outputs: ["initial Meee2 AI proposal"],
                     goal: "proposal created"
                 ),
                 contextSources: [
@@ -8522,14 +8522,14 @@ enum PlannerBoardBridge {
         let node = PlanningNode(
             id: "\(canvas.id)-proposal-node-\(proposalUUID)",
             canvasId: canvas.id,
-            title: title.isEmpty ? "Generated meee2 AI node" : title,
+            title: title.isEmpty ? "Generated Meee2 AI node" : title,
             schema: NodeSchema(
-                inputs: ["owner goal", "meee2 AI context"],
+                inputs: ["owner goal", "Meee2 AI context"],
                 outputs: ["executable node output"],
                 goal: "owner approves generated proposal"
             ),
             contextSources: [
-                ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
+                ContextSource(kind: .document, title: "Meee2 AI context", reference: canvas.plannerContext)
             ],
             executionMode: .human,
             executorType: .mock,
@@ -8539,7 +8539,7 @@ enum PlannerBoardBridge {
         return try PlanProposal(
             id: "proposal-\(canvas.id)-generate-\(proposalUUID)",
             canvasId: canvas.id,
-            summary: "Generate meee2 AI graph for \(canvas.title)",
+            summary: "Generate Meee2 AI graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
@@ -8564,7 +8564,7 @@ enum PlannerBoardBridge {
             id: "proposal-\(canvasId)-adapter-\(UUID().uuidString.lowercased())",
             canvasId: canvasId,
             summary: proposal.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Generate meee2 AI graph for \(state.canvas.title)"
+                ? "Generate Meee2 AI graph for \(state.canvas.title)"
                 : proposal.summary,
             changes: proposal.changes,
             status: .pending
@@ -8590,7 +8590,7 @@ enum PlannerBoardBridge {
             id: "proposal-\(canvasId)-graph-\(UUID().uuidString.lowercased())",
             canvasId: canvasId,
             summary: summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Update meee2 AI graph"
+                ? "Update Meee2 AI graph"
                 : summary,
             changes: changes,
             status: .pending
@@ -9419,7 +9419,7 @@ enum PlannerBoardBridge {
         return try PlanProposal(
             id: "proposal-\(node.id)-drift-\(UUID().uuidString.lowercased())",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift for \(node.title)",
+            summary: "Meee2 AI detected drift for \(node.title)",
             changes: [
                 .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .ready)
             ],
@@ -10434,14 +10434,14 @@ final class MockPlannerAgent: PlannerAgent {
         let node = PlanningNode(
             id: "\(canvas.id)-planner-generated-1",
             canvasId: canvas.id,
-            title: goal.isEmpty ? "Generated meee2 AI node" : goal,
+            title: goal.isEmpty ? "Generated Meee2 AI node" : goal,
             schema: NodeSchema(
                 inputs: ["owner goal"],
                 outputs: ["first executable output"],
                 goal: "complete the generated node"
             ),
             contextSources: [
-                ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
+                ContextSource(kind: .document, title: "Meee2 AI context", reference: canvas.plannerContext)
             ],
             executionMode: .human,
             executorType: .mock,
@@ -10451,7 +10451,7 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(canvas.id)-generate",
             canvasId: canvas.id,
-            summary: "Generate initial meee2 AI graph for \(canvas.title)",
+            summary: "Generate initial Meee2 AI graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
@@ -10486,7 +10486,7 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(node.id)-drift",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift for \(node.title)",
+            summary: "Meee2 AI detected drift for \(node.title)",
             changes: [
                 .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .ready)
             ],
@@ -10585,7 +10585,7 @@ final class LLMPlannerAgent: PlannerAgent {
 
 enum PlannerPromptFactory {
     static let systemPrompt = """
-    You are meee2 AI. Return only strict JSON for PlanProposal, or null when no proposal is needed.
+    You are Meee2 AI. Return only strict JSON for PlanProposal, or null when no proposal is needed.
     You may propose topology changes, but the owner approval API is the only path that can apply them.
     Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
     Supported PlanChange kinds are addNode and updateNode.
