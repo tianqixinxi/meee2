@@ -21,7 +21,12 @@ import type {
   CanvasSceneSpec,
   CanvasScope,
   SelectedCanvasElementContext,
+  SessionProject,
+  SessionProjectCreateInput,
+  SessionProjectList,
+  SessionProjectUpdateInput,
   SpawnProvider,
+  TemporarySessionCreateInput,
   CoordinationGroup,
   PlanProposal,
   PlannerActivity,
@@ -1142,6 +1147,85 @@ export interface SessionSurface {
 
 export function listSessionSurfaces(): Promise<SessionSurface[]> {
   return jsonRequest<{ surfaces: SessionSurface[] }>('/api/session-surfaces').then((result) => result.surfaces)
+}
+
+export function fetchSessionProjects(): Promise<SessionProjectList> {
+  return jsonRequest<SessionProjectList>('/api/session-projects')
+}
+
+export function createSessionProject(input: SessionProjectCreateInput): Promise<SessionProject> {
+  return jsonRequest<SessionProject>('/api/session-projects', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function renameSessionProject(id: string, input: SessionProjectUpdateInput): Promise<SessionProject> {
+  return jsonRequest<SessionProject>(`/api/session-projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function revealSessionProjectInFinder(id: string): Promise<{ ok: boolean; path: string }> {
+  return jsonRequest<{ ok: boolean; path: string }>(`/api/session-projects/${encodeURIComponent(id)}/reveal`, {
+    method: 'POST',
+  })
+}
+
+export function forgetSessionProject(id: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`/api/session-projects/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function pickSessionProjectDirectory(): Promise<{ ok: boolean; path?: string | null }> {
+  return jsonRequest<{ ok: boolean; path?: string | null }>('/api/session-projects/pick-directory', {
+    method: 'POST',
+  })
+}
+
+export function createProjectSession(input: {
+  projectId: string
+  path?: string
+  provider: SpawnProvider
+  initialPrompt?: string
+}): Promise<{ ok: boolean; project: SessionProject; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; project: SessionProject; surface: SessionSurface }>(
+    `/api/session-projects/${encodeURIComponent(input.projectId)}/sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        path: input.path,
+        provider: input.provider,
+        initialPrompt: input.initialPrompt,
+      }),
+    },
+  )
+}
+
+export function createTemporarySession(input: TemporarySessionCreateInput): Promise<{ ok: boolean; cwd: string; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; cwd: string; surface: SessionSurface }>('/api/session-launcher/temporary-sessions', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function reopenLauncherSession(input: {
+  sessionId: string
+  provider?: SpawnProvider | string | null
+  cwd?: string | null
+}): Promise<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }>(
+    `/api/session-launcher/sessions/${encodeURIComponent(input.sessionId)}/reopen`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        provider: input.provider ?? undefined,
+        cwd: input.cwd ?? undefined,
+      }),
+    },
+  )
 }
 
 export function createSessionSurface(input: {

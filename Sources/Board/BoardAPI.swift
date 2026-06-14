@@ -489,6 +489,303 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    // MARK: - Session Projects
+
+    private struct SessionProjectDTO: Encodable {
+        let id: String
+        let name: String
+        let path: String
+        let preferredProvider: String
+        let explicit: Bool
+        let createdAt: Date
+        let updatedAt: Date
+        let lastUsedAt: Date?
+
+        init(_ record: SessionProjectRecord) {
+            self.id = record.id
+            self.name = record.name
+            self.path = record.path
+            self.preferredProvider = record.preferredProvider.rawValue
+            self.explicit = record.explicit
+            self.createdAt = record.createdAt
+            self.updatedAt = record.updatedAt
+            self.lastUsedAt = record.lastUsedAt
+        }
+    }
+
+    private struct SessionProjectsEnvelope: Encodable {
+        let projects: [SessionProjectDTO]
+    }
+
+    static func listSessionProjects(_ req: HttpRequest) -> HttpResponse {
+        let projects = SessionProjectStore.shared
+            .list()
+            .map(SessionProjectDTO.init)
+        return jsonResponse(SessionProjectsEnvelope(projects: projects))
+    }
+
+    static func createSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct CreateRequest: Decodable {
+            let path: String
+            let name: String?
+            let preferredProvider: String?
+        }
+        guard let body = decodeJSONBody(req, as: CreateRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"path\": String}", status: 400)
+        }
+        do {
+            let record = try SessionProjectStore.shared.upsert(
+                path: body.path,
+                name: body.name,
+                preferredProvider: body.preferredProvider
+            )
+            return jsonResponse(SessionProjectDTO(record), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("project_create_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func updateSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateRequest: Decodable {
+            let name: String?
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"name\": String}", status: 400)
+        }
+        guard let name = body.name else {
+            return errorResponse("bad_request", "project name is required", status: 400)
+        }
+        do {
+            let record = try SessionProjectStore.shared.rename(projectId: id, name: name)
+            return jsonResponse(SessionProjectDTO(record))
+        } catch let err as NSError {
+            return errorResponse(
+                err.code == 404 ? "project_not_found" : "project_update_failed",
+                err.localizedDescription,
+                status: err.code == 404 ? 404 : 400
+            )
+        } catch {
+            return errorResponse("project_update_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func revealSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct RevealResponse: Encodable {
+            let ok: Bool
+            let path: String
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        guard let project = SessionProjectStore.shared.list().first(where: { $0.id == id }) else {
+            return errorResponse("project_not_found", "project not found: \(id)", status: 404)
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDir), isDir.boolValue else {
+            return errorResponse("project_path_missing", "project path does not exist: \(project.path)", status: 400)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+        return jsonResponse(RevealResponse(ok: true, path: project.path))
+    }
+
+    static func forgetSessionProject(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        do {
+            try SessionProjectStore.shared.forget(projectId: id)
+            return jsonResponse(OkEnvelope(ok: true))
+        } catch {
+            return errorResponse("project_not_found", error.localizedDescription, status: 404)
+        }
+    }
+
+    static func pickSessionProjectDirectory(_ req: HttpRequest) -> HttpResponse {
+        struct PickResponse: Encodable {
+            let ok: Bool
+            let path: String?
+        }
+        #if os(macOS)
+        var selectedPath: String?
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = false
+            panel.resolvesAliases = true
+            panel.message = "Select a project folder"
+            let finish: (NSApplication.ModalResponse) -> Void = { response in
+                if response == .OK {
+                    selectedPath = panel.url?.path
+                }
+                semaphore.signal()
+            }
+            if let window = NSApp.keyWindow {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                panel.begin(completionHandler: finish)
+            }
+        }
+        _ = semaphore.wait(timeout: .distantFuture)
+        return jsonResponse(PickResponse(ok: selectedPath != nil, path: selectedPath))
+        #else
+        return errorResponse("unsupported", "directory picker is macOS only", status: 501)
+        #endif
+    }
+
+    static func createSessionProjectSession(_ req: HttpRequest) -> HttpResponse {
+        struct SpawnRequest: Decodable {
+            let path: String?
+            let provider: String?
+            let initialPrompt: String?
+        }
+        struct SpawnResponse: Encodable {
+            let ok: Bool
+            let project: SessionProjectDTO
+            let surface: BoardSessionSurfaceDTO
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: SpawnRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        do {
+            let knownProject = SessionProjectStore.shared
+                .list()
+                .first { $0.id == id }
+            guard let projectPath = knownProject?.path, !projectPath.isEmpty else {
+                throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "project not found: \(id)"])
+            }
+            let cwd = try explicitSessionCwd(projectPath) ?? projectPath
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else {
+                throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
+            }
+            let project = try SessionProjectStore.shared.markUsed(
+                projectId: id,
+                path: projectPath,
+                provider: provider
+            )
+            let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: prompt?.isEmpty == false ? prompt : nil
+            )
+            return jsonResponse(
+                SpawnResponse(ok: true, project: SessionProjectDTO(project), surface: BoardSessionSurfaceDTO(surface)),
+                status: 201,
+                reason: "Created"
+            )
+        } catch {
+            return errorResponse("project_session_spawn_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createTemporarySession(_ req: HttpRequest) -> HttpResponse {
+        struct SpawnRequest: Decodable {
+            let provider: String?
+            let initialPrompt: String?
+        }
+        struct SpawnResponse: Encodable {
+            let ok: Bool
+            let cwd: String
+            let surface: BoardSessionSurfaceDTO
+        }
+        let body = decodeJSONBody(req, as: SpawnRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        do {
+            let cwd = try createTemporarySessionWorkspace()
+            let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: prompt?.isEmpty == false ? prompt : nil
+            )
+            return jsonResponse(
+                SpawnResponse(ok: true, cwd: cwd, surface: BoardSessionSurfaceDTO(surface)),
+                status: 201,
+                reason: "Created"
+            )
+        } catch {
+            return errorResponse("temporary_session_spawn_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func reopenLauncherSession(_ req: HttpRequest) -> HttpResponse {
+        struct ReopenRequest: Decodable {
+            let provider: String?
+            let cwd: String?
+        }
+        struct ReopenResponse: Encodable {
+            let ok: Bool
+            let action: SessionSurfaceLaunchAction
+            let surface: BoardSessionSurfaceDTO
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: ReopenRequest.self)
+        do {
+            let result = try SessionSurfaceLauncher.restoreLauncherSession(
+                sessionId: id,
+                provider: body?.provider,
+                cwd: body?.cwd
+            )
+            return jsonResponse(
+                ReopenResponse(ok: true, action: result.action, surface: BoardSessionSurfaceDTO(result.surface)),
+                status: result.action == .reuse ? 200 : 201,
+                reason: result.action == .reuse ? "OK" : "Created"
+            )
+        } catch let err as NSError {
+            return errorResponse(
+                err.code == 404 ? "session_not_found" : "session_reopen_failed",
+                err.localizedDescription,
+                status: err.code == 404 ? 404 : 400
+            )
+        } catch {
+            return errorResponse("session_reopen_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func createTemporarySessionWorkspace(now: Date = Date()) throws -> String {
+        let root = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("workspaces", isDirectory: true)
+            .appendingPathComponent("temporary", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let timestamp = formatter.string(from: now)
+
+        for _ in 0..<5 {
+            let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(6)
+            let candidate = root.appendingPathComponent("\(timestamp)-\(suffix)", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: false)
+                return candidate.path
+            }
+        }
+        throw NSError(domain: "BoardAPI", code: 500, userInfo: [NSLocalizedDescriptionKey: "failed to allocate temporary session workspace"])
+    }
+
     private static func createInternalSessionSurface(
         provider: String,
         cwd: String,
@@ -499,34 +796,17 @@ enum BoardAPI {
         initialPrompt: String?,
         preferredSessionId: String? = nil
     ) throws -> TerminalSessionSnapshot {
-        var isDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
-            if createIfMissing {
-                try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
-            } else {
-                throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
-            }
-        }
-        let trimmedPreferredSessionId = preferredSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reusablePreferredSessionId = trimmedPreferredSessionId?.isEmpty == false ? trimmedPreferredSessionId : nil
-        let resumeSessionId = reusablePreferredSessionId.flatMap(providerResumeSessionId(forPlannerSessionId:))
-        let launchCommand = resumeSessionId.map {
-            AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: $0)
-        } ?? command
-        let handle = try TerminalSessionBackendRegistry.shared.createSession(
-            request: TerminalSessionRequest(
-                provider: provider,
-                cwd: cwd,
-                command: launchCommand,
-                canvasId: canvasId,
-                nodeId: nodeId,
-                // resume 丢弃 initialPrompt:恢复的对话已有上下文,不应重打 dispatch prompt。
-                initialPrompt: resumeSessionId == nil ? initialPrompt : nil,
-                preferredSessionId: reusablePreferredSessionId
-            )
+        return try SessionSurfaceLauncher.createInternalSessionSurface(
+            provider: provider,
+            cwd: cwd,
+            command: command,
+            createIfMissing: createIfMissing,
+            canvasId: canvasId,
+            nodeId: nodeId,
+            initialPrompt: initialPrompt,
+            preferredSessionId: preferredSessionId,
+            recordLauncherInitialPrompt: canvasId == nil && nodeId == nil
         )
-        BoardServer.shared.broadcastStateChanged()
-        return handle.snapshot
     }
 
     private static func graphEnvelope(_ state: PlannerGraphState) -> PlannerGraphStateEnvelope {
@@ -2100,8 +2380,7 @@ enum BoardAPI {
     }
 
     private static func isReusableInternalSurface(_ surface: TerminalSessionSnapshot) -> Bool {
-        surface.status == InternalTerminalLifecycle.starting.rawValue
-            || surface.status == InternalTerminalLifecycle.running.rawValue
+        SessionSurfaceLauncher.isReusableInternalSurface(surface)
     }
 
     /// 死会话自愈(owner 决策 2026-06-01):能拿到 provider resume id 就
@@ -2119,25 +2398,19 @@ enum BoardAPI {
     ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool, providerSessionId: String?) {
         try PlannerPermission.requireNodeUpdate(on: node, access: access)
         let cwd = try explicitSessionCwd(explicitCwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-        let resumeSessionId = providerResumeSessionId(forPlannerSessionId: deadSessionId)
-        let command = resumeSessionId.map {
-            plannerResumeCommand(for: node, sessionId: $0)
-        }
-            ?? plannerFreshCommand(for: node)
-        let canResume = resumeSessionId != nil
-        let preferredSessionId = isProviderResumeSessionId(deadSessionId) || canResume ? deadSessionId : nil
-        let provider = AgentLaunchCommand.provider(forCommand: command)
-        let surface = try createInternalSessionSurface(
-            provider: provider,
+        let restore = try SessionSurfaceLauncher.restoreSessionSurface(
+            sessionId: deadSessionId,
             cwd: cwd,
-            command: command,
+            freshCommand: plannerFreshCommand(for: node),
+            resumeCommand: { plannerResumeCommand(for: node, sessionId: $0) },
             createIfMissing: true,
             canvasId: canvasId,
             nodeId: node.id,
             // recreate 用 dispatch prompt 开场;resume 的对话已有上下文,不打扰。
-            initialPrompt: canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
-            preferredSessionId: preferredSessionId
+            freshInitialPrompt: plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
         )
+        let surface = restore.surface
+        let canResume = restore.action == .resume
         if canResume {
             _ = PlannerSessionRunStateBridge.observeBound(
                 sessionId: surface.sessionId,
@@ -2161,7 +2434,7 @@ enum BoardAPI {
             )
         }
         BoardServer.shared.broadcastStateChanged()
-        return (surface, canResume, resumeSessionId)
+        return (surface, canResume, restore.providerResumeSessionId)
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -2261,25 +2534,19 @@ enum BoardAPI {
                     for node in nodes {
                         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
                     }
-                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
-                    let command = resumeSessionId.map {
-                        plannerResumeCommand(for: nodes.first, sessionId: $0)
-                    }
-                        ?? plannerFreshCommand(for: nodes.first)
-                    let canResume = resumeSessionId != nil
-                    let action = canResume ? "resume" : "recreate"
-                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
-                    let provider = AgentLaunchCommand.provider(forCommand: command)
-                    let surface = try createInternalSessionSurface(
-                        provider: provider,
+                    let restore = try SessionSurfaceLauncher.restoreSessionSurface(
+                        sessionId: sessionId,
                         cwd: cwd,
-                        command: command,
+                        freshCommand: plannerFreshCommand(for: nodes.first),
+                        resumeCommand: { plannerResumeCommand(for: nodes.first, sessionId: $0) },
                         createIfMissing: true,
                         canvasId: canvasId,
                         nodeId: nodes.first?.id,
-                        initialPrompt: canResume ? nil : nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) },
-                        preferredSessionId: preferredSessionId
+                        freshInitialPrompt: nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) }
                     )
+                    let surface = restore.surface
+                    let canResume = restore.action == .resume
+                    let action = restore.action.rawValue
                     if canResume {
                         _ = PlannerSessionRunStateBridge.observeBound(
                             sessionId: surface.sessionId,
@@ -4305,12 +4572,11 @@ enum BoardAPI {
     }
 
     private static func isProviderResumeSessionId(_ sessionId: String) -> Bool {
-        AgentLaunchCommand.isLikelyProviderResumeSessionId(sessionId)
+        SessionSurfaceLauncher.isProviderResumeSessionId(sessionId)
     }
 
     private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
-        providerResumeSessionIdForManagedSurface(sessionId)
-            ?? (isProviderResumeSessionId(sessionId) ? sessionId : nil)
+        SessionSurfaceLauncher.providerResumeSessionId(forSessionId: sessionId)
     }
 
     private static func providerResumeSessionIdForManagedSurface(_ sessionId: String) -> String? {
@@ -4336,19 +4602,7 @@ enum BoardAPI {
     }
 
     private static func explicitSessionCwd(_ raw: String?) throws -> String? {
-        var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !value.isEmpty else { return nil }
-        if value.hasPrefix("~") {
-            value = NSHomeDirectory() + String(value.dropFirst(1))
-        }
-        let normalized = (value as NSString).standardizingPath
-        guard normalized.hasPrefix("/") else {
-            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd must be an absolute path"])
-        }
-        guard normalized != "/" && normalized != NSHomeDirectory() else {
-            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd is too broad"])
-        }
-        return normalized
+        try SessionSurfaceLauncher.explicitCwd(raw)
     }
 
     // MARK: - GET /api/user-profile

@@ -4,6 +4,7 @@ import {
   LayoutTemplate,
   Network,
   Settings,
+  Terminal,
   User,
   UsersRound,
 } from 'lucide-react'
@@ -12,7 +13,7 @@ import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
 
-export type WorkspaceMode = 'planner' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
+export type WorkspaceMode = 'session' | 'planner' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
 
 interface WorkspaceRailProps {
   canvases: CanvasInfo[]
@@ -73,6 +74,13 @@ export function WorkspaceRail({
       </div>
 
       <div className="workspace-rail__group">
+        <RailButton
+          label={t('rail.session')}
+          active={mode === 'session'}
+          onClick={() => onModeChange('session')}
+        >
+          <Terminal size={20} />
+        </RailButton>
         <RailButton
           label={t('rail.planner')}
           active={mode === 'planner'}

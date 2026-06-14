@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { Archive, CheckCircle2, CircleAlert, RotateCcw } from 'lucide-react'
 import { NotificationSettings } from './NotificationSettings'
 import { ReadinessChecklist } from './ReadinessChecklist'
 import {
@@ -41,11 +41,12 @@ import {
   requestDeleteLocalDataToken,
   resetDevPerf,
   updateAppSettings,
+  updateSessionControl,
   type AppSettings,
   type StorageStats,
   type UserProfile,
 } from '../api'
-import type { BoardPerfSnapshot } from '../types'
+import type { BoardPerfSnapshot, Session } from '../types'
 
 interface Props {
   onSaved?: (provider: SpawnProvider) => void
@@ -59,11 +60,13 @@ interface Props {
   readinessRepairLogs?: string[]
   onRepairReadiness?: (actionId: string) => void
   onRefreshReadiness?: () => void
+  sessions?: Session[]
+  onSessionControlChanged?: () => void
   devMode?: boolean
   onRestartOnboarding?: () => void
 }
 
-type SettingsCategory = 'general' | 'account' | 'privacy' | 'notifications' | 'runtime' | 'models' | 'developer'
+type SettingsCategory = 'general' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   theme: 'system',
@@ -142,6 +145,30 @@ function formatShortcut(raw: string | null | undefined): string {
   return `${modifiers}${label}`
 }
 
+function compareSettingsSessions(a: Session, b: Session): number {
+  return timestampForSettingsSession(b) - timestampForSettingsSession(a)
+}
+
+function timestampForSettingsSession(session: Session): number {
+  const raw = session.lastActivity || session.startedAt || ''
+  const parsed = Date.parse(raw)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function settingsSessionTitle(session: Session): string {
+  const recap = session.latestRecap?.content?.trim()
+  if (recap) return truncateSettingsSessionTitle(recap)
+  const firstUser = session.recentMessages.find((entry) => entry.role.toLowerCase() === 'user' && entry.text.trim())
+  if (firstUser) return truncateSettingsSessionTitle(firstUser.text)
+  if (session.currentTask?.trim()) return truncateSettingsSessionTitle(session.currentTask)
+  return truncateSettingsSessionTitle(session.title || session.id)
+}
+
+function truncateSettingsSessionTitle(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  return compact.length > 72 ? `${compact.slice(0, 71)}...` : compact
+}
+
 type ShortcutKeyboardInput = Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>
 
 function shortcutFromKeyboardEvent(event: ShortcutKeyboardInput): string | null {
@@ -170,6 +197,8 @@ export function SettingsView({
   readinessRepairLogs = [],
   onRepairReadiness,
   onRefreshReadiness,
+  sessions = [],
+  onSessionControlChanged,
   devMode = false,
   onRestartOnboarding,
 }: Props) {
@@ -199,11 +228,14 @@ export function SettingsView({
   const [perfSnapshot, setPerfSnapshot] = useState<BoardPerfSnapshot | null>(null)
   const [perfLoading, setPerfLoading] = useState(false)
   const [perfError, setPerfError] = useState<string | null>(null)
+  const [restoringArchivedSessionId, setRestoringArchivedSessionId] = useState<string | null>(null)
+  const [locallyRestoredArchivedIds, setLocallyRestoredArchivedIds] = useState<Set<string>>(() => new Set())
   const effectiveAppSettings = normalizeAppSettings(appSettings)
   const settingsCategories: Array<{ id: SettingsCategory; label: string }> = [
     { id: 'general', label: t('settings.categoryGeneral') },
     { id: 'account', label: t('settings.categoryAccount') },
     { id: 'privacy', label: t('settings.categoryPrivacy') },
+    { id: 'archivedSessions', label: t('settings.categoryArchivedSessions') },
     { id: 'notifications', label: t('settings.categoryNotifications') },
     { id: 'runtime', label: t('settings.categoryRuntime') },
     { id: 'models', label: t('settings.categoryModels') },
@@ -219,6 +251,29 @@ export function SettingsView({
   const notifySaved = useCallback(() => {
     notify('success', t('common.saved'))
   }, [notify, t])
+
+  const archivedSessions = sessions
+    .filter((session) => session.controlState === 'archived' && !locallyRestoredArchivedIds.has(session.id))
+    .sort(compareSettingsSessions)
+
+  const restoreArchivedSession = useCallback(async (session: Session) => {
+    setRestoringArchivedSessionId(session.id)
+    setLocallyRestoredArchivedIds((current) => new Set([...current, session.id]))
+    try {
+      await updateSessionControl(session.id, 'restore')
+      onSessionControlChanged?.()
+      notify('success', t('sessions.restored'))
+    } catch (err) {
+      setLocallyRestoredArchivedIds((current) => {
+        const next = new Set(current)
+        next.delete(session.id)
+        return next
+      })
+      notify('error', (err as Error).message || t('sessions.controlActionFailed'))
+    } finally {
+      setRestoringArchivedSessionId(null)
+    }
+  }, [notify, onSessionControlChanged, t])
 
   const loadProfile = useCallback(() => {
     fetchUserProfile()
@@ -887,6 +942,49 @@ export function SettingsView({
           />
         )}
           </>
+        )}
+
+        {activeSettingsCategory === 'archivedSessions' && (
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">{t('settings.archivedSessions')}</div>
+                <div className="settings-section-caption">{t('settings.archivedSessionsCaption')}</div>
+              </div>
+            </div>
+            {archivedSessions.length === 0 ? (
+              <div className="settings-panel settings-archived-sessions__empty">
+                <Archive size={18} aria-hidden />
+                <span>{t('settings.archivedSessionsEmpty')}</span>
+              </div>
+            ) : (
+              <div className="settings-panel settings-archived-sessions">
+                {archivedSessions.map((session) => (
+                  <div key={session.id} className="settings-archived-session">
+                    <div className="settings-archived-session__main">
+                      <strong>{settingsSessionTitle(session)}</strong>
+                      <span>{session.project || t('sessions.noProject')}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void restoreArchivedSession(session)}
+                      disabled={restoringArchivedSessionId === session.id}
+                    >
+                      {restoringArchivedSessionId === session.id ? (
+                        t('common.loading')
+                      ) : (
+                        <>
+                          <RotateCcw size={14} aria-hidden />
+                          {t('sessions.restore')}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         )}
 
         {activeSettingsCategory === 'general' && (

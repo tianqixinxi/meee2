@@ -310,6 +310,36 @@ export interface BoardState {
 export type CanvasScope = 'personal' | 'team'
 export type CanvasKind = 'board' | 'monitor'
 export type SpawnProvider = 'claude' | 'codex'
+
+export interface SessionProject {
+  id: string
+  name: string
+  path: string
+  preferredProvider: SpawnProvider
+  explicit: boolean
+  createdAt: string
+  updatedAt: string
+  lastUsedAt?: string | null
+}
+
+export interface SessionProjectList {
+  projects: SessionProject[]
+}
+
+export interface SessionProjectCreateInput {
+  path: string
+  name?: string
+  preferredProvider?: SpawnProvider
+}
+
+export interface SessionProjectUpdateInput {
+  name: string
+}
+
+export interface TemporarySessionCreateInput {
+  provider: SpawnProvider
+  initialPrompt?: string
+}
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
 
