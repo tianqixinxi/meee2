@@ -1,7 +1,9 @@
 import {
   Archive,
+  AlertCircle,
   ArrowUp,
   ChevronDown,
+  CheckCircle2,
   Edit3,
   Folder,
   FolderPlus,
@@ -44,7 +46,7 @@ import { nativeTerminalTargetForSession } from '../lib/sessionTerminal'
 import { useTheme } from '../lib/theme'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { spawnProviderLabel } from '../preferences'
-import { loadPinnedSet, togglePinned } from '../sessionOverrides'
+import { loadPinnedSet, loadTitleOverrides, saveTitleOverride, togglePinned } from '../sessionOverrides'
 import type { AgentPermissionMode, BoardState, Session, SessionProject, SpawnProvider } from '../types'
 
 interface Props {
@@ -73,6 +75,9 @@ const SIDEBAR_COLLAPSED_KEY = 'meee2.sessionLauncher.sidebarCollapsed'
 const DEFAULT_SIDEBAR_WIDTH = 324
 const MIN_SIDEBAR_WIDTH = 260
 const MAX_SIDEBAR_WIDTH = 520
+const ENTER_SUBMIT_ARM_MS = 1800
+const SESSION_CONTEXT_MENU_WIDTH = 190
+const SESSION_CONTEXT_MENU_HEIGHT = 120
 
 function readStoredSidebarWidth(): number {
   if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
@@ -94,6 +99,12 @@ type PermissionOption = {
   value: AgentPermissionMode
   labelKey: TranslationKey
   command: string
+}
+
+type SessionContextMenu = {
+  session: Session
+  x: number
+  y: number
 }
 
 const PERMISSION_OPTIONS: Record<SpawnProvider, PermissionOption[]> = {
@@ -155,6 +166,7 @@ export function SessionLauncherView({
   const [temporaryPermissionMode, setTemporaryPermissionMode] = useState<AgentPermissionMode>(DEFAULT_PERMISSION_MODE)
   const [temporaryPlanMode, setTemporaryPlanMode] = useState(false)
   const [pinnedSessionIds, setPinnedSessionIds] = useState<Set<string>>(() => loadPinnedSet())
+  const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>(() => loadTitleOverrides())
   const [addingFolder, setAddingFolder] = useState(false)
   const [startingProjectId, setStartingProjectId] = useState<string | null>(null)
   const [startingTemporary, setStartingTemporary] = useState(false)
@@ -162,7 +174,10 @@ export function SessionLauncherView({
   const [renameProject, setRenameProject] = useState<SessionProject | null>(null)
   const [forgetProject, setForgetProject] = useState<SessionProject | null>(null)
   const [archiveSession, setArchiveSession] = useState<Session | null>(null)
+  const [sessionMenu, setSessionMenu] = useState<SessionContextMenu | null>(null)
+  const [renameSession, setRenameSession] = useState<Session | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [renameSessionValue, setRenameSessionValue] = useState('')
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
   const [forgettingProjectId, setForgettingProjectId] = useState<string | null>(null)
   const [revealingProjectId, setRevealingProjectId] = useState<string | null>(null)
@@ -198,9 +213,12 @@ export function SessionLauncherView({
   }, [refreshProjects])
 
   useEffect(() => {
-    const refreshPinned = () => setPinnedSessionIds(loadPinnedSet())
-    window.addEventListener('meee2:session-overrides-changed', refreshPinned)
-    return () => window.removeEventListener('meee2:session-overrides-changed', refreshPinned)
+    const refreshOverrides = () => {
+      setPinnedSessionIds(loadPinnedSet())
+      setTitleOverrides(loadTitleOverrides())
+    }
+    window.addEventListener('meee2:session-overrides-changed', refreshOverrides)
+    return () => window.removeEventListener('meee2:session-overrides-changed', refreshOverrides)
   }, [])
 
   useEffect(() => {
@@ -219,6 +237,20 @@ export function SessionLauncherView({
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [projectMenuId])
+
+  useEffect(() => {
+    if (!sessionMenu) return undefined
+    const closeMenu = () => setSessionMenu(null)
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSessionMenu(null)
+    }
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [sessionMenu])
 
   const explicitProjects = useMemo(
     () => projects.filter((project) => project.explicit),
@@ -482,14 +514,54 @@ export function SessionLauncherView({
   }, [onSessionCreated, onToast, temporaryPermissionMode, temporaryPlanMode, temporaryPrompt, temporaryProvider, t])
 
   const handleSelectSession = useCallback((session: Session) => {
+    setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
   }, [])
 
   const handleTogglePinned = useCallback((session: Session) => {
+    setSessionMenu(null)
     const pinned = togglePinned(session.id)
     setPinnedSessionIds(loadPinnedSet())
     onToast?.('success', pinned ? t('sessions.launcher.sessionPinned') : t('sessions.launcher.sessionUnpinned'))
   }, [onToast, t])
+
+  const openSessionMenuAt = useCallback((session: Session, clientX: number, clientY: number) => {
+    const viewportWidth = typeof window === 'undefined' ? 1024 : window.innerWidth
+    const viewportHeight = typeof window === 'undefined' ? 768 : window.innerHeight
+    setProjectMenuId(null)
+    setSessionMenu({
+      session,
+      x: Math.max(8, Math.min(clientX, viewportWidth - SESSION_CONTEXT_MENU_WIDTH - 8)),
+      y: Math.max(8, Math.min(clientY, viewportHeight - SESSION_CONTEXT_MENU_HEIGHT - 8)),
+    })
+  }, [])
+
+  const handleOpenSessionMenu = useCallback((session: Session, event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    openSessionMenuAt(session, event.clientX, event.clientY)
+  }, [openSessionMenuAt])
+
+  const openRenameSession = useCallback((session: Session) => {
+    setSessionMenu(null)
+    setRenameSession(session)
+    setRenameSessionValue(sessionDisplayTitle(session, titleOverrides))
+  }, [titleOverrides])
+
+  const handleRenameSession = useCallback((event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!renameSession) return
+    const title = renameSessionValue.trim()
+    if (!title) {
+      onToast?.('error', t('sessions.launcher.sessionNameRequired'))
+      return
+    }
+    saveTitleOverride(renameSession.id, title)
+    setTitleOverrides(loadTitleOverrides())
+    setRenameSession(null)
+    setRenameSessionValue('')
+    onToast?.('success', t('sessions.launcher.sessionRenamed', { title }))
+  }, [onToast, renameSession, renameSessionValue, t])
 
   const handleArchiveSession = useCallback(async (session: Session) => {
     setArchivingSessionId(session.id)
@@ -635,6 +707,9 @@ export function SessionLauncherView({
               onSelectSession={(session) => void handleSelectSession(session)}
               onTogglePinned={handleTogglePinned}
               onArchiveSession={setArchiveSession}
+              onOpenSessionMenu={handleOpenSessionMenu}
+              onOpenSessionMenuAt={openSessionMenuAt}
+              titleOverrides={titleOverrides}
               pinnedSessionIds={pinnedSessionIds}
               archivingSessionId={archivingSessionId}
             />
@@ -691,6 +766,9 @@ export function SessionLauncherView({
                     onSelectSession={(session) => void handleSelectSession(session)}
                     onTogglePinned={handleTogglePinned}
                     onArchiveSession={setArchiveSession}
+                    onOpenSessionMenu={handleOpenSessionMenu}
+                    onOpenSessionMenuAt={openSessionMenuAt}
+                    titleOverrides={titleOverrides}
                     pinnedSessionIds={pinnedSessionIds}
                     archivingSessionId={archivingSessionId}
                     nested
@@ -723,6 +801,9 @@ export function SessionLauncherView({
             onSelectSession={(session) => void handleSelectSession(session)}
             onTogglePinned={handleTogglePinned}
             onArchiveSession={setArchiveSession}
+            onOpenSessionMenu={handleOpenSessionMenu}
+            onOpenSessionMenuAt={openSessionMenuAt}
+            titleOverrides={titleOverrides}
             pinnedSessionIds={pinnedSessionIds}
             archivingSessionId={archivingSessionId}
           />
@@ -739,6 +820,9 @@ export function SessionLauncherView({
                 onSelectSession={(session) => void handleSelectSession(session)}
                 onTogglePinned={handleTogglePinned}
                 onArchiveSession={setArchiveSession}
+                onOpenSessionMenu={handleOpenSessionMenu}
+                onOpenSessionMenuAt={openSessionMenuAt}
+                titleOverrides={titleOverrides}
                 pinnedSessionIds={pinnedSessionIds}
                 archivingSessionId={archivingSessionId}
               />
@@ -752,6 +836,7 @@ export function SessionLauncherView({
             session={selectedSession}
             sessionId={selectedRestoredTarget?.sessionId ?? selection.sessionId}
             surfaceId={selectedRestoredTarget?.surfaceId ?? selection.surfaceId}
+            titleOverrides={titleOverrides}
             theme={resolvedTheme}
           />
         ) : selection?.kind === 'temporaryDraft' ? (
@@ -810,6 +895,20 @@ export function SessionLauncherView({
         )}
       </main>
     </section>
+    {sessionMenu && (
+      <SessionContextMenuView
+        title={sessionDisplayTitle(sessionMenu.session, titleOverrides)}
+        pinned={pinnedSessionIds.has(sessionMenu.session.id)}
+        x={sessionMenu.x}
+        y={sessionMenu.y}
+        onTogglePinned={() => handleTogglePinned(sessionMenu.session)}
+        onRename={() => openRenameSession(sessionMenu.session)}
+        onArchive={() => {
+          setSessionMenu(null)
+          setArchiveSession(sessionMenu.session)
+        }}
+      />
+    )}
     {renameProject && (
       <RenameProjectModal
         project={renameProject}
@@ -821,6 +920,19 @@ export function SessionLauncherView({
           setRenameValue('')
         }}
         onSubmit={(event) => void handleRenameProject(event)}
+      />
+    )}
+    {renameSession && (
+      <RenameSessionModal
+        session={renameSession}
+        title={sessionDisplayTitle(renameSession, titleOverrides)}
+        value={renameSessionValue}
+        onValueChange={setRenameSessionValue}
+        onCancel={() => {
+          setRenameSession(null)
+          setRenameSessionValue('')
+        }}
+        onSubmit={(event) => handleRenameSession(event)}
       />
     )}
     {forgetProject && (
@@ -837,7 +949,7 @@ export function SessionLauncherView({
     {archiveSession && (
       <ConfirmSessionLauncherModal
         title={t('sessions.launcher.archiveSessionTitle')}
-        detail={t('sessions.launcher.archiveSessionDetail', { title: sessionTitle(archiveSession) })}
+        detail={t('sessions.launcher.archiveSessionDetail', { title: sessionDisplayTitle(archiveSession, titleOverrides) })}
         confirmLabel={t('sessions.launcher.archiveSession')}
         busy={archivingSessionId === archiveSession.id}
         onCancel={() => setArchiveSession(null)}
@@ -845,6 +957,49 @@ export function SessionLauncherView({
       />
     )}
     </>
+  )
+}
+
+function SessionContextMenuView({
+  title,
+  pinned,
+  x,
+  y,
+  onTogglePinned,
+  onRename,
+  onArchive,
+}: {
+  title: string
+  pinned: boolean
+  x: number
+  y: number
+  onTogglePinned: () => void
+  onRename: () => void
+  onArchive: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div
+      className="session-launcher__context-menu"
+      role="menu"
+      aria-label={t('sessions.launcher.sessionMenu', { title })}
+      style={{ left: x, top: y }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <button type="button" role="menuitem" onClick={onArchive}>
+        <Archive size={13} aria-hidden />
+        <span>{t('sessions.launcher.archiveSession')}</span>
+      </button>
+      <button type="button" role="menuitem" onClick={onTogglePinned}>
+        {pinned ? <PinOff size={13} aria-hidden /> : <Pin size={13} aria-hidden />}
+        <span>{pinned ? t('sessions.launcher.unpin') : t('sessions.launcher.pin')}</span>
+      </button>
+      <button type="button" role="menuitem" onClick={onRename}>
+        <Edit3 size={13} aria-hidden />
+        <span>{t('sessions.launcher.rename')}</span>
+      </button>
+    </div>
   )
 }
 
@@ -987,6 +1142,54 @@ function RenameProjectModal({
   )
 }
 
+function RenameSessionModal({
+  session,
+  title,
+  value,
+  onValueChange,
+  onCancel,
+  onSubmit,
+}: {
+  session: Session
+  title: string
+  value: string
+  onValueChange: (value: string) => void
+  onCancel: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const { t } = useI18n()
+  const trimmed = value.trim()
+  return (
+    <div className="session-launcher-modal" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onCancel()
+    }}>
+      <form className="session-launcher-modal__dialog" role="dialog" aria-modal="true" aria-label={t('sessions.launcher.renameSessionNamed', { title })} onSubmit={onSubmit}>
+        <header>
+          <strong>{t('sessions.launcher.renameSession')}</strong>
+          <span>{session.project || session.pluginDisplayName}</span>
+        </header>
+        <label>
+          <span>{t('sessions.launcher.displayName')}</span>
+          <input
+            autoFocus
+            value={value}
+            onChange={(event) => onValueChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') onCancel()
+            }}
+          />
+        </label>
+        <footer>
+          <button type="button" className="ghost" onClick={onCancel}>{t('common.cancel')}</button>
+          <button type="submit" disabled={trimmed.length === 0}>
+            <span>{t('sessions.launcher.rename')}</span>
+          </button>
+        </footer>
+      </form>
+    </div>
+  )
+}
+
 function ConfirmSessionLauncherModal({
   title,
   detail,
@@ -1060,6 +1263,9 @@ function SessionList({
   onSelectSession,
   onTogglePinned,
   onArchiveSession,
+  onOpenSessionMenu,
+  onOpenSessionMenuAt,
+  titleOverrides,
   pinnedSessionIds,
   archivingSessionId,
   nested = false,
@@ -1072,6 +1278,9 @@ function SessionList({
   onSelectSession: (session: Session) => void
   onTogglePinned: (session: Session) => void
   onArchiveSession: (session: Session) => void
+  onOpenSessionMenu: (session: Session, event: ReactMouseEvent<HTMLElement>) => void
+  onOpenSessionMenuAt: (session: Session, clientX: number, clientY: number) => void
+  titleOverrides: Record<string, string>
   pinnedSessionIds: Set<string>
   archivingSessionId: string | null
   nested?: boolean
@@ -1093,9 +1302,12 @@ function SessionList({
             active={active}
             pinned={pinnedSessionIds.has(session.id)}
             archiving={archivingSessionId === session.id}
+            title={sessionDisplayTitle(session, titleOverrides)}
             onSelect={() => onSelectSession(session)}
             onTogglePinned={() => onTogglePinned(session)}
             onArchive={() => onArchiveSession(session)}
+            onContextMenu={(event) => onOpenSessionMenu(session, event)}
+            onOpenMenuAt={(clientX, clientY) => onOpenSessionMenuAt(session, clientX, clientY)}
           />
         )
       })}
@@ -1117,31 +1329,65 @@ function SessionRow({
   active,
   pinned,
   archiving,
+  title,
   onSelect,
   onTogglePinned,
   onArchive,
+  onContextMenu,
+  onOpenMenuAt,
 }: {
   session: Session
   active: boolean
   pinned: boolean
   archiving: boolean
+  title: string
   onSelect: () => void
   onTogglePinned: () => void
   onArchive: () => void
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void
+  onOpenMenuAt: (clientX: number, clientY: number) => void
 }) {
   const { t } = useI18n()
-  const title = sessionTitle(session)
   const age = compactSessionAge(session)
+  const state = sessionRowState(session, t)
+  const handleMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button === 2) onContextMenu(event)
+  }
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    onOpenMenuAt(rect.left + 14, rect.top + 14)
+  }
   return (
-    <div className={`session-launcher__session-item${active ? ' is-selected' : ''}`}>
+    <div className={[
+      'session-launcher__session-item',
+      active ? 'is-selected' : '',
+      state?.tone === 'attention' ? 'session-launcher__session-item--attention' : '',
+      state?.tone === 'done' ? 'session-launcher__session-item--done' : '',
+    ].filter(Boolean).join(' ')}
+      onContextMenu={onContextMenu}
+      onMouseDown={handleMouseDown}
+      onKeyDown={handleKeyDown}
+    >
       <button
         type="button"
         className="session-launcher__session-row"
         onClick={onSelect}
-        aria-label={title}
+        onContextMenu={onContextMenu}
+        onMouseDown={handleMouseDown}
+        onKeyDown={handleKeyDown}
+        aria-label={state ? `${title} · ${state.label}` : title}
       >
         <span>
           <strong>{title}</strong>
+          {state && (
+            <em className={`session-launcher__session-state is-${state.tone}`}>
+              {state.tone === 'done' ? <CheckCircle2 size={11} aria-hidden /> : <AlertCircle size={11} aria-hidden />}
+              {state.label}
+            </em>
+          )}
         </span>
         {age && <time aria-hidden dateTime={session.lastActivity ?? session.startedAt ?? undefined}>{age}</time>}
       </button>
@@ -1150,7 +1396,7 @@ function SessionRow({
           type="button"
           className="session-launcher__pin-button"
           onClick={onTogglePinned}
-          aria-label={pinned ? t('sessions.launcher.unpinSessionNamed', { title: sessionTitle(session) }) : t('sessions.launcher.pinSessionNamed', { title: sessionTitle(session) })}
+          aria-label={pinned ? t('sessions.launcher.unpinSessionNamed', { title }) : t('sessions.launcher.pinSessionNamed', { title })}
           title={pinned ? t('sessions.launcher.unpin') : t('sessions.launcher.pin')}
         >
           {pinned ? <PinOff size={13} /> : <Pin size={13} />}
@@ -1160,7 +1406,7 @@ function SessionRow({
           className="session-launcher__archive-button"
           onClick={onArchive}
           disabled={archiving}
-          aria-label={t('sessions.launcher.archiveSessionNamed', { title: sessionTitle(session) })}
+          aria-label={t('sessions.launcher.archiveSessionNamed', { title })}
           title={t('sessions.archive')}
         >
           {archiving ? <Loader2 size={13} className="spin" /> : <Archive size={13} />}
@@ -1168,6 +1414,25 @@ function SessionRow({
       </div>
     </div>
   )
+}
+
+function sessionRowState(session: Session, t: ReturnType<typeof useI18n>['t']): { tone: 'attention' | 'done'; label: string } | null {
+  if (sessionNeedsAttention(session)) return { tone: 'attention', label: sessionAttentionLabel(session, t) }
+  if (session.status === 'completed' || session.status === 'done') return { tone: 'done', label: t('common.done') }
+  return null
+}
+
+function sessionNeedsAttention(session: Session): boolean {
+  return session.status === 'permissionRequired'
+    || session.status === 'waitingForUser'
+    || session.inboxPending > 0
+    || Boolean(session.pendingPermissionTool || session.pendingPermissionMessage)
+}
+
+function sessionAttentionLabel(session: Session, t: ReturnType<typeof useI18n>['t']): string {
+  if (session.pendingPermissionTool || session.status === 'permissionRequired') return t('sessions.permissionRequired')
+  if (session.inboxPending > 0) return t('sessions.pendingMessages', { count: session.inboxPending })
+  return t('sessions.waitingUser')
 }
 
 function SessionComposer({
@@ -1197,11 +1462,54 @@ function SessionComposer({
 }) {
   const { t } = useI18n()
   const [permissionOpen, setPermissionOpen] = useState(false)
+  const [enterSubmitArmed, setEnterSubmitArmed] = useState(false)
   const permissionMenuRef = useRef<HTMLDivElement | null>(null)
+  const enterSubmitTimerRef = useRef<number | null>(null)
   const permissionOptions = PERMISSION_OPTIONS[provider]
   const normalizedPermissionMode = normalizePermissionMode(provider, permissionMode)
   const selectedPermissionOption = permissionOptions.find((option) => option.value === normalizedPermissionMode) ?? permissionOptions[0]
   const selectedPermissionLabel = selectedPermissionOption ? t(selectedPermissionOption.labelKey) : ''
+
+  const clearEnterSubmitArm = useCallback(() => {
+    if (enterSubmitTimerRef.current !== null) {
+      window.clearTimeout(enterSubmitTimerRef.current)
+      enterSubmitTimerRef.current = null
+    }
+    setEnterSubmitArmed(false)
+  }, [])
+
+  const armEnterSubmit = useCallback(() => {
+    if (enterSubmitTimerRef.current !== null) {
+      window.clearTimeout(enterSubmitTimerRef.current)
+    }
+    setEnterSubmitArmed(true)
+    enterSubmitTimerRef.current = window.setTimeout(() => {
+      enterSubmitTimerRef.current = null
+      setEnterSubmitArmed(false)
+    }, ENTER_SUBMIT_ARM_MS)
+  }, [])
+
+  const startSession = useCallback(() => {
+    clearEnterSubmitArm()
+    onStart()
+  }, [clearEnterSubmitArm, onStart])
+
+  const handlePromptChange = useCallback((value: string) => {
+    clearEnterSubmitArm()
+    onPromptChange(value)
+  }, [clearEnterSubmitArm, onPromptChange])
+
+  const handlePromptKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+    if (event.shiftKey || event.altKey) return
+    event.preventDefault()
+    if (starting) return
+    if (event.metaKey || event.ctrlKey || enterSubmitArmed) {
+      startSession()
+      return
+    }
+    armEnterSubmit()
+  }, [armEnterSubmit, enterSubmitArmed, startSession, starting])
 
   useEffect(() => {
     if (!permissionOpen) return undefined
@@ -1220,6 +1528,12 @@ function SessionComposer({
     }
   }, [permissionOpen])
 
+  useEffect(() => () => {
+    if (enterSubmitTimerRef.current !== null) {
+      window.clearTimeout(enterSubmitTimerRef.current)
+    }
+  }, [])
+
   return (
     <div className="session-launcher__composer-shell">
       <div className="session-launcher__composer">
@@ -1228,7 +1542,8 @@ function SessionComposer({
           <div className="session-launcher__prompt-card">
             <textarea
               value={prompt}
-              onChange={(event) => onPromptChange(event.target.value)}
+              onChange={(event) => handlePromptChange(event.target.value)}
+              onKeyDown={handlePromptKeyDown}
               placeholder={t('sessions.launcher.promptPlaceholder')}
               rows={4}
             />
@@ -1295,16 +1610,28 @@ function SessionComposer({
                     </button>
                   ))}
                 </div>
-                <button
-                  type="button"
-                  className="session-launcher__start"
-                  onClick={onStart}
-                  disabled={starting}
-                  aria-label={t('sessions.launcher.startSession')}
-                  title={t('sessions.launcher.startSession')}
-                >
-                  {starting ? <Loader2 size={18} className="spin" /> : <ArrowUp size={20} />}
-                </button>
+                <div className="session-launcher__start-wrap">
+                  {enterSubmitArmed && (
+                    <div
+                      id="session-launcher-enter-submit-hint"
+                      className="session-launcher__enter-submit-hint"
+                      role="status"
+                    >
+                      {t('sessions.launcher.enterSubmitHint')}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className={`session-launcher__start${enterSubmitArmed ? ' is-armed' : ''}`}
+                    onClick={startSession}
+                    disabled={starting}
+                    aria-label={t('sessions.launcher.startSession')}
+                    aria-describedby={enterSubmitArmed ? 'session-launcher-enter-submit-hint' : undefined}
+                    title={t('sessions.launcher.startSession')}
+                  >
+                    {starting ? <Loader2 size={18} className="spin" /> : <ArrowUp size={20} />}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1318,11 +1645,13 @@ function SessionLauncherTerminal({
   session,
   sessionId,
   surfaceId,
+  titleOverrides,
   theme,
 }: {
   session: Session | null
   sessionId: string
   surfaceId?: string | null
+  titleOverrides: Record<string, string>
   theme: 'light' | 'dark'
 }) {
   const { t } = useI18n()
@@ -1404,20 +1733,29 @@ function SessionLauncherTerminal({
   if (!canOpenNativeTerminal) {
     return (
       <div className="session-launcher__terminal-empty">
-        <strong>{session ? sessionTitle(session) : t('rail.session')}</strong>
+        <strong>{session ? sessionDisplayTitle(session, titleOverrides) : t('rail.session')}</strong>
         <span>{t('sessions.launcher.noTerminalSurface')}</span>
       </div>
     )
   }
 
+  const title = session ? sessionDisplayTitle(session, titleOverrides) : t('sessions.launcher.startingSession')
+  const runtime = sessionRuntimeLabel(session)
+  const project = sessionProjectLabel(session)
+  const status = sessionTerminalStatus(session, t)
+
   return (
     <div className="session-launcher-terminal">
       <header className="session-launcher-terminal__header">
-        <div>
-          <strong>{session ? sessionTitle(session) : t('sessions.launcher.startingSession')}</strong>
-          <span>{session?.project ?? t('sessions.launcher.waitingForTerminalSurface')}</span>
+        <div className="session-launcher-terminal__identity">
+          <strong>{title}</strong>
+          <span title={session?.project || undefined}>
+            {runtime ? <b>{runtime}</b> : null}
+            {runtime && project ? <i aria-hidden>·</i> : null}
+            {project || t('sessions.launcher.waitingForTerminalSurface')}
+          </span>
         </div>
-        <em>{session?.surfaceStatus ?? session?.status ?? t('sessions.launcher.starting')}</em>
+        <em className={`session-launcher-terminal__status is-${status.tone}`}>{status.label}</em>
       </header>
       <div ref={hostRef} className="session-launcher-terminal__host" />
     </div>
@@ -1492,6 +1830,47 @@ function projectTime(project: SessionProject): number {
   const raw = project.lastUsedAt ?? project.updatedAt ?? project.createdAt
   const parsed = Date.parse(raw)
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function sessionRuntimeLabel(session: Session | null): string {
+  const label = session?.pluginDisplayName || session?.pluginId || ''
+  return label.replace(/^com\.meee2\.plugin\./, '').trim()
+}
+
+function sessionProjectLabel(session: Session | null): string {
+  const raw = session?.project?.trim() ?? ''
+  if (!raw) return ''
+  const normalized = raw.replace(/\/+$/, '')
+  const parts = normalized.split('/').filter(Boolean)
+  return parts[parts.length - 1] || normalized
+}
+
+function sessionTerminalStatus(
+  session: Session | null,
+  t: ReturnType<typeof useI18n>['t'],
+): { label: string; tone: 'running' | 'attention' | 'done' | 'failed' | 'idle' } {
+  const raw = (session?.surfaceStatus ?? session?.status ?? '').toLowerCase()
+  if (raw === 'starting' || raw === 'running' || raw === 'active' || raw.includes('tool')) {
+    return { label: t('sessions.launcher.statusRunning'), tone: 'running' }
+  }
+  if (raw === 'permissionrequired' || raw === 'waitingforuser' || (session ? sessionNeedsAttention(session) : false)) {
+    return { label: t('sessions.launcher.statusNeedsInput'), tone: 'attention' }
+  }
+  if (raw === 'completed' || raw === 'done' || raw === 'idle') {
+    return { label: t('sessions.launcher.statusDone'), tone: 'done' }
+  }
+  if (raw === 'failed' || raw.includes('error') || raw.includes('blocked')) {
+    return { label: t('sessions.launcher.statusFailed'), tone: 'failed' }
+  }
+  if (raw === 'exited' || raw === 'dead') {
+    return { label: t('sessions.launcher.statusExited'), tone: 'idle' }
+  }
+  return { label: t('sessions.launcher.starting'), tone: 'running' }
+}
+
+function sessionDisplayTitle(session: Session, titleOverrides: Record<string, string>): string {
+  const override = titleOverrides[session.id]?.replace(/\s+/g, ' ').trim()
+  return override || sessionTitle(session)
 }
 
 function sessionTitle(session: Session): string {

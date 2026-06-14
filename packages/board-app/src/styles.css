@@ -4884,6 +4884,10 @@ textarea {
   border-color: rgba(139, 169, 194, 0.28);
 }
 
+.sessions-row--done {
+  border-color: rgba(96, 165, 128, 0.24);
+}
+
 .sessions-row__identity {
   min-width: 0;
   display: grid;
@@ -4937,7 +4941,8 @@ textarea {
 
 .sessions-row__count,
 .sessions-row__attention,
-.sessions-row__unread {
+.sessions-row__unread,
+.sessions-row__done {
   min-width: 18px;
   height: 18px;
   display: inline-flex;
@@ -4962,6 +4967,14 @@ textarea {
   border: 1px solid rgba(139, 169, 194, 0.28);
   background: rgba(139, 169, 194, 0.14);
   color: #b9d2e6;
+}
+
+.sessions-row__done {
+  width: auto;
+  padding: 0 7px;
+  border: 1px solid rgba(96, 165, 128, 0.28);
+  background: rgba(96, 165, 128, 0.13);
+  color: #a7d9b8;
 }
 
 .sessions-row__meta {
@@ -15697,7 +15710,8 @@ body.session-launcher-sidebar-resizing * {
   display: inline-flex;
 }
 
-.session-launcher__project-menu {
+.session-launcher__project-menu,
+.session-launcher__context-menu {
   position: absolute;
   top: 28px;
   right: 0;
@@ -15711,7 +15725,16 @@ body.session-launcher-sidebar-resizing * {
   box-shadow: 0 14px 36px rgb(0 0 0 / 14%);
 }
 
-.session-launcher__project-menu button {
+.session-launcher__context-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 80;
+  min-width: 190px;
+}
+
+.session-launcher__project-menu button,
+.session-launcher__context-menu button {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   justify-content: start;
@@ -15724,15 +15747,18 @@ body.session-launcher-sidebar-resizing * {
   text-align: left;
 }
 
-.session-launcher__project-menu button:hover {
+.session-launcher__project-menu button:hover,
+.session-launcher__context-menu button:hover {
   background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
-.session-launcher__project-menu button.is-danger {
+.session-launcher__project-menu button.is-danger,
+.session-launcher__context-menu button.is-danger {
   color: var(--danger);
 }
 
-.session-launcher__project-menu button:disabled {
+.session-launcher__project-menu button:disabled,
+.session-launcher__context-menu button:disabled {
   cursor: wait;
   opacity: 0.62;
 }
@@ -15755,6 +15781,15 @@ body.session-launcher-sidebar-resizing * {
   border-radius: 7px;
 }
 
+.session-launcher__session-item--attention {
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.session-launcher__session-item--done {
+  border-color: color-mix(in srgb, #60a580 24%, transparent);
+}
+
 .session-launcher__session-row {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -15763,6 +15798,12 @@ body.session-launcher-sidebar-resizing * {
   padding: 4px 7px;
   border-radius: 7px;
   color: var(--text-dim);
+}
+
+.session-launcher__session-row span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
 }
 
 .session-launcher__session-row strong {
@@ -15779,6 +15820,37 @@ body.session-launcher-sidebar-resizing * {
   line-height: 1;
   white-space: nowrap;
   transition: opacity 100ms ease;
+}
+
+.session-launcher__session-state {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  gap: 4px;
+  overflow: hidden;
+  padding: 2px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-launcher__session-state > svg {
+  flex: 0 0 11px;
+}
+
+.session-launcher__session-state.is-attention {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.session-launcher__session-state.is-done {
+  background: color-mix(in srgb, #60a580 16%, transparent);
+  color: #5fbb82;
 }
 
 .session-launcher__session-actions {
@@ -16269,8 +16341,60 @@ body.session-launcher-sidebar-resizing * {
   color: var(--bg-paper);
 }
 
+.session-launcher__start-wrap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+}
+
+.session-launcher__start.is-armed {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.session-launcher__enter-submit-hint {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 9px);
+  z-index: 3;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 52px));
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-paper);
+  color: var(--text);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 16%);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+}
+
+.session-launcher__enter-submit-hint::after {
+  content: "";
+  position: absolute;
+  right: 11px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  border-right: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: var(--bg-paper);
+  transform: rotate(45deg);
+}
+
 .session-launcher__start:hover {
   background: var(--text);
+}
+
+.session-launcher__start.is-armed:hover {
+  background: var(--accent);
 }
 
 .session-launcher__start:disabled,
@@ -16327,9 +16451,13 @@ body.session-launcher-sidebar-resizing * {
   min-width: 0;
 }
 
+.session-launcher-terminal__identity {
+  display: grid;
+  gap: 4px;
+}
+
 .session-launcher-terminal__header strong,
 .session-launcher-terminal__header span {
-  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -16341,16 +16469,66 @@ body.session-launcher-sidebar-resizing * {
 }
 
 .session-launcher-terminal__header span {
-  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
   color: rgba(232, 232, 232, 0.58);
   font-size: 11px;
 }
 
-.session-launcher-terminal__header em {
+.session-launcher-terminal__header span b,
+.session-launcher-terminal__header span i {
   flex: 0 0 auto;
-  color: rgba(232, 232, 232, 0.62);
+  color: rgba(232, 232, 232, 0.78);
+  font-style: normal;
+  font-weight: 650;
+}
+
+.session-launcher-terminal__header span i {
+  color: rgba(232, 232, 232, 0.34);
+  font-weight: 500;
+}
+
+.session-launcher-terminal__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(232, 232, 232, 0.13);
+  border-radius: 999px;
+  background: rgba(232, 232, 232, 0.07);
+  color: rgba(232, 232, 232, 0.72);
   font-size: 11px;
   font-style: normal;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.session-launcher-terminal__status.is-running {
+  border-color: rgba(89, 183, 132, 0.25);
+  background: rgba(89, 183, 132, 0.12);
+  color: #83d2a8;
+}
+
+.session-launcher-terminal__status.is-attention {
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: #f0a6a6;
+}
+
+.session-launcher-terminal__status.is-done {
+  border-color: rgba(104, 145, 202, 0.28);
+  background: rgba(104, 145, 202, 0.13);
+  color: #a9c5eb;
+}
+
+.session-launcher-terminal__status.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 48%, transparent);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: #ffb4b4;
 }
 
 .session-launcher-terminal__host {

@@ -55,14 +55,20 @@ enum SessionSurfaceLauncher {
         let launchCommand = resumeSessionId.map {
             AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: $0)
         } ?? command
+        let normalizedProvider = AgentLaunchCommand.normalizedProvider(provider)
+        let promptToDeliver = resumeSessionId == nil ? initialPrompt : nil
         let handle = try TerminalSessionBackendRegistry.shared.createSession(
             request: TerminalSessionRequest(
-                provider: AgentLaunchCommand.normalizedProvider(provider),
+                provider: normalizedProvider,
                 cwd: cwd,
                 command: launchCommand,
                 canvasId: canvasId,
                 nodeId: nodeId,
-                initialPrompt: resumeSessionId == nil ? initialPrompt : nil,
+                initialPrompt: promptToDeliver,
+                initialPromptSettleCeiling: initialPromptSettleCeiling(
+                    provider: normalizedProvider,
+                    initialPrompt: promptToDeliver
+                ),
                 preferredSessionId: reusablePreferredSessionId
             )
         )
@@ -194,5 +200,11 @@ enum SessionSurfaceLauncher {
             session.currentTask = prompt
             session.lastMessage = prompt
         }
+    }
+
+    private static func initialPromptSettleCeiling(provider: String, initialPrompt: String?) -> TimeInterval? {
+        let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !prompt.isEmpty else { return nil }
+        return provider == "codex" ? 90.0 : nil
     }
 }

@@ -505,6 +505,7 @@ const SessionRow = memo(function SessionRow({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const attention = sessionNeedsAttention(session) || unread
+  const done = session.status === 'completed' || session.status === 'done'
   const context = session.currentTask || session.latestRecap?.content || session.recentMessages[0]?.text || ''
   return (
     <article
@@ -513,6 +514,7 @@ const SessionRow = memo(function SessionRow({
         isInternalSession(session) ? 'sessions-row--internal' : 'sessions-row--external',
         selected ? 'is-selected' : '',
         attention ? 'sessions-row--attention' : '',
+        done ? 'sessions-row--done' : '',
         unread ? 'sessions-row--unread' : '',
       ].filter(Boolean).join(' ')}
       onClick={() => onSelect(session)}
@@ -533,6 +535,7 @@ const SessionRow = memo(function SessionRow({
               <span className="sessions-row__kind">{isInternalSession(session) ? t('sessions.internal') : t('sessions.external')}</span>
               {unread && <span className="sessions-row__unread">{t('sessions.unread')}</span>}
               {attention && <span className="sessions-row__attention">{t('sessions.attention')}</span>}
+              {done && <span className="sessions-row__done">{t('common.done')}</span>}
               {session.inboxPending > 0 && <span className="sessions-row__count">{session.inboxPending}</span>}
             </div>
           </div>
