@@ -47,6 +47,11 @@ type StateFilter = ArtifactDisplayState | 'all'
 type CanvasFilter = string | 'all'
 type ScopeFilter = CanvasScope | 'all'
 
+export interface ArtifactSessionFilter {
+  sessionId: string
+  title: string
+}
+
 const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
   'needs-review',
   'ready',
@@ -60,6 +65,8 @@ const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
   activeCanvasId: string
+  sessionFilter?: ArtifactSessionFilter | null
+  onClearSessionFilter?: () => void
   onOpenCanvas: (canvasId: string) => void
   onProposalCreated?: (proposal: PlanProposal) => void
 }
@@ -67,6 +74,8 @@ interface ArtifactsViewProps {
 export function ArtifactsView({
   canvases,
   activeCanvasId,
+  sessionFilter,
+  onClearSessionFilter,
   onOpenCanvas,
   onProposalCreated,
 }: ArtifactsViewProps) {
@@ -134,16 +143,22 @@ export function ArtifactsView({
   }, [canvasSignature, t])
 
   const allItems = useMemo(() => buildArtifactIndex(sources), [sources])
-  const counts = useMemo(() => artifactGroupCounts(allItems), [allItems])
+  const sessionScopedItems = useMemo(
+    () => sessionFilter?.sessionId
+      ? allItems.filter((item) => item.sessionId === sessionFilter.sessionId)
+      : allItems,
+    [allItems, sessionFilter?.sessionId],
+  )
+  const counts = useMemo(() => artifactGroupCounts(sessionScopedItems), [sessionScopedItems])
   const filteredItems = useMemo(
-    () => filterArtifactIndex(allItems, {
+    () => filterArtifactIndex(sessionScopedItems, {
       query,
       groupId: activeGroup,
       scope: scopeFilter,
       canvasId: canvasFilter,
       displayState: stateFilter,
     }),
-    [activeGroup, allItems, canvasFilter, query, scopeFilter, stateFilter],
+    [activeGroup, canvasFilter, query, scopeFilter, sessionScopedItems, stateFilter],
   )
   const selectedItem = useMemo(
     () => filteredItems.find((item) => item.key === selectedKey) ?? filteredItems[0] ?? null,
@@ -152,13 +167,13 @@ export function ArtifactsView({
   const canvasOptions = useMemo(
     () => canvases.filter((canvas) => (
       (scopeFilter === 'all' || canvas.scope === scopeFilter)
-      && allItems.some((item) => item.canvas.id === canvas.id)
+      && sessionScopedItems.some((item) => item.canvas.id === canvas.id)
     )),
-    [allItems, canvases, scopeFilter],
+    [canvases, scopeFilter, sessionScopedItems],
   )
   const stateOptions = useMemo(
-    () => ARTIFACT_STATE_ORDER.filter((state) => allItems.some((item) => item.displayState === state)),
-    [allItems],
+    () => ARTIFACT_STATE_ORDER.filter((state) => sessionScopedItems.some((item) => item.displayState === state)),
+    [sessionScopedItems],
   )
 
   useEffect(() => {
@@ -339,6 +354,17 @@ export function ArtifactsView({
                 ? t('artifacts.loadingSlots')
                 : t('artifacts.summary', { slots: filteredItems.length, canvases: sources.length })}
             </p>
+            {sessionFilter && (
+              <button
+                type="button"
+                className="artifacts-session-filter"
+                onClick={onClearSessionFilter}
+                title={t('artifacts.clearSessionFilter')}
+              >
+                <span>{t('artifacts.sessionFilter', { title: sessionFilter.title })}</span>
+                {onClearSessionFilter && <X size={13} aria-hidden />}
+              </button>
+            )}
           </div>
           <div className="artifacts-workspace__tools">
             <label className="artifacts-search">
@@ -402,7 +428,7 @@ export function ArtifactsView({
                 onClick={() => setActiveGroup('all')}
               >
                 <span>{t('artifacts.typeAll')}</span>
-                <strong>{allItems.length}</strong>
+                <strong>{sessionScopedItems.length}</strong>
               </button>
               {ARTIFACT_TYPE_GROUPS.map((group) => (
                 <button

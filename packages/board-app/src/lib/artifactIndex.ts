@@ -41,6 +41,7 @@ export interface ArtifactIndexItem {
   groupId: ArtifactTypeGroupId
   canvas: CanvasInfo
   node?: PlanningNode
+  sessionId?: string | null
   latest: PlannerArtifact
   artifacts: PlannerArtifact[]
   reviewStatus: ArtifactReviewStatus
@@ -64,6 +65,7 @@ export interface ArtifactIndexFilters {
   scope?: CanvasScope | 'all'
   canvasId?: string | 'all'
   displayState?: ArtifactDisplayState | 'all'
+  sessionId?: string | null
 }
 
 export function artifactSlotKey(artifact: PlannerArtifact): string {
@@ -136,6 +138,7 @@ export function buildArtifactIndex(sources: CanvasArtifactsSource[]): ArtifactIn
           groupId: classifyArtifactGroup(artifact),
           canvas: source.canvas,
           node,
+          sessionId: node?.sessionId ?? null,
           latest: artifact,
           artifacts: [artifact],
           reviewStatus: artifactReviewStatus(artifact),
@@ -161,6 +164,7 @@ export function filterArtifactIndex(
     if (filters.scope && filters.scope !== 'all' && item.canvas.scope !== filters.scope) return false
     if (filters.canvasId && filters.canvasId !== 'all' && item.canvas.id !== filters.canvasId) return false
     if (filters.displayState && filters.displayState !== 'all' && item.displayState !== filters.displayState) return false
+    if (filters.sessionId && item.sessionId !== filters.sessionId) return false
     return !query || item.haystack.includes(query)
   })
 }
@@ -193,5 +197,6 @@ function buildHaystack(item: ArtifactIndexItem): string {
     item.canvas.workspacePath,
     item.node?.title,
     item.node?.id,
+    item.sessionId,
   ].filter(Boolean).join(' ').toLowerCase()
 }

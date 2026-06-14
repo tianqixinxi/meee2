@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { ArtifactsView } from './ArtifactsView'
@@ -72,6 +73,13 @@ const node: PlanningNode = {
   subCanvasId: null,
 }
 
+const smokeNode: PlanningNode = {
+  ...node,
+  id: 'smoke-node',
+  title: 'Smoke validation',
+  sessionId: 'session-other',
+}
+
 function artifact(input: Partial<PlannerArtifact> & { id: string; kind: PlannerArtifact['kind'] }): PlannerArtifact {
   return {
     id: input.id,
@@ -119,11 +127,11 @@ const versions: PlannerArtifactVersion[] = [
   },
 ]
 
-function renderView() {
+function renderView(props: Partial<ComponentProps<typeof ArtifactsView>> = {}) {
   const onOpenCanvas = vi.fn()
   render(
     <I18nProvider>
-      <ArtifactsView canvases={canvases} activeCanvasId="monitor" onOpenCanvas={onOpenCanvas} />
+      <ArtifactsView canvases={canvases} activeCanvasId="monitor" onOpenCanvas={onOpenCanvas} {...props} />
     </I18nProvider>,
   )
   return { onOpenCanvas }
@@ -133,7 +141,21 @@ describe('ArtifactsView global index', () => {
   beforeEach(() => {
     apiMocks.fetchPlannerGraphState.mockImplementation((canvasId: string) => Promise.resolve({
       canvas: { id: canvasId, ownerId: 'kai', title: canvasId, plannerContext: '' },
-      nodes: [node],
+      nodes: canvasId === 'monitor'
+        ? [
+          {
+            ...node,
+            sessionId: 'session-a',
+          },
+          smokeNode,
+        ]
+        : [
+          {
+            ...node,
+            canvasId,
+            sessionId: 'session-other',
+          },
+        ],
       states: [],
       proposals: [],
       events: [],
@@ -165,6 +187,7 @@ describe('ArtifactsView global index', () => {
           artifact({
             id: 'smoke',
             kind: 'check-result',
+            nodeId: 'smoke-node',
             title: 'Smoke Test',
             reference: 'smoke.json',
             createdAt: '2026-06-01T10:00:00Z',
@@ -325,6 +348,22 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     await waitFor(() => {
       expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
     })
+  })
+
+  it('filters the artifact index to one session when launched from a session', async () => {
+    const onClearSessionFilter = vi.fn()
+    renderView({
+      sessionFilter: { sessionId: 'session-a', title: '新增 Session 原生 Terminal' },
+      onClearSessionFilter,
+    })
+
+    expect(await screen.findByText('Session: 新增 Session 原生 Terminal')).toBeInTheDocument()
+    await screen.findAllByText('Release PRD')
+    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect(screen.queryByText('GitHub PR #128')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Session: 新增 Session 原生 Terminal' }))
+    expect(onClearSessionFilter).toHaveBeenCalled()
   })
 
   it('creates a review proposal from the artifact detail actions', async () => {

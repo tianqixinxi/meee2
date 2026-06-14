@@ -680,7 +680,11 @@ enum BoardAPI {
                 permissionMode: body?.permissionMode,
                 planMode: body?.planMode == true
             )
-            let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: provider,
+                planMode: body?.planMode == true,
+                initialPrompt: body?.initialPrompt
+            )
             let surface = try createInternalSessionSurface(
                 provider: provider,
                 cwd: cwd,
@@ -688,7 +692,7 @@ enum BoardAPI {
                 createIfMissing: false,
                 canvasId: nil,
                 nodeId: nil,
-                initialPrompt: prompt?.isEmpty == false ? prompt : nil
+                initialPrompt: prompt
             )
             return jsonResponse(
                 SpawnResponse(ok: true, project: SessionProjectDTO(project), surface: BoardSessionSurfaceDTO(surface)),
@@ -721,7 +725,11 @@ enum BoardAPI {
                 permissionMode: body?.permissionMode,
                 planMode: body?.planMode == true
             )
-            let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: provider,
+                planMode: body?.planMode == true,
+                initialPrompt: body?.initialPrompt
+            )
             let surface = try createInternalSessionSurface(
                 provider: provider,
                 cwd: cwd,
@@ -729,7 +737,7 @@ enum BoardAPI {
                 createIfMissing: false,
                 canvasId: nil,
                 nodeId: nil,
-                initialPrompt: prompt?.isEmpty == false ? prompt : nil
+                initialPrompt: prompt
             )
             return jsonResponse(
                 SpawnResponse(ok: true, cwd: cwd, surface: BoardSessionSurfaceDTO(surface)),
