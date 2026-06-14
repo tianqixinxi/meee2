@@ -219,7 +219,7 @@ public struct Meee2OnlineCallbackAPI {
         <html>
         <head>
             <meta charset="utf-8">
-            <title>Connected to meee2</title>
+            <title>Connected to Meee2</title>
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 50px; }
                 .success { color: #22c55e; font-size: 48px; }
@@ -236,7 +236,7 @@ public struct Meee2OnlineCallbackAPI {
             <div class="success">✓</div>
             <h1>Connected!</h1>
             <p>You are now connected to <strong>\(teamName)</strong></p>
-            <p>Your Claude sessions will sync to meee2 dashboard.</p>
+            <p>Your Claude sessions will sync to Meee2 dashboard.</p>
             <div class="close-hint">This window will close automatically...</div>
         </body>
         </html>

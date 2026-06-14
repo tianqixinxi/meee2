@@ -310,7 +310,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         //   - DragRegionWebView.hitTest 对顶 28pt 返 nil → titlebar 拿事件，
         //     macOS 原生处理拖窗口 / 双击放大。
         // 不设 backgroundColor / appearance —— 让系统按 webview 实际像素显示。
-        window.title = "meee2 Board"
+        window.title = "Meee2 Board"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.miniwindowImage = AppIconProvider.loadIcon() ?? NSApp.applicationIconImage

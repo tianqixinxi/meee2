@@ -727,7 +727,7 @@ export function InspectorArtifactBody({
                 refresh。这跟 step/session 的 input.external[].sync_session
                 snapshot pattern 是同一抽象。 */}
             <p className="planner-node-modal__view-hint">
-              💡 也可以让 meee2 AI 帮你配 — 在节点对话里说"接 Notion 的 X 文档"之类,
+              💡 也可以让 Meee2 AI 帮你配 — 在节点对话里说"接 Notion 的 X 文档"之类,
               AI 会 propose <code>setArtifactDataSource</code> 把绑定写好。
             </p>
           </div>

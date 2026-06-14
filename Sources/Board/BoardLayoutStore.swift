@@ -898,7 +898,7 @@ public final class BoardLayoutStore {
             ensureDefaultCanvasesLocked(&store, sessionIds: [])
             let context = currentContext()
             if scope == .team && context.teamId.isEmpty {
-                throw storeError("team canvas requires meee2 Online connection")
+                throw storeError("team canvas requires Meee2 Online connection")
             }
             let now = Date()
             let id = UUID().uuidString.lowercased()
@@ -953,7 +953,7 @@ public final class BoardLayoutStore {
             }
             let context = currentContext()
             if let rawScope, rawScope == .team && context.teamId.isEmpty {
-                throw storeError("team template requires meee2 Online connection")
+                throw storeError("team template requires Meee2 Online connection")
             }
             let now = Date()
             if let rawName {
@@ -1037,7 +1037,7 @@ public final class BoardLayoutStore {
             }
             let context = currentContext()
             if scope == .team && context.teamId.isEmpty {
-                throw storeError("team canvas requires meee2 Online connection")
+                throw storeError("team canvas requires Meee2 Online connection")
             }
             let now = Date()
             let previous = store.canvases[idx]

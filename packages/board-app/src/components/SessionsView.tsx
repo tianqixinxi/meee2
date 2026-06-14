@@ -700,7 +700,7 @@ function SessionDetail({
     setControlError(null)
     setControlStatus(null)
     try {
-      await respondToSessionPermission(session.id, decision, decision === 'deny' ? 'Denied from meee2 Board' : undefined)
+      await respondToSessionPermission(session.id, decision, decision === 'deny' ? 'Denied from Meee2 Board' : undefined)
       setControlStatus(t(decision === 'allow' ? 'sessions.permissionAllowed' : 'sessions.permissionDenied'))
       void refreshTimeline()
     } catch (err) {
