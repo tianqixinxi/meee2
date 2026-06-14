@@ -15905,6 +15905,12 @@ body.session-launcher-sidebar-resizing * {
   padding: 9px 10px;
 }
 
+.session-launcher-modal__dialog input:focus {
+  border-color: var(--border-strong);
+  background: var(--bg);
+  box-shadow: none;
+}
+
 .session-launcher-modal__dialog footer {
   grid-template-columns: 1fr auto auto;
   align-items: center;
@@ -15999,6 +16005,12 @@ body.session-launcher-sidebar-resizing * {
 
 .session-launcher__composer textarea::placeholder {
   color: color-mix(in srgb, var(--text-faint) 72%, transparent);
+}
+
+.session-launcher__composer textarea:focus {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .session-launcher__composer-footer {
