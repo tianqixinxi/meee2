@@ -596,9 +596,8 @@ private final class TerminalPaneRegistry {
     func focus(surface: TerminalSessionSnapshot, tracePayload: [String: Any]? = nil) -> Bool {
         let startedAt = Self.timestampMillis()
         let key = surface.surfaceId
-        if activeKey != key {
-            activeController?.hide()
-        }
+        let retiringKey = activeKey != key ? activeKey : nil
+        let retiringController = retiringKey.flatMap { controllers[$0] }
         let controller: NativeTerminalPaneControlling
         if let cached = controllers[key] {
             Self.logTrace(
@@ -640,6 +639,7 @@ private final class TerminalPaneRegistry {
         remember(key)
         attach(controller)
         controller.focus()
+        retire(controller: retiringController, key: retiringKey)
         scheduleStabilizedLayouts(for: key, tracePayload: tracePayload)
         Self.logTrace(
             tracePayload,
@@ -683,8 +683,20 @@ private final class TerminalPaneRegistry {
             controller.paneView.removeFromSuperview()
             controller.paneView.autoresizingMask = [.width, .height]
             hostView.addSubview(controller.paneView)
+        } else if hostView.subviews.last !== controller.paneView {
+            controller.paneView.removeFromSuperview()
+            hostView.addSubview(controller.paneView)
         }
         controller.layout(in: hostView.bounds, hidden: false)
+    }
+
+    private func retire(controller: NativeTerminalPaneControlling?, key: String?) {
+        guard let controller, let key else { return }
+        DispatchQueue.main.async { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            guard self.activeKey != key else { return }
+            controller.hide()
+        }
     }
 
     private func scheduleStabilizedLayouts(for key: String, tracePayload: [String: Any]?) {

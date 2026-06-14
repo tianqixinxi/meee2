@@ -175,6 +175,62 @@ describe('SessionLauncherView', () => {
     await waitFor(() => expect(screen.queryByText('Task 6')).not.toBeInTheDocument())
   })
 
+  it('keeps other expanded projects open after starting a project session', async () => {
+    const stocksProject: SessionProject = {
+      ...project,
+      id: 'project-stocks',
+      name: 'stocks',
+      path: '/Users/kai/Code/stocks',
+    }
+    api.fetchSessionProjects.mockResolvedValue({ projects: [project, stocksProject] })
+    api.createProjectSession.mockResolvedValue({
+      project,
+      surface: {
+        provider: 'codex',
+        sessionId: 'new-session',
+        surfaceId: 'new-surface',
+        title: 'Codex - meee2-workspace',
+        cwd: project.path,
+        command: 'codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
+        status: 'running',
+        createdAt: '2026-06-14T00:00:00Z',
+        updatedAt: '2026-06-14T00:00:00Z',
+      },
+    })
+    const sessions = [
+      makeSession({
+        id: 'project-session',
+        recentMessages: [{ role: 'user', text: '当前项目会话' }],
+        project: project.path,
+        lastActivity: new Date(Date.now() - 60_000).toISOString(),
+      }),
+      makeSession({
+        id: 'stocks-session',
+        recentMessages: [{ role: 'user', text: '股票项目会话' }],
+        project: stocksProject.path,
+        surfaceId: 'stocks-surface',
+        lastActivity: new Date(Date.now() - 5 * 60_000).toISOString(),
+      }),
+    ]
+
+    render(<SessionLauncherView state={makeState(sessions)} />)
+
+    await screen.findByText('当前项目会话')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stocks' }))
+    expect(await screen.findByText('股票项目会话')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Start session/i }))
+
+    await waitFor(() => {
+      expect(api.createProjectSession).toHaveBeenCalledWith({
+        projectId: 'project-a',
+        provider: 'codex',
+        initialPrompt: undefined,
+      })
+    })
+    expect(screen.getByText('股票项目会话')).toBeInTheDocument()
+  })
+
   it('does not show counts and does not indent temporary sessions', async () => {
     const temporarySession = makeSession({
       id: 'temp-existing',
@@ -259,6 +315,46 @@ describe('SessionLauncherView', () => {
         surfaceId: 'restored-surface',
       }))
     })
+  })
+
+  it('switches live native terminal targets without hiding the current pane first', async () => {
+    const sessions = [
+      makeSession({
+        id: 'live-a',
+        recentMessages: [{ role: 'user', text: '继续 A' }],
+        surfaceId: 'surface-a',
+        lastActivity: new Date(Date.now() - 60_000).toISOString(),
+      }),
+      makeSession({
+        id: 'live-b',
+        recentMessages: [{ role: 'user', text: '继续 B' }],
+        surfaceId: 'surface-b',
+        lastActivity: new Date(Date.now() - 30_000).toISOString(),
+      }),
+    ]
+    render(<SessionLauncherView state={makeState(sessions)} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(await screen.findByRole('button', { name: /继续 A running/i }))
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        sessionId: 'live-a',
+        surfaceId: 'surface-a',
+      }))
+    })
+
+    api.syncNativeSessionsWorkspace.mockClear()
+    fireEvent.click(await screen.findByRole('button', { name: /继续 B running/i }))
+
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        sessionId: 'live-b',
+        surfaceId: 'surface-b',
+      }))
+    })
+    expect(api.syncNativeSessionsWorkspace.mock.calls.some(([payload]) => payload.phase === 'hide')).toBe(false)
   })
 
   it('uses task context instead of internal node transcript titles', async () => {

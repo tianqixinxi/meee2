@@ -35,7 +35,6 @@ import {
   updateSessionControl,
   type NativeTerminalRect,
 } from '../api'
-import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
 import { nativeTerminalTargetForSession } from '../lib/sessionTerminal'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, togglePinned } from '../sessionOverrides'
@@ -227,7 +226,7 @@ export function SessionLauncherView({
 
   const selectProject = useCallback((project: SessionProject) => {
     setSelection({ kind: 'project', projectId: project.id })
-    setExpandedProjectIds(new Set([project.id]))
+    setExpandedProjectIds((current) => addToSet(current, project.id))
   }, [])
 
   const openProjectComposer = useCallback((project: SessionProject) => {
@@ -245,7 +244,7 @@ export function SessionLauncherView({
       })
       setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)])
       setSelection({ kind: 'project', projectId: project.id })
-      setExpandedProjectIds(new Set([project.id]))
+      setExpandedProjectIds((current) => addToSet(current, project.id))
       onToast?.('success', `Added ${project.name}`)
     } catch (err) {
       onToast?.('error', (err as Error).message || 'Failed to add folder')
@@ -329,7 +328,7 @@ export function SessionLauncherView({
         sessionId: result.surface.sessionId,
         surfaceId: result.surface.surfaceId,
       })
-      setExpandedProjectIds(new Set([result.project.id]))
+      setExpandedProjectIds((current) => addToSet(current, result.project.id))
       onSessionCreated?.()
       onToast?.('success', `Started ${spawnProviderLabel(selectedProjectProvider)} in ${result.project.name}`)
     } catch (err) {
@@ -979,7 +978,6 @@ function SessionLauncherTerminal({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
-  const layoutTimersRef = useRef<number[]>([])
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
@@ -1026,16 +1024,9 @@ function SessionLauncherTerminal({
     })
   }, [syncTerminal])
 
-  const scheduleStabilizedLayouts = useCallback(() => {
-    layoutTimersRef.current.forEach((timer) => window.clearTimeout(timer))
-    layoutTimersRef.current = NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS.map((delay) => window.setTimeout(() => {
-      syncTerminal('layout', true)
-    }, delay))
-  }, [syncTerminal])
-
   useLayoutEffect(() => {
     syncTerminal('show', true)
-    scheduleStabilizedLayouts()
+    scheduleLayout()
     const host = hostRef.current
     if (!host) return undefined
     const resizeObserver = new ResizeObserver(() => scheduleLayout())
@@ -1045,19 +1036,18 @@ function SessionLauncherTerminal({
     window.addEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
     return () => {
       if (layoutFrameRef.current !== null) window.cancelAnimationFrame(layoutFrameRef.current)
-      layoutTimersRef.current.forEach((timer) => window.clearTimeout(timer))
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleWindowLayout)
       window.removeEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
-      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
       lastRectRef.current = null
     }
-  }, [scheduleLayout, scheduleStabilizedLayouts, syncTerminal, targetSessionId, targetSurfaceId])
+  }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId])
 
   useEffect(() => {
-    syncTerminal('focus', true)
-    scheduleStabilizedLayouts()
-  }, [scheduleStabilizedLayouts, syncTerminal])
+    return () => {
+      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
+    }
+  }, [])
 
   if (!canOpenNativeTerminal) {
     return (
@@ -1088,6 +1078,11 @@ function toggleSet(values: Set<string>, value: string): Set<string> {
   if (next.has(value)) next.delete(value)
   else next.add(value)
   return next
+}
+
+function addToSet(values: Set<string>, value: string): Set<string> {
+  if (values.has(value)) return values
+  return new Set([...values, value])
 }
 
 function sessionMatchesSelection(session: Session, selection: Extract<Selection, { kind: 'session' }>): boolean {
