@@ -14,7 +14,7 @@ struct SessionTerminalInfo: Codable {
     var providerResumeSessionId: String?
     var canvasId: String?
     var nodeId: String?
-    var sessionScope: String? = nil
+    var sessionScope: String?
     var backend: String?
     var fallbackReason: String?
 
