@@ -55,7 +55,7 @@ import type { AgentPermissionMode, BoardState, Session, SessionProject, SpawnPro
 interface Props {
   state: BoardState | null
   onSessionCreated?: () => void
-  onOpenSessionArtifacts?: (session: Session, title: string) => void
+  onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
   onToast?: (kind: 'success' | 'error', text: string) => void
 }
 
@@ -67,6 +67,15 @@ type Selection =
 type RestoredTerminalTarget = {
   sessionId: string
   surfaceId: string
+}
+
+export type SessionArtifactFilterPayload = {
+  sessionId: string
+  title: string
+  providerResumeSessionId?: string | null
+  surfaceId?: string | null
+  project?: string | null
+  projectName?: string | null
 }
 
 const DEFAULT_PROMPT = ''
@@ -300,6 +309,10 @@ export function SessionLauncherView({
     () => sessions.filter((session) => session.controlState !== 'archived' && session.controlState !== 'hidden' && !locallyArchivedSessionIds.has(session.id)),
     [locallyArchivedSessionIds, sessions],
   )
+  const launcherSessions = useMemo(
+    () => collapseRestoredLauncherSessions(activeSessions, selection, restoredSessionTargets),
+    [activeSessions, restoredSessionTargets, selection],
+  )
 
   const grouped = useMemo(() => {
     const byProject = new Map<string, Session[]>()
@@ -308,7 +321,7 @@ export function SessionLauncherView({
     const temporary: Session[] = []
     const external: Session[] = []
 
-    for (const session of activeSessions) {
+    for (const session of launcherSessions) {
       if (pinnedSessionIds.has(session.id)) {
         pinned.push(session)
         continue
@@ -327,17 +340,17 @@ export function SessionLauncherView({
     temporary.sort(compareSessions)
     external.sort(compareSessions)
     return { byProject, pinned, temporary, external }
-  }, [activeSessions, explicitProjects, pinnedSessionIds, projectByPath])
+  }, [explicitProjects, launcherSessions, pinnedSessionIds, projectByPath])
 
   const latestProjectSessionTimes = useMemo(() => {
     const times = new Map<string, number>()
-    for (const session of activeSessions) {
+    for (const session of launcherSessions) {
       const project = projectByPath.get(normalizePath(session.project))
       if (!project) continue
       times.set(project.id, Math.max(times.get(project.id) ?? 0, sessionTime(session)))
     }
     return times
-  }, [activeSessions, projectByPath])
+  }, [launcherSessions, projectByPath])
 
   const sortedProjects = useMemo(() => {
     return [...explicitProjects].sort((a, b) => {
@@ -376,7 +389,7 @@ export function SessionLauncherView({
 
   useEffect(() => {
     if (selection?.kind !== 'session') return
-    const session = activeSessions.find((item) => sessionMatchesSelection(item, selection))
+    const session = launcherSessions.find((item) => sessionMatchesSelection(item, selection))
     if (!session) return
     if (pinnedSessionIds.has(session.id)) {
       setExpandedSessionGroups((current) => addToSet(current, 'pinned'))
@@ -393,7 +406,7 @@ export function SessionLauncherView({
       return
     }
     setExpandedSessionGroups((current) => addToSet(current, TEMPORARY_GROUP_ID))
-  }, [activeSessions, pinnedSessionIds, projectByPath, selection])
+  }, [launcherSessions, pinnedSessionIds, projectByPath, selection])
 
   const selectedProject = useMemo(() => {
     if (selection?.kind !== 'project') return null
@@ -402,11 +415,18 @@ export function SessionLauncherView({
 
   const selectedSession = useMemo(() => {
     if (selection?.kind !== 'session') return null
-    return sessions.find((session) => sessionMatchesSelection(session, selection)) ?? null
+    return selectedSessionForSelection(sessions, selection)
   }, [selection, sessions])
   const selectedRestoredTarget = selection?.kind === 'session'
     ? restoredSessionTargets[selection.sessionId] ?? null
     : null
+  const selectedRestoredSession = useMemo(() => {
+    if (!selectedRestoredTarget) return null
+    return sessions.find((session) => {
+      if (selectedRestoredTarget.sessionId && session.id === selectedRestoredTarget.sessionId) return true
+      return Boolean(selectedRestoredTarget.surfaceId && session.surfaceId === selectedRestoredTarget.surfaceId)
+    }) ?? null
+  }, [selectedRestoredTarget, sessions])
 
   const selectedProjectProvider = selectedProject
     ? providerByProjectId[selectedProject.id] ?? selectedProject.preferredProvider
@@ -578,10 +598,12 @@ export function SessionLauncherView({
   const handleSelectSession = useCallback((session: Session) => {
     setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
-    if (!sessionCanBeReopened(session) || reopeningSessionId === session.id) return
+    const resumeSessionId = providerResumeTargetForSession(session)
+    if (!sessionCanBeReopened(session) || !resumeSessionId || reopeningSessionId === session.id) return
     setReopeningSessionId(session.id)
     reopenLauncherSession({
       sessionId: session.id,
+      providerResumeSessionId: resumeSessionId,
       provider: launcherProviderForSession(session),
       cwd: session.project || undefined,
     })
@@ -923,8 +945,10 @@ export function SessionLauncherView({
         {selection?.kind === 'session' ? (
           <SessionLauncherTerminal
             session={selectedSession}
+            statusSession={selectedRestoredSession}
             sessionId={selectedRestoredTarget?.sessionId ?? selection.sessionId}
             surfaceId={selectedRestoredTarget?.surfaceId ?? selection.surfaceId}
+            usingRestoredSurface={Boolean(selectedRestoredTarget)}
             reopening={reopeningSessionId === selection.sessionId && !selectedRestoredTarget}
             titleOverrides={titleOverrides}
             theme={resolvedTheme}
@@ -1001,7 +1025,7 @@ export function SessionLauncherView({
         onOpenArtifacts={() => {
           const title = sessionDisplayTitle(sessionMenu.session, titleOverrides)
           setSessionMenu(null)
-          onOpenSessionArtifacts?.(sessionMenu.session, title)
+          onOpenSessionArtifacts?.(sessionMenu.session, title, sessionArtifactFilter(sessionMenu.session, title))
         }}
       />,
       document.body,
@@ -1397,7 +1421,7 @@ function SessionList({
   return (
     <div className={`session-launcher__session-list${nested ? ' session-launcher__session-list--nested' : ''}`}>
       {visible.map((session) => {
-        const active = selection?.kind === 'session' && sessionMatchesSelection(session, selection)
+        const active = selection?.kind === 'session' && session.id === selection.sessionId
         return (
           <SessionRow
             key={session.id}
@@ -1761,20 +1785,24 @@ function SessionComposer({
 
 function SessionLauncherTerminal({
   session,
+  statusSession,
   sessionId,
   surfaceId,
+  usingRestoredSurface,
   reopening,
   titleOverrides,
   theme,
   onOpenSessionArtifacts,
 }: {
   session: Session | null
+  statusSession?: Session | null
   sessionId: string
   surfaceId?: string | null
+  usingRestoredSurface?: boolean
   reopening: boolean
   titleOverrides: Record<string, string>
   theme: 'light' | 'dark'
-  onOpenSessionArtifacts?: (session: Session, title: string) => void
+  onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
 }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -1865,7 +1893,10 @@ function SessionLauncherTerminal({
   const title = session ? sessionDisplayTitle(session, titleOverrides) : t('sessions.launcher.startingSession')
   const runtime = sessionRuntimeLabel(session)
   const project = sessionProjectLabel(session)
-  const status = sessionTerminalStatus(session, t)
+  const fallbackRunningSession = usingRestoredSurface && session
+    ? { ...session, status: 'running', surfaceStatus: 'running' }
+    : session
+  const status = sessionTerminalStatus(statusSession ?? fallbackRunningSession, t)
   const canOpenArtifacts = Boolean(session && onOpenSessionArtifacts)
 
   return (
@@ -1885,7 +1916,7 @@ function SessionLauncherTerminal({
             <button
               type="button"
               className="session-launcher-terminal__artifact-button"
-              onClick={() => onOpenSessionArtifacts?.(session, title)}
+              onClick={() => onOpenSessionArtifacts?.(session, title, sessionArtifactFilter(session, title))}
               aria-label={t('sessions.launcher.openArtifactsForSession', { title })}
               title={t('sessions.launcher.openArtifacts')}
             >
@@ -1916,6 +1947,55 @@ function sessionMatchesSelection(session: Session, selection: Extract<Selection,
   return Boolean(selection.surfaceId && session.surfaceId && selection.surfaceId === session.surfaceId)
 }
 
+function selectedSessionForSelection(
+  sessions: readonly Session[],
+  selection: Extract<Selection, { kind: 'session' }>,
+): Session | null {
+  return sessions.find((session) => session.id === selection.sessionId)
+    ?? sessions.find((session) => sessionMatchesSelection(session, selection))
+    ?? null
+}
+
+function collapseRestoredLauncherSessions(
+  sessions: Session[],
+  selection: Selection | null,
+  restoredTargets: Record<string, RestoredTerminalTarget>,
+): Session[] {
+  const hiddenSessionIds = new Set<string>()
+  const hiddenSurfaceIds = new Set<string>()
+
+  const addRestoredTarget = (sourceSessionId: string | undefined, target: RestoredTerminalTarget | null | undefined) => {
+    if (!sourceSessionId || !target) return
+    if (target.sessionId && target.sessionId !== sourceSessionId) hiddenSessionIds.add(target.sessionId)
+    if (target.surfaceId) hiddenSurfaceIds.add(target.surfaceId)
+  }
+
+  for (const [sourceSessionId, target] of Object.entries(restoredTargets)) {
+    addRestoredTarget(sourceSessionId, target)
+  }
+  if (selection?.kind === 'session') {
+    addRestoredTarget(selection.sessionId, selection.surfaceId
+      ? { sessionId: '', surfaceId: selection.surfaceId }
+      : restoredTargets[selection.sessionId])
+  }
+
+  if (hiddenSessionIds.size === 0 && hiddenSurfaceIds.size === 0) return sessions
+  const sourceSessionIds = new Set(
+    [
+      ...Object.keys(restoredTargets),
+      selection?.kind === 'session' ? selection.sessionId : null,
+    ].filter((id): id is string => Boolean(id)),
+  )
+  const hasSourceSession = sessions.some((session) => sourceSessionIds.has(session.id))
+  if (!hasSourceSession) return sessions
+
+  return sessions.filter((session) => {
+    if (sourceSessionIds.has(session.id)) return true
+    if (hiddenSessionIds.has(session.id)) return false
+    return !(session.surfaceId && hiddenSurfaceIds.has(session.surfaceId))
+  })
+}
+
 function sessionScope(session: Session): 'meee2' | 'canvas' | 'node' | 'external' {
   switch (session.sessionScope) {
   case 'meee2':
@@ -1929,8 +2009,34 @@ function sessionScope(session: Session): 'meee2' | 'canvas' | 'node' | 'external
 
 function sessionCanBeReopened(session: Session): boolean {
   if (nativeTerminalTargetForSession(session).surfaceId) return false
+  if (!providerResumeTargetForSession(session)) return false
   if (session.terminalBackend === 'ghostty-surface') return true
   return session.sessionScope === 'meee2' && session.openTarget === 'web-fallback'
+}
+
+function providerResumeTargetForSession(session: Session): string | null {
+  const candidates = [session.providerResumeSessionId, session.id]
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim()
+    if (trimmed && isLikelyProviderResumeSessionId(trimmed)) return trimmed
+  }
+  return null
+}
+
+function isLikelyProviderResumeSessionId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function sessionArtifactFilter(session: Session, title: string): SessionArtifactFilterPayload {
+  const project = session.project?.trim() || null
+  return {
+    sessionId: session.id,
+    title,
+    providerResumeSessionId: session.providerResumeSessionId ?? null,
+    surfaceId: session.surfaceId ?? null,
+    project,
+    projectName: project ? basename(project) : null,
+  }
 }
 
 function launcherProviderForSession(session: Session): SpawnProvider | undefined {
@@ -1948,6 +2054,11 @@ function projectForSession(session: Session, projects: SessionProject[]): Sessio
 
 function normalizePath(path: string): string {
   return path.trim().replace(/\/+$/, '')
+}
+
+function basename(path: string): string {
+  const normalized = normalizePath(path)
+  return normalized.split('/').filter(Boolean).pop() ?? normalized
 }
 
 function normalizePermissionMode(provider: SpawnProvider, mode: AgentPermissionMode | undefined): AgentPermissionMode {

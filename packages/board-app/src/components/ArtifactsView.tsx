@@ -50,6 +50,10 @@ type ScopeFilter = CanvasScope | 'all'
 export interface ArtifactSessionFilter {
   sessionId: string
   title: string
+  providerResumeSessionId?: string | null
+  surfaceId?: string | null
+  project?: string | null
+  projectName?: string | null
 }
 
 const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
@@ -145,9 +149,9 @@ export function ArtifactsView({
   const allItems = useMemo(() => buildArtifactIndex(sources), [sources])
   const sessionScopedItems = useMemo(
     () => sessionFilter?.sessionId
-      ? allItems.filter((item) => item.sessionId === sessionFilter.sessionId)
+      ? allItems.filter((item) => artifactMatchesSessionFilter(item, sessionFilter))
       : allItems,
-    [allItems, sessionFilter?.sessionId],
+    [allItems, sessionFilter],
   )
   const counts = useMemo(() => artifactGroupCounts(sessionScopedItems), [sessionScopedItems])
   const filteredItems = useMemo(
@@ -552,6 +556,44 @@ function SelectFilter({
       </select>
     </label>
   )
+}
+
+function artifactMatchesSessionFilter(item: ArtifactIndexItem, filter: ArtifactSessionFilter): boolean {
+  const ids = [
+    filter.sessionId,
+    filter.providerResumeSessionId,
+    filter.surfaceId,
+  ].map(normalizeToken).filter(Boolean)
+  const itemSessionId = normalizeToken(item.sessionId)
+  if (itemSessionId && ids.includes(itemSessionId)) return true
+
+  const projectTokens = [
+    filter.project,
+    filter.projectName,
+  ].flatMap(projectMatchTokens)
+  if (projectTokens.length === 0) return false
+
+  const canvasTokens = [
+    item.canvas.workspacePath,
+    item.canvas.name,
+    item.canvas.id,
+  ].flatMap(projectMatchTokens)
+  return canvasTokens.some((token) => projectTokens.includes(token))
+}
+
+function projectMatchTokens(value: string | null | undefined): string[] {
+  const normalized = normalizePathToken(value)
+  if (!normalized) return []
+  const base = normalized.split('/').filter(Boolean).pop()
+  return [normalized, base].filter((token): token is string => Boolean(token))
+}
+
+function normalizeToken(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function normalizePathToken(value: string | null | undefined): string {
+  return normalizeToken(value).replace(/\/+$/, '')
 }
 
 function ArtifactBadges({

@@ -119,6 +119,7 @@ enum SessionSurfaceLauncher {
 
     static func restoreLauncherSession(
         sessionId: String,
+        providerResumeSessionId providerResumeSessionIdOverride: String? = nil,
         provider providerOverride: String? = nil,
         cwd cwdOverride: String? = nil
     ) throws -> SessionSurfaceRestoreResult {
@@ -137,8 +138,24 @@ enum SessionSurfaceLauncher {
             sessionData: sessionData,
             fallbackSessionId: sessionId
         )
+        if let existingSurface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
+           isReusableInternalSurface(existingSurface) {
+            return SessionSurfaceRestoreResult(surface: existingSurface, action: .reuse, providerResumeSessionId: nil)
+        }
+        let explicitResumeId = providerResumeSessionIdOverride?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resumeSessionId = explicitResumeId
+            .flatMap { isProviderResumeSessionId($0) ? $0 : nil }
+            ?? providerResumeSessionId(forSessionId: sessionId)
+        guard let resumeSessionId else {
+            throw NSError(
+                domain: "BoardAPI",
+                code: 409,
+                userInfo: [NSLocalizedDescriptionKey: "session cannot be resumed because no provider resume id was recorded"]
+            )
+        }
         return try restoreSessionSurface(
-            sessionId: sessionId,
+            sessionId: resumeSessionId,
             cwd: cwd,
             freshCommand: AgentLaunchCommand.fullAccessCommand(forProvider: provider),
             resumeCommand: { AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: $0) },

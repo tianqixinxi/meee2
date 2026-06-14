@@ -16566,6 +16566,16 @@ body.session-launcher-sidebar-resizing * {
   color: rgba(232, 232, 232, 0.7);
 }
 
+.session-launcher-terminal__artifact-button > svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.9;
+}
+
 .session-launcher-terminal__artifact-button:hover,
 .session-launcher-terminal__artifact-button:focus-visible {
   border-color: rgba(232, 232, 232, 0.24);

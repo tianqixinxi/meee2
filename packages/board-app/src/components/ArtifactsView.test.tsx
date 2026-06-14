@@ -366,6 +366,36 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     expect(onClearSessionFilter).toHaveBeenCalled()
   })
 
+  it('filters session artifacts by provider resume id when the visible session id differs', async () => {
+    renderView({
+      sessionFilter: {
+        sessionId: 'historical-session',
+        providerResumeSessionId: 'session-a',
+        title: '历史 Session',
+      },
+    })
+
+    expect(await screen.findByText('Session: 历史 Session')).toBeInTheDocument()
+    await screen.findAllByText('Release PRD')
+    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect(screen.queryByText('GitHub PR #128')).not.toBeInTheDocument()
+  })
+
+  it('falls back to project name when a session has no node-bound artifact id match', async () => {
+    renderView({
+      sessionFilter: {
+        sessionId: 'unbound-session',
+        title: 'Release project session',
+        projectName: 'release',
+      },
+    })
+
+    expect(await screen.findByText('Session: Release project session')).toBeInTheDocument()
+    await screen.findAllByText('GitHub PR #128')
+    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
+  })
+
   it('creates a review proposal from the artifact detail actions', async () => {
     renderView()
 

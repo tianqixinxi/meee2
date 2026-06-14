@@ -753,6 +753,7 @@ enum BoardAPI {
         struct ReopenRequest: Decodable {
             let provider: String?
             let cwd: String?
+            let providerResumeSessionId: String?
         }
         struct ReopenResponse: Encodable {
             let ok: Bool
@@ -766,6 +767,7 @@ enum BoardAPI {
         do {
             let result = try SessionSurfaceLauncher.restoreLauncherSession(
                 sessionId: id,
+                providerResumeSessionId: body?.providerResumeSessionId,
                 provider: body?.provider,
                 cwd: body?.cwd
             )
@@ -778,7 +780,7 @@ enum BoardAPI {
             return errorResponse(
                 err.code == 404 ? "session_not_found" : "session_reopen_failed",
                 err.localizedDescription,
-                status: err.code == 404 ? 404 : 400
+                status: err.code == 404 ? 404 : (err.code == 409 ? 409 : 400)
             )
         } catch {
             return errorResponse("session_reopen_failed", error.localizedDescription, status: 400)

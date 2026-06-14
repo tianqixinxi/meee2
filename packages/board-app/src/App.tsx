@@ -1183,8 +1183,8 @@ export default function App() {
     setWorkspaceMode(nextMode)
   }, [])
 
-  const handleOpenSessionArtifacts = useCallback((session: Session, title: string) => {
-    setArtifactSessionFilter({ sessionId: session.id, title })
+  const handleOpenSessionArtifacts = useCallback((_session: Session, _title: string, filter: ArtifactSessionFilter) => {
+    setArtifactSessionFilter(filter)
     setWorkspaceMode('artifacts')
   }, [])
 
