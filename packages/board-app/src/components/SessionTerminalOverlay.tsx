@@ -7,6 +7,7 @@ import {
   nativeTerminalTargetForSession,
   type SessionOpenTarget,
 } from '../lib/sessionTerminal'
+import { useTheme } from '../lib/theme'
 import type { CanvasInfo, Session } from '../types'
 
 interface Props {
@@ -23,6 +24,7 @@ export function SessionTerminalOverlay({
   onClose,
 }: Props) {
   const { t } = useI18n()
+  const { resolvedTheme } = useTheme()
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
   const layoutTimerRefs = useRef<number[]>([])
@@ -46,6 +48,7 @@ export function SessionTerminalOverlay({
       syncNativeSessionsWorkspace({
         phase: 'hide',
         mode: 'terminal',
+        theme: resolvedTheme,
         traceId: traceIdRef.current,
         clickStartedAtMs: switchStartedAtRef.current,
         sentAtMs: Date.now(),
@@ -70,12 +73,13 @@ export function SessionTerminalOverlay({
       rect: nextRect,
       sessionId: terminalTarget.sessionId,
       surfaceId: terminalTarget.surfaceId,
+      theme: resolvedTheme,
       traceId: traceIdRef.current,
       clickStartedAtMs: switchStartedAtRef.current,
       sentAtMs,
       webPhase: `overlay.${phase}`,
     })
-  }, [terminalTarget.sessionId, terminalTarget.surfaceId])
+  }, [resolvedTheme, terminalTarget.sessionId, terminalTarget.surfaceId])
 
   useEffect(() => {
     latestSyncRef.current = syncTerminal
@@ -116,10 +120,10 @@ export function SessionTerminalOverlay({
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleWindowLayout)
       window.removeEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
-      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
+      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal', theme: resolvedTheme })
       lastRectRef.current = null
     }
-  }, [scheduleLayout, scheduleStabilizedLayouts, syncTerminal])
+  }, [resolvedTheme, scheduleLayout, scheduleStabilizedLayouts, syncTerminal])
 
   useEffect(() => {
     syncTerminal('focus')

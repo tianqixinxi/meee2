@@ -9,14 +9,24 @@ import {
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   PencilLine,
   Pin,
   PinOff,
-  Terminal as TerminalIcon,
   Trash2,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Dispatch, FormEvent, ReactNode, SetStateAction } from 'react'
+import type {
+  CSSProperties,
+  Dispatch,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  SetStateAction,
+} from 'react'
 import {
   createProjectSession,
   createSessionProject,
@@ -25,13 +35,13 @@ import {
   forgetSessionProject,
   pickSessionProjectDirectory,
   renameSessionProject,
-  reopenLauncherSession,
   revealSessionProjectInFinder,
   syncNativeSessionsWorkspace,
   updateSessionControl,
   type NativeTerminalRect,
 } from '../api'
 import { nativeTerminalTargetForSession } from '../lib/sessionTerminal'
+import { useTheme } from '../lib/theme'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, togglePinned } from '../sessionOverrides'
@@ -56,8 +66,29 @@ type RestoredTerminalTarget = {
 const DEFAULT_PROMPT = ''
 const PROVIDERS: SpawnProvider[] = ['codex', 'claude']
 const DEFAULT_PERMISSION_MODE: AgentPermissionMode = 'fullAccess'
-const DEFAULT_VISIBLE_SESSIONS = 5
+const DEFAULT_VISIBLE_SESSIONS = 8
 const TEMPORARY_GROUP_ID = 'temporary'
+const SIDEBAR_WIDTH_KEY = 'meee2.sessionLauncher.sidebarWidth'
+const SIDEBAR_COLLAPSED_KEY = 'meee2.sessionLauncher.sidebarCollapsed'
+const DEFAULT_SIDEBAR_WIDTH = 324
+const MIN_SIDEBAR_WIDTH = 260
+const MAX_SIDEBAR_WIDTH = 520
+
+function readStoredSidebarWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
+  const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY)
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
+  return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : DEFAULT_SIDEBAR_WIDTH
+}
+
+function readStoredSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+}
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)))
+}
 
 type PermissionOption = {
   value: AgentPermissionMode
@@ -108,6 +139,7 @@ export function SessionLauncherView({
   onToast,
 }: Props) {
   const { t } = useI18n()
+  const { resolvedTheme } = useTheme()
   const [projects, setProjects] = useState<SessionProject[]>([])
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [projectsError, setProjectsError] = useState<string | null>(null)
@@ -132,11 +164,13 @@ export function SessionLauncherView({
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
   const [forgettingProjectId, setForgettingProjectId] = useState<string | null>(null)
   const [revealingProjectId, setRevealingProjectId] = useState<string | null>(null)
-  const [reopeningSessionId, setReopeningSessionId] = useState<string | null>(null)
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null)
   const [locallyArchivedSessionIds, setLocallyArchivedSessionIds] = useState<Set<string>>(() => new Set())
   const [restoredSessionTargets, setRestoredSessionTargets] = useState<Record<string, RestoredTerminalTarget>>({})
+  const [sidebarWidth, setSidebarWidth] = useState(() => readStoredSidebarWidth())
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
   const initializedSelectionRef = useRef(false)
+  const pointerSidebarResizeActiveRef = useRef(false)
   const sessions = state?.sessions ?? []
 
   const refreshProjects = useCallback(() => {
@@ -205,10 +239,15 @@ export function SessionLauncherView({
     for (const project of explicitProjects) byProject.set(project.id, [])
     const pinned: Session[] = []
     const temporary: Session[] = []
+    const external: Session[] = []
 
     for (const session of activeSessions) {
       if (pinnedSessionIds.has(session.id)) {
         pinned.push(session)
+        continue
+      }
+      if (sessionScope(session) === 'external') {
+        external.push(session)
         continue
       }
       const project = projectByPath.get(normalizePath(session.project))
@@ -219,7 +258,8 @@ export function SessionLauncherView({
     for (const list of byProject.values()) list.sort(compareSessions)
     pinned.sort(compareSessions)
     temporary.sort(compareSessions)
-    return { byProject, pinned, temporary }
+    external.sort(compareSessions)
+    return { byProject, pinned, temporary, external }
   }, [activeSessions, explicitProjects, pinnedSessionIds, projectByPath])
 
   const latestProjectSessionTimes = useMemo(() => {
@@ -250,6 +290,14 @@ export function SessionLauncherView({
       setExpandedProjectIds(new Set([first.id]))
     }
   }, [selection, sortedProjects])
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0')
+  }, [sidebarCollapsed])
 
   const selectedProject = useMemo(() => {
     if (selection?.kind !== 'project') return null
@@ -426,38 +474,9 @@ export function SessionLauncherView({
     }
   }, [onSessionCreated, onToast, temporaryPermissionMode, temporaryPrompt, temporaryProvider, t])
 
-  const handleSelectSession = useCallback(async (session: Session) => {
+  const handleSelectSession = useCallback((session: Session) => {
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
-    if (nativeTerminalTargetForSession(session).surfaceId) return
-    setReopeningSessionId(session.id)
-    try {
-      const result = await reopenLauncherSession({
-        sessionId: session.id,
-        provider: providerForSession(session),
-        cwd: session.project,
-      })
-      setRestoredSessionTargets((current) => ({
-        ...current,
-        [session.id]: {
-          sessionId: result.surface.sessionId,
-          surfaceId: result.surface.surfaceId,
-        },
-      }))
-      setSelection({
-        kind: 'session',
-        sessionId: session.id,
-        surfaceId: result.surface.surfaceId,
-      })
-      onSessionCreated?.()
-      if (result.action === 'resume') {
-        onToast?.('success', t('sessions.launcher.resumedSession', { title: sessionTitle(session) }))
-      }
-    } catch (err) {
-      onToast?.('error', (err as Error).message || t('sessions.launcher.reopenSessionFailed'))
-    } finally {
-      setReopeningSessionId(null)
-    }
-  }, [onSessionCreated, onToast, t])
+  }, [])
 
   const handleTogglePinned = useCallback((session: Session) => {
     const pinned = togglePinned(session.id)
@@ -498,10 +517,104 @@ export function SessionLauncherView({
     }
   }, [explicitProjects, onSessionCreated, onToast, selection, t])
 
+  const handleSidebarResizeStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    pointerSidebarResizeActiveRef.current = true
+    if (Number.isFinite(event.pointerId)) {
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+    }
+    setSidebarCollapsed(false)
+    const startX = Number.isFinite(event.clientX) ? event.clientX : sidebarWidth
+    const startWidth = sidebarWidth
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const nextX = Number.isFinite(moveEvent.clientX) ? moveEvent.clientX : startX
+      setSidebarWidth(clampSidebarWidth(startWidth + nextX - startX))
+    }
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+      document.body.classList.remove('session-launcher-sidebar-resizing')
+      pointerSidebarResizeActiveRef.current = false
+    }
+    document.body.classList.add('session-launcher-sidebar-resizing')
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  }, [sidebarWidth])
+
+  const handleSidebarMouseResizeStart = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (pointerSidebarResizeActiveRef.current) return
+    event.preventDefault()
+    setSidebarCollapsed(false)
+    const startX = Number.isFinite(event.clientX) ? event.clientX : sidebarWidth
+    const startWidth = sidebarWidth
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const nextX = Number.isFinite(moveEvent.clientX) ? moveEvent.clientX : startX
+      setSidebarWidth(clampSidebarWidth(startWidth + nextX - startX))
+    }
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      document.body.classList.remove('session-launcher-sidebar-resizing')
+    }
+    document.body.classList.add('session-launcher-sidebar-resizing')
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+  }, [sidebarWidth])
+
+  const handleSidebarResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const step = event.shiftKey ? 64 : 24
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setSidebarCollapsed(false)
+      setSidebarWidth((current) => clampSidebarWidth(current - step))
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setSidebarCollapsed(false)
+      setSidebarWidth((current) => clampSidebarWidth(current + step))
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      setSidebarCollapsed(false)
+      setSidebarWidth(MIN_SIDEBAR_WIDTH)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      setSidebarCollapsed(false)
+      setSidebarWidth(MAX_SIDEBAR_WIDTH)
+    }
+  }, [])
+
+  const launcherStyle = {
+    '--session-launcher-sidebar-width': `${sidebarWidth}px`,
+  } as CSSProperties
+
   return (
     <>
-    <section className="session-launcher" aria-label={t('rail.session')}>
-      <aside className="session-launcher__sidebar">
+    <section
+      className={`session-launcher${sidebarCollapsed ? ' session-launcher--sidebar-collapsed' : ''}`}
+      style={launcherStyle}
+      aria-label={t('rail.session')}
+    >
+      <button
+        type="button"
+        className="session-launcher__sidebar-toggle"
+        onClick={() => setSidebarCollapsed((current) => !current)}
+        aria-label={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
+        title={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
+      >
+        {sidebarCollapsed ? <PanelLeftOpen size={15} aria-hidden /> : <PanelLeftClose size={15} aria-hidden />}
+      </button>
+      <aside className="session-launcher__sidebar" aria-hidden={sidebarCollapsed}>
+        <button
+          type="button"
+          className="session-launcher__sidebar-resize"
+          aria-label={t('sessions.launcher.resizeSidebar')}
+          title={t('sessions.launcher.resizeSidebar')}
+          onPointerDown={handleSidebarResizeStart}
+          onMouseDown={handleSidebarMouseResizeStart}
+          onKeyDown={handleSidebarResizeKeyDown}
+          tabIndex={sidebarCollapsed ? -1 : 0}
+        />
         {projectsError && <div className="session-launcher__error">{projectsError}</div>}
         <div className="session-launcher__project-list">
           <SessionGroupHeader title={t('sessions.launcher.pinned')} />
@@ -606,6 +719,24 @@ export function SessionLauncherView({
             pinnedSessionIds={pinnedSessionIds}
             archivingSessionId={archivingSessionId}
           />
+
+          {grouped.external.length > 0 && (
+            <>
+              <SessionGroupHeader title={t('sessions.launcher.history')} />
+              <SessionList
+                groupId="external"
+                sessions={grouped.external}
+                selection={selection}
+                expandedSessionGroups={expandedSessionGroups}
+                onToggleExpanded={setExpandedSessionGroups}
+                onSelectSession={(session) => void handleSelectSession(session)}
+                onTogglePinned={handleTogglePinned}
+                onArchiveSession={setArchiveSession}
+                pinnedSessionIds={pinnedSessionIds}
+                archivingSessionId={archivingSessionId}
+              />
+            </>
+          )}
         </div>
       </aside>
       <main className="session-launcher__main">
@@ -614,7 +745,7 @@ export function SessionLauncherView({
             session={selectedSession}
             sessionId={selectedRestoredTarget?.sessionId ?? selection.sessionId}
             surfaceId={selectedRestoredTarget?.surfaceId ?? selection.surfaceId}
-            reopening={reopeningSessionId === selection.sessionId}
+            theme={resolvedTheme}
           />
         ) : selection?.kind === 'temporaryDraft' ? (
           <SessionComposer
@@ -741,7 +872,6 @@ function ProjectLauncherRow({
         <Folder size={16} aria-hidden />
         <span>
           <strong>{project.name}</strong>
-          <small>{project.path}</small>
         </span>
       </button>
       <div className="session-launcher__project-actions" data-session-project-menu-root>
@@ -986,21 +1116,20 @@ function SessionRow({
   onArchive: () => void
 }) {
   const { t } = useI18n()
-  const time = sessionRelativeTime(session, t)
-  const statusLine = [session.status, time].filter(Boolean).join(' · ')
+  const title = sessionTitle(session)
+  const age = compactSessionAge(session)
   return (
     <div className={`session-launcher__session-item${active ? ' is-selected' : ''}`}>
       <button
         type="button"
         className="session-launcher__session-row"
         onClick={onSelect}
-        aria-label={`${sessionTitle(session)} ${statusLine}`}
+        aria-label={title}
       >
-        <TerminalIcon size={14} aria-hidden />
         <span>
-          <strong>{sessionTitle(session)}</strong>
-          <small>{statusLine}</small>
+          <strong>{title}</strong>
         </span>
+        {age && <time aria-hidden dateTime={session.lastActivity ?? session.startedAt ?? undefined}>{age}</time>}
       </button>
       <div className="session-launcher__session-actions">
         <button
@@ -1160,12 +1289,12 @@ function SessionLauncherTerminal({
   session,
   sessionId,
   surfaceId,
-  reopening,
+  theme,
 }: {
   session: Session | null
   sessionId: string
   surfaceId?: string | null
-  reopening?: boolean
+  theme: 'light' | 'dark'
 }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -1183,6 +1312,7 @@ function SessionLauncherTerminal({
       syncNativeSessionsWorkspace({
         phase: 'hide',
         mode: 'terminal',
+        theme,
         webPhase: 'sessionLauncher.hide.missingTarget',
       })
       lastRectRef.current = null
@@ -1202,11 +1332,12 @@ function SessionLauncherTerminal({
       mode: 'terminal',
       surfaceId: targetSurfaceId,
       sessionId: targetSessionId,
+      theme,
       rect: nextRect,
       sentAtMs: Date.now(),
       webPhase: `sessionLauncher.${phase}`,
     })
-  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId])
+  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId, theme])
 
   const scheduleLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) return
@@ -1237,16 +1368,15 @@ function SessionLauncherTerminal({
 
   useEffect(() => {
     return () => {
-      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
+      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal', theme })
     }
-  }, [])
+  }, [theme])
 
   if (!canOpenNativeTerminal) {
     return (
       <div className="session-launcher__terminal-empty">
-        {reopening ? <Loader2 size={18} className="spin" aria-hidden /> : <TerminalIcon size={18} aria-hidden />}
         <strong>{session ? sessionTitle(session) : t('rail.session')}</strong>
-        <span>{reopening ? t('sessions.launcher.reopeningTerminal') : t('sessions.launcher.noTerminalSurface')}</span>
+        <span>{t('sessions.launcher.noTerminalSurface')}</span>
       </div>
     )
   }
@@ -1282,9 +1412,15 @@ function sessionMatchesSelection(session: Session, selection: Extract<Selection,
   return Boolean(selection.surfaceId && session.surfaceId && selection.surfaceId === session.surfaceId)
 }
 
-function providerForSession(session: Session): SpawnProvider {
-  const raw = `${session.pluginId} ${session.pluginDisplayName} ${session.title}`.toLowerCase()
-  return raw.includes('codex') ? 'codex' : 'claude'
+function sessionScope(session: Session): 'meee2' | 'canvas' | 'node' | 'external' {
+  switch (session.sessionScope) {
+  case 'meee2':
+  case 'canvas':
+  case 'node':
+    return session.sessionScope
+  default:
+    return 'external'
+  }
 }
 
 function projectForSession(session: Session, projects: SessionProject[]): SessionProject | null {
@@ -1310,6 +1446,17 @@ function sessionTime(session: Session): number {
   const raw = session.lastActivity ?? session.startedAt ?? ''
   const parsed = Date.parse(raw)
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function compactSessionAge(session: Session): string {
+  const raw = session.lastActivity ?? session.startedAt ?? ''
+  const parsed = Date.parse(raw)
+  if (Number.isNaN(parsed)) return ''
+  const delta = Math.max(0, Date.now() - parsed)
+  if (delta < 60_000) return '刚刚'
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}分`
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}小时`
+  return `${Math.floor(delta / 86_400_000)}天`
 }
 
 function projectTime(project: SessionProject): number {
@@ -1352,23 +1499,6 @@ function cleanSessionTitle(raw: string | null | undefined): string {
   if (genericProviderTitle.test(withoutSpeaker)) return ''
   if (internalNodeTitle.test(withoutSpeaker)) return ''
   return withoutSpeaker.length > 56 ? `${withoutSpeaker.slice(0, 54).trim()}...` : withoutSpeaker
-}
-
-function sessionRelativeTime(session: Session, t: (key: TranslationKey, params?: Record<string, string | number>) => string): string {
-  const raw = session.lastActivity ?? session.startedAt
-  if (!raw) return ''
-  const parsed = Date.parse(raw)
-  if (Number.isNaN(parsed)) return ''
-  const delta = Math.max(0, Date.now() - parsed)
-  if (delta < 60_000) return t('sessions.justNow')
-  const minutes = Math.floor(delta / 60_000)
-  if (minutes < 60) return t('sessions.minutesAgo', { count: minutes })
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return t('sessions.hoursAgo', { count: hours })
-  const days = Math.floor(hours / 24)
-  if (days < 14) return t('sessions.daysAgo', { count: days })
-  const weeks = Math.floor(days / 7)
-  return t('sessions.launcher.weeksAgo', { count: weeks })
 }
 
 function sameRect(a: NativeTerminalRect | null, b: NativeTerminalRect): boolean {

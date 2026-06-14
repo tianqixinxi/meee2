@@ -14,6 +14,7 @@ struct SessionTerminalInfo: Codable {
     var providerResumeSessionId: String?
     var canvasId: String?
     var nodeId: String?
+    var sessionScope: String? = nil
     var backend: String?
     var fallbackReason: String?
 
@@ -65,6 +66,7 @@ class SessionTerminalStore {
         providerResumeSessionId: String? = nil,
         canvasId: String? = nil,
         nodeId: String? = nil,
+        sessionScope: String? = nil,
         backend: String? = nil,
         fallbackReason: String? = nil
     ) {
@@ -82,6 +84,7 @@ class SessionTerminalStore {
                 providerResumeSessionId: providerResumeSessionId,
                 canvasId: canvasId,
                 nodeId: nodeId,
+                sessionScope: sessionScope,
                 backend: backend,
                 fallbackReason: fallbackReason,
                 cmuxSocketPath: cmuxSocketPath,
@@ -102,6 +105,7 @@ class SessionTerminalStore {
             }
             info.canvasId = canvasId ?? info.canvasId
             info.nodeId = nodeId ?? info.nodeId
+            info.sessionScope = sessionScope ?? info.sessionScope ?? Self.inferScope(canvasId: info.canvasId, nodeId: info.nodeId)
             info.backend = backend ?? info.backend ?? Self.inferBackend(termProgram: info.termProgram)
             info.fallbackReason = fallbackReason ?? info.fallbackReason
             info.cwd = cwd
@@ -309,6 +313,10 @@ class SessionTerminalStore {
         case .none:
             return nil
         }
+    }
+
+    private static func inferScope(canvasId: String?, nodeId: String?) -> String {
+        Meee2SessionScope.managed(canvasId: canvasId, nodeId: nodeId).rawValue
     }
 
     private static func freshCommand(provider: String?, command: String?) -> String {

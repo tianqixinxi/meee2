@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Archive, CheckCircle2, CircleAlert, RotateCcw } from 'lucide-react'
+import { Archive, CheckCircle2, CircleAlert, Download, Monitor, Moon, RotateCcw, Sun, Upload } from 'lucide-react'
 import { NotificationSettings } from './NotificationSettings'
 import { ReadinessChecklist } from './ReadinessChecklist'
 import {
@@ -28,6 +28,17 @@ import {
 } from '../lib/llmSettings'
 import { useI18n, type Locale, type TranslationKey } from '../lib/i18n'
 import { useTheme, type ThemeMode } from '../lib/theme'
+import {
+  DEFAULT_THEME_PROFILE,
+  activeThemeBranch,
+  applyThemeProfile,
+  normalizeThemeProfile,
+  parseThemeProfile,
+  serializeThemeProfile,
+  type ThemeBranch,
+  type ThemePresetId,
+  type ThemeProfile,
+} from '../lib/themeProfile'
 import {
   deleteLocalData,
   disconnectMeee2Online,
@@ -66,10 +77,27 @@ interface Props {
   onRestartOnboarding?: () => void
 }
 
-type SettingsCategory = 'general' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
+type SettingsCategory = 'general' | 'dynamicIsland' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
+type ThemeProfileFileHandle = {
+  createWritable: () => Promise<{
+    write: (content: string) => Promise<void>
+    close: () => Promise<void>
+  }>
+}
+
+type SaveFilePickerWindow = Window & {
+  showSaveFilePicker?: (options: {
+    suggestedName?: string
+    types?: Array<{
+      description: string
+      accept: Record<string, string[]>
+    }>
+  }) => Promise<ThemeProfileFileHandle>
+}
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   theme: 'system',
+  themeProfile: DEFAULT_THEME_PROFILE,
   locale: 'en',
   devMode: false,
   showIsland: true,
@@ -203,7 +231,7 @@ export function SettingsView({
   onRestartOnboarding,
 }: Props) {
   const { t, locale, setLocale } = useI18n()
-  const { mode, setMode } = useTheme()
+  const { mode, resolvedTheme, themeProfile, setMode, setThemeProfile } = useTheme()
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
   const [lockViewportOnSwitch, setLockViewportOnSwitch] = useState(loadLockViewportOnSwitch)
@@ -215,6 +243,9 @@ export function SettingsView({
   const [recordingQuickOpenShortcut, setRecordingQuickOpenShortcut] = useState(false)
   const quickOpenRecorderRef = useRef<HTMLButtonElement | null>(null)
   const recordingPreviousShortcutRef = useRef<string | null>(null)
+  const themeImportInputRef = useRef<HTMLInputElement | null>(null)
+  const themeSaveTimerRef = useRef<number | null>(null)
+  const [themeEditorTarget, setThemeEditorTarget] = useState<'light' | 'dark'>(resolvedTheme)
   const [debugExporting, setDebugExporting] = useState(false)
   const [debugExportPath, setDebugExportPath] = useState<string | null>(null)
   // Chunk E (Privacy UI)
@@ -231,8 +262,11 @@ export function SettingsView({
   const [restoringArchivedSessionId, setRestoringArchivedSessionId] = useState<string | null>(null)
   const [locallyRestoredArchivedIds, setLocallyRestoredArchivedIds] = useState<Set<string>>(() => new Set())
   const effectiveAppSettings = normalizeAppSettings(appSettings)
+  const effectiveThemeProfile = normalizeThemeProfile(effectiveAppSettings.themeProfile ?? themeProfile)
+  const editingThemeBranch = activeThemeBranch(effectiveThemeProfile, themeEditorTarget)
   const settingsCategories: Array<{ id: SettingsCategory; label: string }> = [
     { id: 'general', label: t('settings.categoryGeneral') },
+    { id: 'dynamicIsland', label: t('settings.categoryDynamicIsland') },
     { id: 'account', label: t('settings.categoryAccount') },
     { id: 'privacy', label: t('settings.categoryPrivacy') },
     { id: 'archivedSessions', label: t('settings.categoryArchivedSessions') },
@@ -283,9 +317,13 @@ export function SettingsView({
 
   const loadAppSettings = useCallback(() => {
     fetchAppSettings()
-      .then((settings) => setAppSettings(normalizeAppSettings(settings)))
+      .then((settings) => {
+        const normalized = normalizeAppSettings(settings)
+        setAppSettings(normalized)
+        setThemeProfile(normalized.themeProfile)
+      })
       .catch(() => setAppSettings(DEFAULT_APP_SETTINGS))
-  }, [])
+  }, [setThemeProfile])
 
   const loadStorageStats = useCallback(() => {
     setStorageStatsLoading(true)
@@ -385,13 +423,129 @@ export function SettingsView({
     updateAppSettingsDraft(patch)
     try {
       const next = await updateAppSettings(patch)
-      setAppSettings(normalizeAppSettings(next))
+      const normalized = normalizeAppSettings({
+        ...next,
+        themeProfile: next.themeProfile ?? effectiveThemeProfile,
+      })
+      setAppSettings(normalized)
+      setThemeProfile(normalized.themeProfile)
       notifySaved()
     } catch (err) {
       notify('error', (err as Error).message || 'Failed to save settings')
       loadAppSettings()
     }
-  }, [loadAppSettings, notify, notifySaved, updateAppSettingsDraft])
+  }, [effectiveThemeProfile, loadAppSettings, notify, notifySaved, setThemeProfile, updateAppSettingsDraft])
+
+  const saveThemeProfileDebounced = useCallback((nextProfile: ThemeProfile) => {
+    if (themeSaveTimerRef.current != null) {
+      window.clearTimeout(themeSaveTimerRef.current)
+    }
+    themeSaveTimerRef.current = window.setTimeout(() => {
+      themeSaveTimerRef.current = null
+      updateAppSettings({ themeProfile: nextProfile })
+        .then((next) => {
+          const normalized = normalizeAppSettings({
+            ...next,
+            themeProfile: next.themeProfile ?? nextProfile,
+          })
+          setAppSettings(normalized)
+          setThemeProfile(normalized.themeProfile)
+        })
+        .catch((err: Error) => {
+          notify('error', err.message || 'Failed to save theme')
+          loadAppSettings()
+        })
+    }, 450)
+  }, [loadAppSettings, notify, setThemeProfile])
+
+  const applyThemeProfileDraft = useCallback((nextProfile: ThemeProfile, options?: { toast?: boolean }) => {
+    const normalized = normalizeThemeProfile(nextProfile)
+    applyThemeProfile(normalized, resolvedTheme)
+    setThemeProfile(normalized)
+    updateAppSettingsDraft({ themeProfile: normalized })
+    saveThemeProfileDebounced(normalized)
+    if (options?.toast) notify('success', t('common.saved'))
+  }, [notify, resolvedTheme, saveThemeProfileDebounced, setThemeProfile, t, updateAppSettingsDraft])
+
+  const applyThemePreset = useCallback((presetId: ThemePresetId) => {
+    applyThemeProfileDraft({ ...effectiveThemeProfile, presetId }, { toast: true })
+  }, [applyThemeProfileDraft, effectiveThemeProfile])
+
+  const applyThemeBranchTarget = useCallback((target: 'light' | 'dark') => {
+    setThemeEditorTarget(target)
+  }, [])
+
+  const updateThemeBranch = useCallback((patch: Partial<ThemeBranch>) => {
+    const nextProfile: ThemeProfile = {
+      ...effectiveThemeProfile,
+      presetId: 'custom',
+      [themeEditorTarget]: {
+        ...activeThemeBranch(effectiveThemeProfile, themeEditorTarget),
+        ...patch,
+      },
+    }
+    applyThemeProfileDraft(nextProfile)
+  }, [applyThemeProfileDraft, effectiveThemeProfile, themeEditorTarget])
+
+  const exportThemeProfile = useCallback(async () => {
+    const content = serializeThemeProfile(effectiveThemeProfile)
+    const picker = (window as SaveFilePickerWindow).showSaveFilePicker
+    if (picker) {
+      try {
+        const handle = await picker({
+          suggestedName: 'meee2-theme-profile.json',
+          types: [{
+            description: 'Web Board Theme Profile',
+            accept: { 'application/json': ['.json'] },
+          }],
+        })
+        const writable = await handle.createWritable()
+        await writable.write(content)
+        await writable.close()
+        notify('success', t('settings.themeExported'))
+        return
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return
+        notify('error', (err as Error).message || t('settings.themeExportFailed'))
+        return
+      }
+    }
+
+    const blob = new Blob([content], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'meee2-theme-profile.json'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    notify('success', t('settings.themeExported'))
+  }, [effectiveThemeProfile, notify, t])
+
+  const importThemeProfile = useCallback(async (file: File | null | undefined) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = parseThemeProfile(JSON.parse(text))
+      if (!parsed) throw new Error(t('settings.themeImportInvalid'))
+      applyThemeProfileDraft({ ...parsed, presetId: 'custom' }, { toast: true })
+    } catch (err) {
+      notify('error', (err as Error).message || t('settings.themeImportInvalid'))
+    } finally {
+      if (themeImportInputRef.current) themeImportInputRef.current.value = ''
+    }
+  }, [applyThemeProfileDraft, notify, t])
+
+  useEffect(() => {
+    return () => {
+      if (themeSaveTimerRef.current != null) window.clearTimeout(themeSaveTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    setThemeEditorTarget(resolvedTheme)
+  }, [resolvedTheme])
 
   const applyThemeMode = useCallback((nextMode: ThemeMode) => {
     setMode(nextMode)
@@ -605,23 +759,113 @@ export function SettingsView({
               <div className="settings-section-caption">{t('settings.appearanceCaption')}</div>
             </div>
           </div>
-          <label className="settings-field-row settings-panel">
-            <span>
-              <strong>{t('settings.theme')}</strong>
-            </span>
-            <span className="segment">
-              {(['system', 'light', 'dark'] as ThemeMode[]).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={mode === value ? 'active' : ''}
-                  onClick={() => applyThemeMode(value)}
-                >
-                  {value === 'system' ? t('settings.themeSystem') : value === 'light' ? t('settings.themeLight') : t('settings.themeDark')}
-                </button>
-              ))}
-            </span>
-          </label>
+          <div className="settings-theme-card settings-panel">
+            <div className="settings-theme-card__header">
+              <div>
+                <strong>{t('settings.theme')}</strong>
+                <small>{t('settings.themeProfileCaption')}</small>
+              </div>
+              <span className="segment settings-theme-mode">
+                {(['system', 'light', 'dark'] as ThemeMode[]).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={mode === value ? 'active' : ''}
+                    onClick={() => applyThemeMode(value)}
+                  >
+                    {value === 'system' && <Monitor size={14} aria-hidden="true" />}
+                    {value === 'light' && <Sun size={14} aria-hidden="true" />}
+                    {value === 'dark' && <Moon size={14} aria-hidden="true" />}
+                    {value === 'system' ? t('settings.themeSystem') : value === 'light' ? t('settings.themeLight') : t('settings.themeDark')}
+                  </button>
+                ))}
+              </span>
+            </div>
+
+            <div className="settings-theme-editor">
+              <div className="settings-theme-editor__toolbar">
+                <div className="settings-theme-editor__title">
+                  <strong>{themeEditorTarget === 'light' ? t('settings.lightTheme') : t('settings.darkTheme')}</strong>
+                  <span className="segment settings-theme-branch">
+                    {(['light', 'dark'] as const).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={themeEditorTarget === value ? 'active' : ''}
+                        onClick={() => applyThemeBranchTarget(value)}
+                      >
+                        {value === 'light' ? t('settings.themeLight') : t('settings.themeDark')}
+                      </button>
+                    ))}
+                  </span>
+                </div>
+                <div className="settings-theme-editor__actions">
+                  <input
+                    ref={themeImportInputRef}
+                    type="file"
+                    accept="application/json,.json"
+                    className="settings-theme-import-input"
+                    onChange={(event) => void importThemeProfile(event.target.files?.[0])}
+                  />
+                  <button type="button" className="ghost" onClick={() => themeImportInputRef.current?.click()}>
+                    <Upload size={14} aria-hidden="true" />
+                    {t('settings.themeImport')}
+                  </button>
+                  <button type="button" className="ghost" onClick={() => void exportThemeProfile()}>
+                    <Download size={14} aria-hidden="true" />
+                    {t('settings.themeExport')}
+                  </button>
+                  <select
+                    value={effectiveThemeProfile.presetId === 'custom' ? 'custom' : effectiveThemeProfile.presetId}
+                    onChange={(event) => {
+                      const value = event.target.value as ThemePresetId
+                      applyThemePreset(value)
+                    }}
+                    aria-label={t('settings.themePreset')}
+                  >
+                    <option value="claude">Claude</option>
+                    <option value="codex">Codex</option>
+                    <option value="custom">{t('settings.themeCustom')}</option>
+                  </select>
+                </div>
+              </div>
+
+              <ThemeColorRow
+                label={t('settings.themeAccent')}
+                value={editingThemeBranch.accentColor}
+                onChange={(value) => updateThemeBranch({ accentColor: value })}
+              />
+              <ThemeColorRow
+                label={t('settings.themeBackground')}
+                value={editingThemeBranch.backgroundColor}
+                onChange={(value) => updateThemeBranch({ backgroundColor: value })}
+              />
+              <ThemeColorRow
+                label={t('settings.themeSidebar')}
+                value={editingThemeBranch.sidebarColor}
+                onChange={(value) => updateThemeBranch({ sidebarColor: value })}
+              />
+              <ThemeColorRow
+                label={t('settings.themeForeground')}
+                value={editingThemeBranch.foregroundColor}
+                onChange={(value) => updateThemeBranch({ foregroundColor: value })}
+              />
+              <label className="settings-theme-row settings-theme-row--range">
+                <span>{t('settings.themeContrast')}</span>
+                <span className="settings-range-field">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={editingThemeBranch.contrast}
+                    onChange={(event) => updateThemeBranch({ contrast: Number(event.target.value) })}
+                  />
+                  <small>{editingThemeBranch.contrast}</small>
+                </span>
+              </label>
+            </div>
+          </div>
           <label className="settings-field-row settings-panel">
             <span>
               <strong>{t('settings.language')}</strong>
@@ -642,6 +886,11 @@ export function SettingsView({
           </label>
         </section>
 
+          </>
+        )}
+
+        {activeSettingsCategory === 'dynamicIsland' && (
+          <>
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -1193,6 +1442,7 @@ function normalizeAppSettings(settings: AppSettings | null | undefined): AppSett
   return {
     ...DEFAULT_APP_SETTINGS,
     ...settings,
+    themeProfile: normalizeThemeProfile(settings.themeProfile),
     availableScreens: Array.isArray(settings.availableScreens) && settings.availableScreens.length > 0
       ? settings.availableScreens
       : DEFAULT_APP_SETTINGS.availableScreens,
@@ -1202,6 +1452,49 @@ function normalizeAppSettings(settings: AppSettings | null | undefined): AppSett
 function currentTeamForProfile(profile: UserProfile | null): UserProfile['teams'][number] | null {
   if (!profile?.connected) return null
   return profile.teams.find((team) => team.isDefault) ?? profile.teams[0] ?? null
+}
+
+function ThemeColorRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+
+  useEffect(() => {
+    setDraft(value)
+  }, [value])
+
+  const commitHex = (raw: string) => {
+    const next = raw.trim().toUpperCase()
+    setDraft(next)
+    if (/^#[0-9A-F]{6}$/.test(next)) onChange(next)
+  }
+
+  return (
+    <label className="settings-theme-row">
+      <span>{label}</span>
+      <span className="settings-theme-color">
+        <input
+          type="color"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          aria-label={label}
+        />
+        <input
+          className="settings-theme-color__hex"
+          type="text"
+          value={draft}
+          onChange={(event) => commitHex(event.target.value)}
+          aria-label={`${label} hex`}
+        />
+      </span>
+    </label>
+  )
 }
 
 function PerfDiagnosticsPanel({

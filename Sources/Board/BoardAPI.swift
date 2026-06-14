@@ -402,6 +402,7 @@ enum BoardAPI {
         let command: String
         let canvasId: String?
         let nodeId: String?
+        let sessionScope: String
         let status: String
         let pid: Int?
         let createdAt: Date
@@ -421,6 +422,7 @@ enum BoardAPI {
             self.command = surface.command
             self.canvasId = surface.canvasId
             self.nodeId = surface.nodeId
+            self.sessionScope = surface.sessionScope.rawValue
             self.status = surface.status
             self.pid = surface.pid
             self.createdAt = surface.createdAt
@@ -4718,6 +4720,12 @@ enum BoardAPI {
         if let theme = json["theme"] as? String, ["system", "light", "dark"].contains(theme) {
             defaults.set(theme, forKey: "meee2.theme")
         }
+        if json.keys.contains("themeProfile") {
+            guard let profile = WebBoardThemeProfile.parse(json["themeProfile"]) else {
+                return errorResponse("invalid_theme_profile", "themeProfile must be a supported v1 Web Board theme profile", status: 400)
+            }
+            WebBoardThemeProfile.store(profile, defaults: defaults)
+        }
         if let locale = json["locale"] as? String, ["en", "zh-CN"].contains(locale) {
             defaults.set(locale, forKey: "meee2.locale")
         }
@@ -4930,6 +4938,7 @@ enum BoardAPI {
         let defaults = UserDefaults.standard
         return AppSettingsDTO(
             theme: validTheme(defaults.string(forKey: "meee2.theme")),
+            themeProfile: WebBoardThemeProfile.storedProfile(defaults: defaults),
             locale: validLocale(defaults.string(forKey: "meee2.locale")),
             devMode: appDevMode(),
             showIsland: defaults.object(forKey: "showIsland") as? Bool ?? true,

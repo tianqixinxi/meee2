@@ -224,6 +224,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     let command: String
     let canvasId: String?
     let nodeId: String?
+    let sessionScope: Meee2SessionScope
     let view: NSView
     var paneView: NSView { view }
     var terminalSurfaceId: String { surfaceId }
@@ -289,6 +290,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         self.command = command
         self.canvasId = canvasId
         self.nodeId = nodeId
+        self.sessionScope = Meee2SessionScope.managed(canvasId: canvasId, nodeId: nodeId)
         self.initialPrompt = Self.normalizedPromptForPaste(initialPrompt)
         self.initialPromptSettleCeiling = initialPromptSettleCeiling
         self.onExit = onExit
@@ -321,6 +323,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
             provider: provider,
             canvasId: canvasId,
             nodeId: nodeId,
+            sessionScope: sessionScope,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -356,6 +359,12 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         terminalView.setSurfaceVisible(true)
         fitToCurrentSize()
         logPerf("focus", startedAt: startedAt)
+    }
+
+    func applyTheme(_ theme: String) {
+        let scheme: TerminalColorScheme = theme == "light" ? .light : .dark
+        terminalController.setColorScheme(scheme)
+        terminalView.needsDisplay = true
     }
 
     func stabilizeLayout() {
@@ -613,13 +622,26 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     }
 
     private static func makeTerminalController() -> GhosttyTerminal.TerminalController {
-        let embeddedDarkTheme = TerminalConfiguration { builder in
-            builder.withBackground("#0b0b0b")
-            builder.withForeground("#ebe8de")
+        let embeddedLightTheme = TerminalConfiguration { builder in
+            builder.withBackground("#ffffff")
+            builder.withForeground("#1a1c1f")
             builder.withCursorStyle(.block)
             builder.withCursorStyleBlink(true)
-            builder.withCursorColor("#ebe8de")
-            builder.withSelectionBackground("#4d4d4d")
+            builder.withCursorColor("#2563eb")
+            builder.withSelectionBackground("#cfe3ff")
+            builder.withSelectionForeground("#111827")
+            builder.withFontSize(14)
+            builder.withFontThicken(true)
+            builder.withWindowPaddingX(10)
+            builder.withWindowPaddingY(8)
+        }
+        let embeddedDarkTheme = TerminalConfiguration { builder in
+            builder.withBackground("#101214")
+            builder.withForeground("#f4f7fb")
+            builder.withCursorStyle(.block)
+            builder.withCursorStyleBlink(true)
+            builder.withCursorColor("#60a5fa")
+            builder.withSelectionBackground("#334155")
             builder.withSelectionForeground("#ffffff")
             builder.withFontSize(14)
             builder.withFontThicken(true)
@@ -627,7 +649,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
             builder.withWindowPaddingY(8)
         }
         return GhosttyTerminal.TerminalController(
-            theme: TerminalTheme(light: embeddedDarkTheme, dark: embeddedDarkTheme)
+            theme: TerminalTheme(light: embeddedLightTheme, dark: embeddedDarkTheme)
         )
     }
 

@@ -205,6 +205,7 @@ export interface Session {
   nativeWorkspaceAvailable?: boolean
   openTarget?: 'native-workspace' | 'external' | 'web-fallback' | string
   controlState?: 'active' | 'hidden' | 'archived' | string
+  sessionScope?: SessionScope | null
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
@@ -229,6 +230,7 @@ export function isOlderSession(s: Pick<Session, 'lastActivity' | 'status'>): boo
 }
 
 export type ClientKind = 'cli' | 'desktop' | 'cowork'
+export type SessionScope = 'meee2' | 'canvas' | 'node' | 'external' | string
 
 export interface Member {
   alias: string
