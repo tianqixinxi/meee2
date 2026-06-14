@@ -149,7 +149,7 @@ export function SessionLauncherView({
   }, [explicitProjects])
 
   const activeSessions = useMemo(
-    () => sessions.filter((session) => session.controlState !== 'archived' && !locallyArchivedSessionIds.has(session.id)),
+    () => sessions.filter((session) => session.controlState !== 'archived' && session.controlState !== 'hidden' && !locallyArchivedSessionIds.has(session.id)),
     [locallyArchivedSessionIds, sessions],
   )
 

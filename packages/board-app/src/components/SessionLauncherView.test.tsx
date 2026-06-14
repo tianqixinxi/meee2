@@ -248,6 +248,35 @@ describe('SessionLauncherView', () => {
     expect(sessionList).not.toHaveClass('session-launcher__session-list--nested')
   })
 
+  it('filters hidden sessions out of project and temporary launcher lists', async () => {
+    const sessions = [
+      makeSession({
+        id: 'visible-project-session',
+        recentMessages: [{ role: 'user', text: '继续可见项目会话' }],
+      }),
+      makeSession({
+        id: 'hidden-project-session',
+        recentMessages: [{ role: 'user', text: '隐藏项目会话' }],
+        controlState: 'hidden',
+      }),
+      makeSession({
+        id: 'hidden-temporary-session',
+        project: '/Users/kai/.meee2/workspaces/temporary/hidden',
+        recentMessages: [{ role: 'user', text: '隐藏临时会话' }],
+        controlState: 'hidden',
+      }),
+    ]
+
+    render(<SessionLauncherView state={makeState(sessions)} />)
+
+    expect(await screen.findAllByText('meee2-workspace')).not.toHaveLength(0)
+    const expandButton = screen.queryByRole('button', { name: 'Expand meee2-workspace' })
+    if (expandButton) fireEvent.click(expandButton)
+    expect(await screen.findByRole('button', { name: /继续可见项目会话 running/i })).toBeInTheDocument()
+    expect(screen.queryByText('隐藏项目会话')).not.toBeInTheDocument()
+    expect(screen.queryByText('隐藏临时会话')).not.toBeInTheDocument()
+  })
+
   it('selects only the clicked temporary session when sessions have no surface id', async () => {
     const temporarySessions = [
       makeSession({

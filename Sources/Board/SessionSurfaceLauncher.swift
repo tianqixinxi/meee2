@@ -180,7 +180,7 @@ enum SessionSurfaceLauncher {
             terminalInfo?.command,
             sessionData?.sessionId,
             fallbackSessionId,
-            sessionData?.terminalInfo?.termProgram,
+            sessionData?.terminalInfo?.termProgram
         ]
             .compactMap { $0 }
             .joined(separator: " ")
