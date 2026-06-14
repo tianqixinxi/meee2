@@ -310,6 +310,7 @@ export interface BoardState {
 export type CanvasScope = 'personal' | 'team'
 export type CanvasKind = 'board' | 'monitor'
 export type SpawnProvider = 'claude' | 'codex'
+export type AgentPermissionMode = 'fullAccess' | 'default' | 'acceptEdits' | 'onRequest' | 'readOnly'
 
 export interface SessionProject {
   id: string
@@ -338,6 +339,7 @@ export interface SessionProjectUpdateInput {
 
 export interface TemporarySessionCreateInput {
   provider: SpawnProvider
+  permissionMode?: AgentPermissionMode
   initialPrompt?: string
 }
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'

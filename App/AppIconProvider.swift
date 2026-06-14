@@ -100,12 +100,12 @@ enum AppIconProvider {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 16, weight: .bold),
+            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
             .foregroundColor: NSColor.black,
             .paragraphStyle: paragraph
         ]
         ("M" as NSString).draw(
-            in: NSRect(x: 0, y: 1, width: statusTemplateIconCanvasSize.width, height: statusTemplateIconCanvasSize.height),
+            in: NSRect(x: 0, y: 1.5, width: statusTemplateIconCanvasSize.width, height: 16),
             withAttributes: attributes
         )
         image.isTemplate = true
@@ -215,7 +215,7 @@ enum AppIconProvider {
 
     private static let statusTemplateIconName = "meee2StatusTemplate"
     private static let statusTemplateIconSize = NSSize(width: 22, height: 22)
-    private static let statusTemplateIconCanvasSize = NSSize(width: 24, height: 18)
+    private static let statusTemplateIconCanvasSize = NSSize(width: 18, height: 18)
     private static let statusTemplateIconOpaqueRect = NSRect(x: 5, y: 8, width: 12, height: 7)
-    private static let statusTemplateIconDestinationRect = NSRect(x: 1, y: 2.5, width: 22, height: 13)
+    private static let statusTemplateIconDestinationRect = NSRect(x: 0.4, y: 3.4, width: 17.2, height: 11.2)
 }

@@ -52,6 +52,25 @@ final class AgentLaunchCommandTests: XCTestCase {
         XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust")
     }
 
+    func testLaunchCommandUsesProviderSpecificPermissionModes() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest"),
+            "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "readOnly"),
+            "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "default"),
+            "claude --permission-mode default"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "acceptEdits"),
+            "claude --permission-mode acceptEdits"
+        )
+    }
+
     func testResumeCommandUsesProviderResumeSyntax() {
         XCTAssertEqual(
             AgentLaunchCommand.resumeCommand(forProvider: "claude", sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"),

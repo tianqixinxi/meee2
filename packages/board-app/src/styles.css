@@ -15239,23 +15239,6 @@ button.template-gallery__tag {
   background: var(--bg-paper);
 }
 
-.session-launcher__sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 18px 14px 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.session-launcher__sidebar-header h1 {
-  margin: 0;
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
 .session-launcher__icon-button,
 .session-launcher__project-actions button,
 .session-launcher__group-action,
@@ -15282,8 +15265,7 @@ button.template-gallery__tag {
 .session-launcher__project-row > svg,
 .session-launcher__session-row > svg,
 .session-launcher__composer-left button > svg,
-.session-launcher__composer-right button > svg,
-.session-launcher__project-strip > svg {
+.session-launcher__composer-right button > svg {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
@@ -15612,6 +15594,10 @@ button.template-gallery__tag {
   gap: 6px;
 }
 
+.session-launcher-modal__dialog--confirm {
+  width: min(360px, 100%);
+}
+
 .session-launcher-modal__dialog header strong {
   color: var(--text);
   font-size: 14px;
@@ -15664,6 +15650,12 @@ button.template-gallery__tag {
   color: var(--text);
 }
 
+.session-launcher-modal__dialog footer button.danger {
+  border-color: color-mix(in srgb, var(--danger) 72%, var(--border));
+  background: var(--danger);
+  color: white;
+}
+
 .session-launcher-modal__dialog footer button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -15696,9 +15688,8 @@ button.template-gallery__tag {
 
 .session-launcher__prompt-tray {
   display: grid;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 16px;
-  background: color-mix(in srgb, var(--bg-muted) 74%, white);
   box-shadow: 0 12px 30px rgb(0 0 0 / 6%);
 }
 
@@ -15753,11 +15744,15 @@ button.template-gallery__tag {
 .session-launcher__runtime {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 3px;
+  min-height: 32px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-muted) 62%, transparent);
 }
 
 .session-launcher__runtime button,
-.session-launcher__composer-icon,
 .session-launcher__access-mode,
 .session-launcher__start,
 .session-launcher__empty-main button {
@@ -15775,16 +15770,14 @@ button.template-gallery__tag {
 
 .session-launcher__runtime button {
   height: 30px;
-  gap: 6px;
-  padding: 0 6px;
+  min-width: 70px;
+  gap: 0;
+  padding: 0 10px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.session-launcher__runtime button:not(.is-selected) {
-  display: none;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .session-launcher__runtime button > svg {
@@ -15801,39 +15794,112 @@ button.template-gallery__tag {
 }
 
 .session-launcher__runtime button.is-selected {
+  border-color: var(--border);
+  background: var(--bg-elevated);
   color: var(--text);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
 }
 
-.session-launcher__composer-icon,
 .session-launcher__access-mode {
+  display: inline-flex;
+  position: relative;
   height: 30px;
+  min-width: 0;
   border: 0;
-  background: transparent;
-  color: var(--text-dim);
-}
-
-.session-launcher__composer-icon {
-  width: 30px;
-  border-radius: 50%;
-}
-
-.session-launcher__access-mode {
-  gap: 8px;
-  padding: 0 7px;
   border-radius: 10px;
   color: var(--danger);
   font-size: 13px;
   font-weight: 600;
 }
 
-.session-launcher__composer-icon:hover,
-.session-launcher__access-mode:hover,
+.session-launcher__access-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session-launcher__access-mode-label {
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.session-launcher__access-mode-trigger > svg {
+  flex: 0 0 14px;
+  pointer-events: none;
+}
+
+.session-launcher__access-menu {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  width: min(360px, calc(100vw - 48px));
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-paper);
+  box-shadow: 0 16px 36px rgb(0 0 0 / 16%);
+}
+
+.session-launcher__access-menu button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: 600 12px/1.2 var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-launcher__access-menu button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.session-launcher__access-menu button:hover,
+.session-launcher__access-menu button:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  outline: none;
+}
+
+.session-launcher__access-menu code {
+  max-height: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font: 500 11px/1.35 var(--mono);
+  opacity: 0;
+  transition: max-height 140ms ease, opacity 140ms ease;
+  word-break: break-all;
+}
+
+.session-launcher__access-menu button:hover code,
+.session-launcher__access-menu button:focus-visible code {
+  max-height: 48px;
+  opacity: 1;
+}
+
+.session-launcher__access-mode-trigger:hover,
 .session-launcher__runtime button:hover {
   background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
 }
 
-.session-launcher__access-mode:hover {
+.session-launcher__access-mode-trigger:hover {
   color: var(--danger);
 }
 
@@ -15856,23 +15922,6 @@ button.template-gallery__tag {
 
 .session-launcher__start:hover {
   background: var(--text);
-}
-
-.session-launcher__project-strip {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 18px;
-  color: var(--text-dim);
-  font-size: 13px;
-}
-
-.session-launcher__project-strip span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-launcher__start:disabled,
@@ -16030,7 +16079,19 @@ button.template-gallery__tag {
     flex-direction: column;
   }
 
+  .session-launcher__composer-left {
+    justify-content: flex-start;
+  }
+
   .session-launcher__composer-right {
     justify-content: space-between;
+  }
+
+  .session-launcher__runtime {
+    flex: 1 1 auto;
+  }
+
+  .session-launcher__runtime button {
+    flex: 1 1 0;
   }
 }

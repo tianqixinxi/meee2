@@ -26,6 +26,7 @@ import type {
   SessionProjectList,
   SessionProjectUpdateInput,
   SpawnProvider,
+  AgentPermissionMode,
   TemporarySessionCreateInput,
   CoordinationGroup,
   PlanProposal,
@@ -1189,6 +1190,7 @@ export function createProjectSession(input: {
   projectId: string
   path?: string
   provider: SpawnProvider
+  permissionMode?: AgentPermissionMode
   initialPrompt?: string
 }): Promise<{ ok: boolean; project: SessionProject; surface: SessionSurface }> {
   return jsonRequest<{ ok: boolean; project: SessionProject; surface: SessionSurface }>(
@@ -1198,6 +1200,7 @@ export function createProjectSession(input: {
       body: JSON.stringify({
         path: input.path,
         provider: input.provider,
+        permissionMode: input.permissionMode,
         initialPrompt: input.initialPrompt,
       }),
     },
