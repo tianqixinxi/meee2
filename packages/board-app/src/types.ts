@@ -342,6 +342,7 @@ export interface SessionProjectUpdateInput {
 export interface TemporarySessionCreateInput {
   provider: SpawnProvider
   permissionMode?: AgentPermissionMode
+  planMode?: boolean
   initialPrompt?: string
 }
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'

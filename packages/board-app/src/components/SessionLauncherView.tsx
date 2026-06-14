@@ -149,9 +149,11 @@ export function SessionLauncherView({
   const [promptByProjectId, setPromptByProjectId] = useState<Record<string, string>>({})
   const [providerByProjectId, setProviderByProjectId] = useState<Record<string, SpawnProvider>>({})
   const [permissionModeByProjectId, setPermissionModeByProjectId] = useState<Record<string, AgentPermissionMode>>({})
+  const [planModeByProjectId, setPlanModeByProjectId] = useState<Record<string, boolean>>({})
   const [temporaryPrompt, setTemporaryPrompt] = useState(DEFAULT_PROMPT)
   const [temporaryProvider, setTemporaryProvider] = useState<SpawnProvider>('codex')
   const [temporaryPermissionMode, setTemporaryPermissionMode] = useState<AgentPermissionMode>(DEFAULT_PERMISSION_MODE)
+  const [temporaryPlanMode, setTemporaryPlanMode] = useState(false)
   const [pinnedSessionIds, setPinnedSessionIds] = useState<Set<string>>(() => loadPinnedSet())
   const [addingFolder, setAddingFolder] = useState(false)
   const [startingProjectId, setStartingProjectId] = useState<string | null>(null)
@@ -318,6 +320,9 @@ export function SessionLauncherView({
   const selectedProjectPermissionMode = selectedProject
     ? normalizePermissionMode(selectedProjectProvider, permissionModeByProjectId[selectedProject.id])
     : normalizePermissionMode(temporaryProvider, temporaryPermissionMode)
+  const selectedProjectPlanMode = selectedProject
+    ? planModeByProjectId[selectedProject.id] === true
+    : temporaryPlanMode
   const currentProjectPrompt = selectedProject
     ? promptByProjectId[selectedProject.id] ?? DEFAULT_PROMPT
     : DEFAULT_PROMPT
@@ -427,6 +432,7 @@ export function SessionLauncherView({
         projectId: selectedProject.id,
         provider: selectedProjectProvider,
         permissionMode: selectedProjectPermissionMode,
+        planMode: selectedProjectPlanMode,
         initialPrompt: prompt || undefined,
       })
       setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
@@ -447,7 +453,7 @@ export function SessionLauncherView({
     } finally {
       setStartingProjectId(null)
     }
-  }, [currentProjectPrompt, onSessionCreated, onToast, selectedProject, selectedProjectPermissionMode, selectedProjectProvider, t])
+  }, [currentProjectPrompt, onSessionCreated, onToast, selectedProject, selectedProjectPermissionMode, selectedProjectPlanMode, selectedProjectProvider, t])
 
   const handleStartTemporarySession = useCallback(async () => {
     const prompt = temporaryPrompt.trim()
@@ -456,6 +462,7 @@ export function SessionLauncherView({
       const result = await createTemporarySession({
         provider: temporaryProvider,
         permissionMode: temporaryPermissionMode,
+        planMode: temporaryPlanMode,
         initialPrompt: prompt || undefined,
       })
       setSelection({
@@ -472,7 +479,7 @@ export function SessionLauncherView({
     } finally {
       setStartingTemporary(false)
     }
-  }, [onSessionCreated, onToast, temporaryPermissionMode, temporaryPrompt, temporaryProvider, t])
+  }, [onSessionCreated, onToast, temporaryPermissionMode, temporaryPlanMode, temporaryPrompt, temporaryProvider, t])
 
   const handleSelectSession = useCallback((session: Session) => {
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
@@ -753,6 +760,7 @@ export function SessionLauncherView({
             prompt={temporaryPrompt}
             provider={temporaryProvider}
             permissionMode={temporaryPermissionMode}
+            planMode={temporaryPlanMode}
             starting={startingTemporary}
             onPromptChange={setTemporaryPrompt}
             onProviderChange={(provider) => {
@@ -760,6 +768,7 @@ export function SessionLauncherView({
               setTemporaryPermissionMode((current) => normalizePermissionMode(provider, current))
             }}
             onPermissionModeChange={(permissionMode) => setTemporaryPermissionMode(normalizePermissionMode(temporaryProvider, permissionMode))}
+            onPlanModeChange={setTemporaryPlanMode}
             onStart={() => void handleStartTemporarySession()}
           />
         ) : selectedProject ? (
@@ -768,6 +777,7 @@ export function SessionLauncherView({
             prompt={currentProjectPrompt}
             provider={selectedProjectProvider}
             permissionMode={selectedProjectPermissionMode}
+            planMode={selectedProjectPlanMode}
             starting={startingProjectId === selectedProject.id}
             onPromptChange={(value) => setPromptByProjectId((current) => ({
               ...current,
@@ -783,6 +793,10 @@ export function SessionLauncherView({
             onPermissionModeChange={(permissionMode) => setPermissionModeByProjectId((current) => ({
               ...current,
               [selectedProject.id]: normalizePermissionMode(selectedProjectProvider, permissionMode),
+            }))}
+            onPlanModeChange={(planMode) => setPlanModeByProjectId((current) => ({
+              ...current,
+              [selectedProject.id]: planMode,
             }))}
             onStart={() => void handleStartProjectSession()}
           />
@@ -1161,20 +1175,24 @@ function SessionComposer({
   prompt,
   provider,
   permissionMode,
+  planMode,
   starting,
   onPromptChange,
   onProviderChange,
   onPermissionModeChange,
+  onPlanModeChange,
   onStart,
 }: {
   title: string
   prompt: string
   provider: SpawnProvider
   permissionMode: AgentPermissionMode
+  planMode: boolean
   starting: boolean
   onPromptChange: (value: string) => void
   onProviderChange: (provider: SpawnProvider) => void
   onPermissionModeChange: (permissionMode: AgentPermissionMode) => void
+  onPlanModeChange: (planMode: boolean) => void
   onStart: () => void
 }) {
   const { t } = useI18n()
@@ -1250,6 +1268,17 @@ function SessionComposer({
                     </div>
                   )}
                 </div>
+                <button
+                  type="button"
+                  className={`session-launcher__plan-mode${planMode ? ' is-on' : ''}`}
+                  role="switch"
+                  aria-checked={planMode}
+                  onClick={() => onPlanModeChange(!planMode)}
+                  title={t('sessions.launcher.planModeHint', { runtime: spawnProviderLabel(provider) })}
+                >
+                  <span>{t('sessions.launcher.planMode')}</span>
+                  <i aria-hidden />
+                </button>
               </div>
               <div className="session-launcher__composer-right">
                 <div className="session-launcher__runtime" role="group" aria-label={t('sessions.launcher.runtime')}>

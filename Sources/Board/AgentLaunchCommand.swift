@@ -2,25 +2,32 @@ import Foundation
 
 enum AgentLaunchCommand {
     static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+    static let codexPlanModeConfig = "-c 'collaboration_mode=\"plan\"'"
 
     static func fullAccessCommand(forProvider provider: String) -> String {
         launchCommand(forProvider: provider, permissionMode: "fullAccess")
     }
 
-    static func launchCommand(forProvider provider: String, permissionMode rawMode: String?) -> String {
+    static func launchCommand(forProvider provider: String, permissionMode rawMode: String?, planMode: Bool = false) -> String {
         let provider = normalizedProvider(provider)
         let mode = normalizedPermissionMode(rawMode)
+        let planRequested = planMode || mode == "plan"
         if provider == "codex" {
-            switch mode {
+            let command: String
+            switch mode == "plan" ? "fullAccess" : mode {
             case "readOnly":
-                return "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+                command = "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
             case "onRequest", "default":
-                return "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+                command = "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
             case "acceptEdits":
-                return "codex --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust"
+                command = "codex --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust"
             default:
-                return "codex \(codexAutomationFlags)"
+                command = "codex \(codexAutomationFlags)"
             }
+            return planRequested ? commandWithCodexPlanMode(command) : command
+        }
+        if planRequested {
+            return "claude --permission-mode plan"
         }
         switch mode {
         case "default", "onRequest", "readOnly":
@@ -51,6 +58,8 @@ enum AgentLaunchCommand {
             return "onRequest"
         case "acceptedits", "accept_edits", "accept-edits", "autoedit", "auto":
             return "acceptEdits"
+        case "plan", "planning":
+            return "plan"
         case "fullaccess", "full_access", "full-access", "bypasspermissions", "bypass", "danger":
             return "fullAccess"
         default:
@@ -135,5 +144,19 @@ enum AgentLaunchCommand {
             parts.append("--dangerously-bypass-hook-trust")
         }
         return parts.joined(separator: " ")
+    }
+
+    private static func commandWithCodexPlanMode(_ command: String) -> String {
+        let lower = command.lowercased()
+        if lower.contains("collaboration_mode") {
+            return command
+        }
+        if lower == "codex" {
+            return "codex \(codexPlanModeConfig)"
+        }
+        if lower.hasPrefix("codex ") {
+            return "codex \(codexPlanModeConfig) \(command.dropFirst("codex ".count))"
+        }
+        return "\(command) \(codexPlanModeConfig)"
     }
 }

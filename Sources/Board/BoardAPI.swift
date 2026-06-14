@@ -645,6 +645,7 @@ enum BoardAPI {
             let path: String?
             let provider: String?
             let permissionMode: String?
+            let planMode: Bool?
             let initialPrompt: String?
         }
         struct SpawnResponse: Encodable {
@@ -674,7 +675,11 @@ enum BoardAPI {
                 path: projectPath,
                 provider: provider
             )
-            let command = AgentLaunchCommand.launchCommand(forProvider: provider, permissionMode: body?.permissionMode)
+            let command = AgentLaunchCommand.launchCommand(
+                forProvider: provider,
+                permissionMode: body?.permissionMode,
+                planMode: body?.planMode == true
+            )
             let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
             let surface = try createInternalSessionSurface(
                 provider: provider,
@@ -699,6 +704,7 @@ enum BoardAPI {
         struct SpawnRequest: Decodable {
             let provider: String?
             let permissionMode: String?
+            let planMode: Bool?
             let initialPrompt: String?
         }
         struct SpawnResponse: Encodable {
@@ -710,7 +716,11 @@ enum BoardAPI {
         let provider = normalizedProvider(body?.provider ?? "claude")
         do {
             let cwd = try createTemporarySessionWorkspace()
-            let command = AgentLaunchCommand.launchCommand(forProvider: provider, permissionMode: body?.permissionMode)
+            let command = AgentLaunchCommand.launchCommand(
+                forProvider: provider,
+                permissionMode: body?.permissionMode,
+                planMode: body?.planMode == true
+            )
             let prompt = body?.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
             let surface = try createInternalSessionSurface(
                 provider: provider,

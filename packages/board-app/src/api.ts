@@ -1193,6 +1193,7 @@ export function createProjectSession(input: {
   path?: string
   provider: SpawnProvider
   permissionMode?: AgentPermissionMode
+  planMode?: boolean
   initialPrompt?: string
 }): Promise<{ ok: boolean; project: SessionProject; surface: SessionSurface }> {
   return jsonRequest<{ ok: boolean; project: SessionProject; surface: SessionSurface }>(
@@ -1203,6 +1204,7 @@ export function createProjectSession(input: {
         path: input.path,
         provider: input.provider,
         permissionMode: input.permissionMode,
+        planMode: input.planMode,
         initialPrompt: input.initialPrompt,
       }),
     },

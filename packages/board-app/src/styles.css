@@ -16035,6 +16035,7 @@ body.session-launcher-sidebar-resizing * {
 
 .session-launcher__runtime button,
 .session-launcher__access-mode,
+.session-launcher__plan-mode,
 .session-launcher__start,
 .session-launcher__empty-main button {
   display: inline-flex;
@@ -16117,6 +16118,61 @@ body.session-launcher-sidebar-resizing * {
 .session-launcher__access-mode-trigger > svg {
   flex: 0 0 14px;
   pointer-events: none;
+}
+
+.session-launcher__plan-mode {
+  height: 30px;
+  padding: 0 6px 0 9px;
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-muted) 54%, transparent);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.session-launcher__plan-mode span {
+  font-size: 12px;
+}
+
+.session-launcher__plan-mode i {
+  position: relative;
+  width: 26px;
+  height: 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-faint) 28%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.session-launcher__plan-mode i::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-paper);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
+  transition: transform .14s ease;
+}
+
+.session-launcher__plan-mode.is-on {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg-muted));
+  color: var(--text);
+}
+
+.session-launcher__plan-mode.is-on i {
+  background: var(--accent);
+}
+
+.session-launcher__plan-mode.is-on i::after {
+  transform: translateX(10px);
+}
+
+.session-launcher__plan-mode:hover,
+.session-launcher__plan-mode:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
 }
 
 .session-launcher__access-menu {

@@ -311,10 +311,47 @@ describe('SessionLauncherView', () => {
         projectId: 'project-a',
         provider: 'codex',
         permissionMode: 'fullAccess',
+        planMode: false,
         initialPrompt: undefined,
       })
     })
     expect(screen.getByText('股票项目会话')).toBeInTheDocument()
+  })
+
+  it('passes plan mode when starting a project session', async () => {
+    api.createProjectSession.mockResolvedValue({
+      project,
+      surface: {
+        provider: 'codex',
+        sessionId: 'plan-session',
+        surfaceId: 'plan-surface',
+        title: 'Codex - meee2-workspace',
+        cwd: project.path,
+        command: 'codex -c \'collaboration_mode="plan"\' --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
+        status: 'running',
+        createdAt: '2026-06-14T00:00:00Z',
+        updatedAt: '2026-06-14T00:00:00Z',
+      },
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState()} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    const planSwitch = screen.getByRole('switch', { name: /Plan 模式/ })
+    expect(planSwitch).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(planSwitch)
+    expect(planSwitch).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('button', { name: /启动会话/i }))
+
+    await waitFor(() => {
+      expect(api.createProjectSession).toHaveBeenCalledWith({
+        projectId: 'project-a',
+        provider: 'codex',
+        permissionMode: 'fullAccess',
+        planMode: true,
+        initialPrompt: undefined,
+      })
+    })
   })
 
   it('does not show counts and does not indent temporary sessions', async () => {
@@ -621,6 +658,7 @@ describe('SessionLauncherView', () => {
       expect(api.createTemporarySession).toHaveBeenCalledWith({
         provider: 'codex',
         permissionMode: 'fullAccess',
+        planMode: false,
         initialPrompt: 'try a temporary idea',
       })
       expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
