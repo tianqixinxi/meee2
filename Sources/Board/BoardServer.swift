@@ -531,6 +531,8 @@ public final class BoardServer {
         server.GET["/api/session-projects"] = BoardServer.cors(BoardAPI.listSessionProjects)
         server.POST["/api/session-projects"] = BoardServer.cors(BoardAPI.createSessionProject)
         server.POST["/api/session-projects/pick-directory"] = BoardServer.cors(BoardAPI.pickSessionProjectDirectory)
+        server.POST["/api/session-launcher/pick-attachments"] = BoardServer.requireLocalUIOrigin(BoardAPI.pickSessionLaunchAttachments)
+        server.POST["/api/session-launcher/attachments"] = BoardServer.requireLocalUIOrigin(BoardAPI.uploadSessionLaunchAttachment)
         server.PATCH["/api/session-projects/:id"] = BoardServer.cors(BoardAPI.updateSessionProject)
         server.POST["/api/session-projects/:id/reveal"] = BoardServer.cors(BoardAPI.revealSessionProject)
         server.DELETE["/api/session-projects/:id"] = BoardServer.cors(BoardAPI.forgetSessionProject)

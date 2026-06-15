@@ -344,6 +344,13 @@ export interface TemporarySessionCreateInput {
   permissionMode?: AgentPermissionMode
   planMode?: boolean
   initialPrompt?: string
+  attachments?: SessionLaunchAttachment[]
+}
+
+export interface SessionLaunchAttachment {
+  path: string
+  filename?: string | null
+  contentType?: string | null
 }
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'

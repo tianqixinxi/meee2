@@ -14,15 +14,18 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Paperclip,
   PencilLine,
   Pin,
   PinOff,
   Trash2,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type {
   CSSProperties,
+  ClipboardEvent as ReactClipboardEvent,
   Dispatch,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -38,11 +41,13 @@ import {
   fetchSessionProjects,
   forgetSessionProject,
   pickSessionProjectDirectory,
+  pickSessionLaunchAttachments,
   renameSessionProject,
   reopenLauncherSession,
   revealSessionProjectInFinder,
   syncNativeSessionsWorkspace,
   updateSessionControl,
+  uploadSessionLaunchAttachment,
   type NativeTerminalRect,
 } from '../api'
 import { nativeTerminalTargetForSession } from '../lib/sessionTerminal'
@@ -50,7 +55,7 @@ import { useTheme } from '../lib/theme'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, loadTitleOverrides, saveTitleOverride, togglePinned } from '../sessionOverrides'
-import type { AgentPermissionMode, BoardState, Session, SessionProject, SpawnProvider } from '../types'
+import type { AgentPermissionMode, BoardState, Session, SessionLaunchAttachment, SessionProject, SpawnProvider } from '../types'
 
 interface Props {
   state: BoardState | null
@@ -109,6 +114,37 @@ function readStoredSidebarCollapsed(): boolean {
 
 function clampSidebarWidth(width: number): number {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)))
+}
+
+function mergeLaunchAttachments(
+  current: SessionLaunchAttachment[],
+  additions: SessionLaunchAttachment[],
+): SessionLaunchAttachment[] {
+  const next = [...current]
+  const seen = new Set(next.map((item) => item.path))
+  for (const attachment of additions) {
+    const path = attachment.path?.trim()
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    const parts = path.split('/').filter(Boolean)
+    next.push({
+      ...attachment,
+      path,
+      filename: attachment.filename || parts[parts.length - 1] || path,
+    })
+  }
+  return next
+}
+
+function removeLaunchAttachment(
+  current: SessionLaunchAttachment[],
+  path: string,
+): SessionLaunchAttachment[] {
+  return current.filter((attachment) => attachment.path !== path)
+}
+
+function truncateAttachmentName(name: string, max = 28): string {
+  return name.length <= max ? name : `${name.slice(0, max - 3)}...`
 }
 
 function readStoredSelection(): Selection | null {
@@ -205,10 +241,12 @@ export function SessionLauncherView({
   const [providerByProjectId, setProviderByProjectId] = useState<Record<string, SpawnProvider>>({})
   const [permissionModeByProjectId, setPermissionModeByProjectId] = useState<Record<string, AgentPermissionMode>>({})
   const [planModeByProjectId, setPlanModeByProjectId] = useState<Record<string, boolean>>({})
+  const [attachmentsByProjectId, setAttachmentsByProjectId] = useState<Record<string, SessionLaunchAttachment[]>>({})
   const [temporaryPrompt, setTemporaryPrompt] = useState(DEFAULT_PROMPT)
   const [temporaryProvider, setTemporaryProvider] = useState<SpawnProvider>('codex')
   const [temporaryPermissionMode, setTemporaryPermissionMode] = useState<AgentPermissionMode>(DEFAULT_PERMISSION_MODE)
   const [temporaryPlanMode, setTemporaryPlanMode] = useState(false)
+  const [temporaryAttachments, setTemporaryAttachments] = useState<SessionLaunchAttachment[]>([])
   const [pinnedSessionIds, setPinnedSessionIds] = useState<Set<string>>(() => loadPinnedSet())
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>(() => loadTitleOverrides())
   const [addingFolder, setAddingFolder] = useState(false)
@@ -497,6 +535,9 @@ export function SessionLauncherView({
   const currentProjectPrompt = selectedProject
     ? promptByProjectId[selectedProject.id] ?? DEFAULT_PROMPT
     : DEFAULT_PROMPT
+  const currentProjectAttachments = selectedProject
+    ? attachmentsByProjectId[selectedProject.id] ?? []
+    : []
 
   const selectProject = useCallback((project: SessionProject) => {
     setSelection({ kind: 'project', projectId: project.id })
@@ -594,20 +635,53 @@ export function SessionLauncherView({
     }
   }, [onToast, t])
 
+  const handlePickProjectAttachments = useCallback(async (projectId: string) => {
+    const result = await pickSessionLaunchAttachments()
+    if (!result.attachments?.length) return
+    setAttachmentsByProjectId((current) => ({
+      ...current,
+      [projectId]: mergeLaunchAttachments(current[projectId] ?? [], result.attachments),
+    }))
+  }, [])
+
+  const handleUploadProjectAttachment = useCallback(async (projectId: string, file: File) => {
+    const attachment = await uploadSessionLaunchAttachment(file)
+    setAttachmentsByProjectId((current) => ({
+      ...current,
+      [projectId]: mergeLaunchAttachments(current[projectId] ?? [], [attachment]),
+    }))
+  }, [])
+
+  const handlePickTemporaryAttachments = useCallback(async () => {
+    const result = await pickSessionLaunchAttachments()
+    if (!result.attachments?.length) return
+    setTemporaryAttachments((current) => mergeLaunchAttachments(current, result.attachments))
+  }, [])
+
+  const handleUploadTemporaryAttachment = useCallback(async (file: File) => {
+    const attachment = await uploadSessionLaunchAttachment(file)
+    setTemporaryAttachments((current) => mergeLaunchAttachments(current, [attachment]))
+  }, [])
+
   const handleStartProjectSession = useCallback(async () => {
     if (!selectedProject) return
     const prompt = currentProjectPrompt.trim()
+    const attachments = currentProjectAttachments
     setStartingProjectId(selectedProject.id)
     try {
-      const result = await createProjectSession({
+      const launchInput: Parameters<typeof createProjectSession>[0] = {
         projectId: selectedProject.id,
         provider: selectedProjectProvider,
         permissionMode: selectedProjectPermissionMode,
         planMode: selectedProjectPlanMode,
         initialPrompt: prompt || undefined,
-      })
+      }
+      if (attachments.length > 0) launchInput.attachments = attachments
+      const result = await createProjectSession(launchInput)
       setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)])
       setProviderByProjectId((current) => ({ ...current, [result.project.id]: result.project.preferredProvider }))
+      setPromptByProjectId((current) => ({ ...current, [result.project.id]: DEFAULT_PROMPT }))
+      setAttachmentsByProjectId((current) => ({ ...current, [result.project.id]: [] }))
       setSelection({
         kind: 'session',
         sessionId: result.surface.sessionId,
@@ -624,24 +698,28 @@ export function SessionLauncherView({
     } finally {
       setStartingProjectId(null)
     }
-  }, [currentProjectPrompt, onSessionCreated, onToast, selectedProject, selectedProjectPermissionMode, selectedProjectPlanMode, selectedProjectProvider, t])
+  }, [currentProjectAttachments, currentProjectPrompt, onSessionCreated, onToast, selectedProject, selectedProjectPermissionMode, selectedProjectPlanMode, selectedProjectProvider, t])
 
   const handleStartTemporarySession = useCallback(async () => {
     const prompt = temporaryPrompt.trim()
+    const attachments = temporaryAttachments
     setStartingTemporary(true)
     try {
-      const result = await createTemporarySession({
+      const launchInput: Parameters<typeof createTemporarySession>[0] = {
         provider: temporaryProvider,
         permissionMode: temporaryPermissionMode,
         planMode: temporaryPlanMode,
         initialPrompt: prompt || undefined,
-      })
+      }
+      if (attachments.length > 0) launchInput.attachments = attachments
+      const result = await createTemporarySession(launchInput)
       setSelection({
         kind: 'session',
         sessionId: result.surface.sessionId,
         surfaceId: result.surface.surfaceId,
       })
       setTemporaryPrompt(DEFAULT_PROMPT)
+      setTemporaryAttachments([])
       setExpandedSessionGroups((current) => new Set([...current, TEMPORARY_GROUP_ID]))
       onSessionCreated?.()
       onToast?.('success', t('sessions.launcher.startedTemporary', { provider: spawnProviderLabel(temporaryProvider) }))
@@ -650,7 +728,7 @@ export function SessionLauncherView({
     } finally {
       setStartingTemporary(false)
     }
-  }, [onSessionCreated, onToast, temporaryPermissionMode, temporaryPlanMode, temporaryPrompt, temporaryProvider, t])
+  }, [onSessionCreated, onToast, temporaryAttachments, temporaryPermissionMode, temporaryPlanMode, temporaryPrompt, temporaryProvider, t])
 
   const handleSelectSession = useCallback((session: Session) => {
     setSessionMenu(null)
@@ -990,6 +1068,7 @@ export function SessionLauncherView({
             provider={temporaryProvider}
             permissionMode={temporaryPermissionMode}
             planMode={temporaryPlanMode}
+            attachments={temporaryAttachments}
             starting={startingTemporary}
             onPromptChange={setTemporaryPrompt}
             onProviderChange={(provider) => {
@@ -998,6 +1077,9 @@ export function SessionLauncherView({
             }}
             onPermissionModeChange={(permissionMode) => setTemporaryPermissionMode(normalizePermissionMode(temporaryProvider, permissionMode))}
             onPlanModeChange={setTemporaryPlanMode}
+            onPickAttachments={handlePickTemporaryAttachments}
+            onUploadPastedImage={handleUploadTemporaryAttachment}
+            onRemoveAttachment={(path) => setTemporaryAttachments((current) => removeLaunchAttachment(current, path))}
             onStart={() => void handleStartTemporarySession()}
           />
         ) : selectedProject ? (
@@ -1007,6 +1089,7 @@ export function SessionLauncherView({
             provider={selectedProjectProvider}
             permissionMode={selectedProjectPermissionMode}
             planMode={selectedProjectPlanMode}
+            attachments={currentProjectAttachments}
             starting={startingProjectId === selectedProject.id}
             onPromptChange={(value) => setPromptByProjectId((current) => ({
               ...current,
@@ -1026,6 +1109,12 @@ export function SessionLauncherView({
             onPlanModeChange={(planMode) => setPlanModeByProjectId((current) => ({
               ...current,
               [selectedProject.id]: planMode,
+            }))}
+            onPickAttachments={() => handlePickProjectAttachments(selectedProject.id)}
+            onUploadPastedImage={(file) => handleUploadProjectAttachment(selectedProject.id, file)}
+            onRemoveAttachment={(path) => setAttachmentsByProjectId((current) => ({
+              ...current,
+              [selectedProject.id]: removeLaunchAttachment(current[selectedProject.id] ?? [], path),
             }))}
             onStart={() => void handleStartProjectSession()}
           />
@@ -1612,11 +1701,15 @@ function SessionComposer({
   provider,
   permissionMode,
   planMode,
+  attachments,
   starting,
   onPromptChange,
   onProviderChange,
   onPermissionModeChange,
   onPlanModeChange,
+  onPickAttachments,
+  onUploadPastedImage,
+  onRemoveAttachment,
   onStart,
 }: {
   title: string
@@ -1624,16 +1717,22 @@ function SessionComposer({
   provider: SpawnProvider
   permissionMode: AgentPermissionMode
   planMode: boolean
+  attachments: SessionLaunchAttachment[]
   starting: boolean
   onPromptChange: (value: string) => void
   onProviderChange: (provider: SpawnProvider) => void
   onPermissionModeChange: (permissionMode: AgentPermissionMode) => void
   onPlanModeChange: (planMode: boolean) => void
+  onPickAttachments: () => Promise<void>
+  onUploadPastedImage: (file: File) => Promise<void>
+  onRemoveAttachment: (path: string) => void
   onStart: () => void
 }) {
   const { t } = useI18n()
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [enterSubmitArmed, setEnterSubmitArmed] = useState(false)
+  const [attachmentBusy, setAttachmentBusy] = useState(false)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const permissionMenuRef = useRef<HTMLDivElement | null>(null)
   const enterSubmitTimerRef = useRef<number | null>(null)
   const permissionOptions = PERMISSION_OPTIONS[provider]
@@ -1669,6 +1768,47 @@ function SessionComposer({
     clearEnterSubmitArm()
     onPromptChange(value)
   }, [clearEnterSubmitArm, onPromptChange])
+
+  const pickAttachments = useCallback(async () => {
+    if (starting || attachmentBusy) return
+    clearEnterSubmitArm()
+    setAttachmentBusy(true)
+    setAttachmentError(null)
+    try {
+      await onPickAttachments()
+    } catch (err) {
+      setAttachmentError((err as Error).message || t('sessions.launcher.attachmentFailed'))
+    } finally {
+      setAttachmentBusy(false)
+    }
+  }, [attachmentBusy, clearEnterSubmitArm, onPickAttachments, starting, t])
+
+  const handlePromptPaste = useCallback(async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items?.length) return
+    const files: File[] = []
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+    if (files.length === 0) return
+    event.preventDefault()
+    clearEnterSubmitArm()
+    setAttachmentBusy(true)
+    setAttachmentError(null)
+    try {
+      for (const file of files) {
+        await onUploadPastedImage(file)
+      }
+    } catch (err) {
+      setAttachmentError((err as Error).message || t('sessions.launcher.attachmentFailed'))
+    } finally {
+      setAttachmentBusy(false)
+    }
+  }, [clearEnterSubmitArm, onUploadPastedImage, t])
 
   const handlePromptKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
@@ -1711,15 +1851,48 @@ function SessionComposer({
         <h2>{title}</h2>
         <div className="session-launcher__prompt-tray">
           <div className="session-launcher__prompt-card">
+            {attachments.length > 0 && (
+              <div className="session-launcher__attachments" aria-label={t('sessions.launcher.attachments')}>
+                {attachments.map((attachment) => (
+                  <span key={attachment.path} className="session-launcher__attachment-chip" title={attachment.path}>
+                    <FileText size={13} aria-hidden />
+                    <span>{truncateAttachmentName(attachment.filename || attachment.path)}</span>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveAttachment(attachment.path)}
+                      disabled={starting}
+                      aria-label={t('sessions.launcher.removeAttachment', { name: attachment.filename || attachment.path })}
+                      title={t('sessions.launcher.removeAttachment', { name: attachment.filename || attachment.path })}
+                    >
+                      <X size={12} aria-hidden />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <textarea
               value={prompt}
               onChange={(event) => handlePromptChange(event.target.value)}
               onKeyDown={handlePromptKeyDown}
+              onPaste={(event) => void handlePromptPaste(event)}
               placeholder={t('sessions.launcher.promptPlaceholder')}
               rows={4}
             />
+            {attachmentError && (
+              <div className="session-launcher__attachment-error" role="alert">{attachmentError}</div>
+            )}
             <div className="session-launcher__composer-footer">
               <div className="session-launcher__composer-left">
+                <button
+                  type="button"
+                  className="session-launcher__attach-button"
+                  onClick={() => void pickAttachments()}
+                  disabled={starting || attachmentBusy}
+                  aria-label={t('sessions.launcher.attachFiles')}
+                  title={t('sessions.launcher.attachFiles')}
+                >
+                  {attachmentBusy ? <Loader2 size={14} className="spin" aria-hidden /> : <Paperclip size={14} aria-hidden />}
+                </button>
                 <div className="session-launcher__access-mode" ref={permissionMenuRef}>
                   <button
                     type="button"

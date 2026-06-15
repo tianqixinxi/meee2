@@ -11,12 +11,14 @@ const api = vi.hoisted(() => ({
   createSessionProject: vi.fn(),
   createTemporarySession: vi.fn(),
   forgetSessionProject: vi.fn(),
+  pickSessionLaunchAttachments: vi.fn(),
   pickSessionProjectDirectory: vi.fn(),
   renameSessionProject: vi.fn(),
   reopenLauncherSession: vi.fn(),
   revealSessionProjectInFinder: vi.fn(),
   syncNativeSessionsWorkspace: vi.fn(),
   updateSessionControl: vi.fn(),
+  uploadSessionLaunchAttachment: vi.fn(),
 }))
 
 vi.mock('../api', () => api)
@@ -111,6 +113,12 @@ describe('SessionLauncherView', () => {
     })
     api.revealSessionProjectInFinder.mockResolvedValue({ ok: true, path: project.path })
     api.updateSessionControl.mockResolvedValue(undefined)
+    api.pickSessionLaunchAttachments.mockResolvedValue({ ok: false, attachments: [] })
+    api.uploadSessionLaunchAttachment.mockResolvedValue({
+      path: '/Users/kai/Code/meee2-workspace/spec.png',
+      filename: 'spec.png',
+      contentType: 'image/png',
+    })
     api.pickSessionProjectDirectory.mockResolvedValue({ ok: true, path: '/Users/kai/Code/new-project' })
     api.createSessionProject.mockResolvedValue({
       ...project,
@@ -469,6 +477,93 @@ describe('SessionLauncherView', () => {
         initialPrompt: undefined,
       })
     })
+  })
+
+  it('passes selected launch attachments when starting a project session', async () => {
+    const attachment = {
+      path: '/Users/kai/Code/meee2-workspace/spec.png',
+      filename: 'spec.png',
+      contentType: 'image/png',
+    }
+    api.pickSessionLaunchAttachments.mockResolvedValue({ ok: true, attachments: [attachment] })
+    api.createProjectSession.mockResolvedValue({
+      project,
+      surface: {
+        provider: 'codex',
+        sessionId: 'attachment-session',
+        surfaceId: 'attachment-surface',
+        title: 'Codex - meee2-workspace',
+        cwd: project.path,
+        command: 'codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
+        status: 'running',
+        createdAt: '2026-06-14T00:00:00Z',
+        updatedAt: '2026-06-14T00:00:00Z',
+      },
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState()} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(screen.getByRole('button', { name: '添加图片或文件' }))
+
+    expect(await screen.findByText('spec.png')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /启动会话/i }))
+
+    await waitFor(() => {
+      expect(api.createProjectSession).toHaveBeenCalledWith({
+        projectId: 'project-a',
+        provider: 'codex',
+        permissionMode: 'fullAccess',
+        planMode: false,
+        initialPrompt: undefined,
+        attachments: [attachment],
+      })
+    })
+  })
+
+  it('resets the project composer draft after creating a session', async () => {
+    const attachment = {
+      path: '/Users/kai/Code/meee2-workspace/spec.png',
+      filename: 'spec.png',
+      contentType: 'image/png',
+    }
+    api.pickSessionLaunchAttachments.mockResolvedValue({ ok: true, attachments: [attachment] })
+    api.createProjectSession.mockResolvedValue({
+      project,
+      surface: {
+        provider: 'codex',
+        sessionId: 'reset-session',
+        surfaceId: 'reset-surface',
+        title: 'Codex - meee2-workspace',
+        cwd: project.path,
+        command: 'codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
+        status: 'running',
+        createdAt: '2026-06-14T00:00:00Z',
+        updatedAt: '2026-06-14T00:00:00Z',
+      },
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState()} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.change(screen.getByPlaceholderText('随心输入'), {
+      target: { value: 'summarize these inputs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '添加图片或文件' }))
+    expect(await screen.findByText('spec.png')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /启动会话/i }))
+    await waitFor(() => {
+      expect(api.createProjectSession).toHaveBeenCalledWith(expect.objectContaining({
+        initialPrompt: 'summarize these inputs',
+        attachments: [attachment],
+      }))
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '在 meee2-workspace 中新建会话' }))
+
+    expect(screen.getByPlaceholderText('随心输入')).toHaveValue('')
+    expect(screen.queryByText('spec.png')).not.toBeInTheDocument()
   })
 
   it('arms submit on first Enter and starts the project session on second Enter', async () => {

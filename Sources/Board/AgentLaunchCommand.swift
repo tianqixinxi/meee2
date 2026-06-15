@@ -1,5 +1,11 @@
 import Foundation
 
+struct AgentLaunchAttachment: Codable, Equatable {
+    let path: String
+    let filename: String?
+    let contentType: String?
+}
+
 enum AgentLaunchCommand {
     static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
 
@@ -45,12 +51,22 @@ enum AgentLaunchCommand {
             : "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
     }
 
-    static func launcherInitialPrompt(forProvider provider: String, planMode: Bool, initialPrompt rawPrompt: String?) -> String? {
+    static func launcherInitialPrompt(
+        forProvider provider: String,
+        planMode: Bool,
+        initialPrompt rawPrompt: String?,
+        attachments: [AgentLaunchAttachment] = []
+    ) -> String? {
         let prompt = rawPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let attachmentLines = attachments
+            .map { $0.path.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { "@\($0)" }
+        let content = (attachmentLines + (prompt.isEmpty ? [] : [prompt])).joined(separator: "\n")
         if planMode && normalizedProvider(provider) == "codex" {
-            return prompt.isEmpty ? "/plan" : "/plan \(prompt)"
+            return content.isEmpty ? "/plan" : "/plan \(content)"
         }
-        return prompt.isEmpty ? nil : prompt
+        return content.isEmpty ? nil : content
     }
 
     static func launcherDisplayPrompt(forDeliveredInitialPrompt rawPrompt: String?) -> String? {
@@ -58,15 +74,32 @@ enum AgentLaunchCommand {
         guard !prompt.isEmpty else { return nil }
         let lower = prompt.lowercased()
         guard lower == "/plan" || lower.hasPrefix("/plan ") else {
-            return prompt
+            return displayPromptWithoutLeadingAttachments(prompt)
         }
         let withoutPlan = prompt.dropFirst("/plan".count)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return withoutPlan.isEmpty ? nil : withoutPlan
+        return displayPromptWithoutLeadingAttachments(withoutPlan)
     }
 
     static func normalizedProvider(_ raw: String) -> String {
         raw.lowercased().contains("codex") ? "codex" : "claude"
+    }
+
+    private static func displayPromptWithoutLeadingAttachments(_ raw: String) -> String? {
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        let firstPromptIndex = lines.firstIndex { line in
+            !isAttachmentReferenceLine(String(line))
+        }
+        guard let firstPromptIndex else { return nil }
+        let prompt = lines[firstPromptIndex...]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    private static func isAttachmentReferenceLine(_ raw: String) -> Bool {
+        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.hasPrefix("@/") || line.hasPrefix("@~")
     }
 
     static func normalizedPermissionMode(_ raw: String?) -> String {
