@@ -458,9 +458,9 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if shouldSendLaunchCommand(trimmedCommand) {
             let startedAt = Date()
-            let launchCommand = commandWithSurfaceIdentity(trimmedCommand)
-            terminalView.sendText(launchCommand + "\n")
-            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(launchCommand.utf8.count)")
+            let envBootstrap = Self.surfaceEnvironmentBootstrap(surfaceId: surfaceId)
+            terminalView.sendText(envBootstrap + trimmedCommand + "\n")
+            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(trimmedCommand.utf8.count)")
             _ = scheduleWorkspaceTrustAutoAcceptIfNeeded(command: trimmedCommand)
         }
         guard let initialPrompt, !initialPrompt.isEmpty else { return }
@@ -599,13 +599,6 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         return lower != "shell" && lower != "/bin/zsh" && lower != "/bin/bash"
     }
 
-    private func commandWithSurfaceIdentity(_ rawCommand: String) -> String {
-        [
-            "CMUX_SURFACE_ID=\(Self.shellQuote(surfaceId))",
-            rawCommand
-        ].joined(separator: " ")
-    }
-
     private func touch() {
         updatedAt = Date()
     }
@@ -673,6 +666,13 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
 
     private static func shellQuote(_ raw: String) -> String {
         "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    private static func surfaceEnvironmentBootstrap(surfaceId: String) -> String {
+        // Keep the surface id in the shell environment for provider hooks, but
+        // do not prepend meee2 internals to the visible Codex/Claude command.
+        // The leading space avoids shell history in common HISTCONTROL setups.
+        " export CMUX_SURFACE_ID=\(shellQuote(surfaceId)); printf '\\033[2J\\033[H'\n"
     }
 
     private static func configureGhosttyResourcesIfNeeded() {

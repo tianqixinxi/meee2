@@ -28,6 +28,22 @@ final class SessionDataTests: XCTestCase {
         XCTAssertEqual(decoded.currentTool, "Bash")
     }
 
+    func testProviderResumeSessionIdRoundTrip() throws {
+        let original = SessionData(
+            sessionId: "codex-ghostty-local",
+            project: "/tmp/dev/myproject",
+            providerResumeSessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80",
+            status: .active
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["provider_resume_session_id"] as? String, "8db44e39-685d-47ab-bd0e-5e97386ded80")
+
+        let decoded = try JSONDecoder().decode(SessionData.self, from: data)
+        XCTAssertEqual(decoded.providerResumeSessionId, "8db44e39-685d-47ab-bd0e-5e97386ded80")
+    }
+
     /// 旧文件兼容：legacy status 字符串 ("running"/"waitingInput"/...) 应迁移到新枚举
     func testLegacyStatusStringMigration() throws {
         let legacy = """
@@ -172,6 +188,7 @@ final class SessionDataTests: XCTestCase {
         XCTAssertEqual(migrated.schemaVersion, SessionData.currentSchemaVersion)
         XCTAssertEqual(migrated.status, .tooling, "migration should not change semantic fields")
         XCTAssertEqual(migrated.sessionId, "legacy-vX")
+        XCTAssertNil(migrated.providerResumeSessionId)
     }
 
     /// 新建记录默认就是最新版本，且 round-trip 后版本保持不变

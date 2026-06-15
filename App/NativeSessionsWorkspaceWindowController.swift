@@ -111,13 +111,32 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         terminalOnly: Bool = false,
         tracePayload: [String: Any]? = nil
     ) {
+        let startedAt = Self.timestampMillis()
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.activate.begin",
+            extra: "terminalOnly=\(terminalOnly) session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
+        )
         setTerminalOnlyMode(terminalOnly)
         if !terminalOnly {
             reloadRows()
         }
+        let resolveStartedAt = Self.timestampMillis()
         if let target = resolveTarget(sessionId: sessionId, surfaceId: surfaceId) {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.done",
+                startedAt: resolveStartedAt,
+                extra: "surface=\(target.surfaceId.prefix(8)) session=\(target.sessionId.prefix(8)) backend=\(target.backend.rawValue)"
+            )
             focus(target, tracePayload: tracePayload)
         } else if terminalOnly {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.miss",
+                startedAt: resolveStartedAt,
+                extra: "terminalOnly=true session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
+            )
             selectedRailId = nil
             registry.hideActive()
             emptyTerminalLabel.stringValue = "Select an internal session"
@@ -127,8 +146,27 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
                       $0.status == InternalTerminalLifecycle.starting.rawValue
                           || $0.status == InternalTerminalLifecycle.running.rawValue
                   }) ?? internalSessions().first {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.fallback",
+                startedAt: resolveStartedAt,
+                extra: "surface=\(first.surfaceId.prefix(8)) session=\(first.sessionId.prefix(8))"
+            )
             focus(first, tracePayload: tracePayload)
+        } else {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.miss",
+                startedAt: resolveStartedAt,
+                extra: "terminalOnly=false session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
+            )
         }
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.activate.done",
+            startedAt: startedAt,
+            extra: "terminalOnly=\(terminalOnly)"
+        )
     }
 
     func suspend() {
@@ -465,6 +503,44 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    private static func timestampMillis() -> Double {
+        Date().timeIntervalSince1970 * 1000
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? CGFloat { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
+    }
+
+    private static func logTrace(
+        _ payload: [String: Any]?,
+        phase: String,
+        startedAt: Double? = nil,
+        extra: String = ""
+    ) {
+        guard
+            let payload,
+            let traceId = payload["traceId"] as? String,
+            !traceId.isEmpty
+        else {
+            return
+        }
+        let now = timestampMillis()
+        let sentAt = doubleValue(payload["sentAtMs"])
+        let clickStartedAt = doubleValue(payload["clickStartedAtMs"])
+        let sendToNative = sentAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let clickToNative = clickStartedAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let duration = startedAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let webPhase = payload["webPhase"] as? String ?? "-"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        NSLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
+        )
+    }
+
 }
 
 private extension TerminalSessionSnapshot {
@@ -644,11 +720,39 @@ private final class TerminalPaneRegistry {
         }
         activeKey = key
         remember(key)
+        let attachStartedAt = Self.timestampMillis()
         attach(controller)
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.attach.done",
+            startedAt: attachStartedAt,
+            extra: "surface=\(key.prefix(8))"
+        )
+        let themeStartedAt = Self.timestampMillis()
         controller.applyTheme(theme)
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.theme.done",
+            startedAt: themeStartedAt,
+            extra: "surface=\(key.prefix(8)) theme=\(theme)"
+        )
+        let paneFocusStartedAt = Self.timestampMillis()
         controller.focus()
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.focus.done",
+            startedAt: paneFocusStartedAt,
+            extra: "surface=\(key.prefix(8))"
+        )
+        let cleanupStartedAt = Self.timestampMillis()
         retire(controller: retiringController, key: retiringKey)
         scheduleStabilizedLayouts(for: key, tracePayload: tracePayload)
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.cleanup.done",
+            startedAt: cleanupStartedAt,
+            extra: "surface=\(key.prefix(8)) retiring=\(retiringKey?.prefix(8) ?? "-")"
+        )
         Self.logTrace(
             tracePayload,
             phase: "native.workspace.focus.done",

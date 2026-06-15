@@ -2868,7 +2868,7 @@ function isMeee2InternalSessionId(sessionId: string): boolean {
 function isLikelyProviderResumeSessionId(sessionId: string): boolean {
   const trimmed = sessionId.trim()
   if (!trimmed || isMeee2InternalSessionId(trimmed)) return false
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
 }
 
 function formatSessionActionSummary(items: Array<[number, string]>): string {

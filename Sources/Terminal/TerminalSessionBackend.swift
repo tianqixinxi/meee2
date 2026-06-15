@@ -175,6 +175,7 @@ public enum TerminalSessionBackendMetadata {
             sessionId: snapshot.sessionId,
             project: URL(fileURLWithPath: snapshot.cwd).lastPathComponent,
             cwd: snapshot.cwd,
+            providerResumeSessionId: AgentLaunchCommand.isLikelyProviderResumeSessionId(snapshot.sessionId) ? snapshot.sessionId : nil,
             startedAt: snapshot.createdAt,
             lastActivity: snapshot.updatedAt,
             status: snapshot.status == InternalTerminalLifecycle.exited.rawValue ? .dead : .active,

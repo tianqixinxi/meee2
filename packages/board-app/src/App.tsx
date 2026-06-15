@@ -1200,7 +1200,12 @@ export default function App() {
     return () => window.removeEventListener('focus', refreshUserProfile)
   }, [refreshUserProfile])
 
-  if (!firstRunOnboardingCompleted && !degradedEntry) {
+  const hasExistingSessions = (boardState.state?.sessions.length ?? 0) > 0
+  // LocalStorage can disappear across app/browser resets; persisted sessions are
+  // stronger evidence that this is not a first-run workspace.
+  const shouldShowFirstRunOnboarding = !firstRunOnboardingCompleted && !degradedEntry && !hasExistingSessions
+
+  if (shouldShowFirstRunOnboarding) {
     return (
       <ToastContext.Provider value={toastCtx}>
         <FirstRunOnboarding
@@ -1245,14 +1250,14 @@ export default function App() {
               tone="warning"
               placement="canvas"
               className="readiness-banner"
-              title="Local session readiness needs setup"
+              title="Local setup incomplete"
               action={(
                 <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
-                  Open Settings
+                  Settings
                 </button>
               )}
             >
-              {readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.
+              {readinessReport.requiredFailed} readiness check{readinessReport.requiredFailed === 1 ? '' : 's'} failed. Some local session features may run in fallback mode.
             </Notice>
           )}
           {workspaceMode === 'session' ? (

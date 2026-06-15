@@ -2,8 +2,6 @@ import Foundation
 
 enum AgentLaunchCommand {
     static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
-    static let codexPlanModeConfig = "-c 'collaboration_mode=\"plan\"'"
-    static let codexPlanModeInstruction = "Plan mode is enabled for this Codex session. First produce a plan and ask for approval before editing files, running mutating commands, or committing. Do not implement until the user explicitly approves."
 
     static func fullAccessCommand(forProvider provider: String) -> String {
         launchCommand(forProvider: provider, permissionMode: "fullAccess")
@@ -25,7 +23,7 @@ enum AgentLaunchCommand {
             default:
                 command = "codex \(codexAutomationFlags)"
             }
-            return planRequested ? commandWithCodexPlanMode(command) : command
+            return command
         }
         if planRequested {
             return "claude --permission-mode plan"
@@ -49,13 +47,22 @@ enum AgentLaunchCommand {
 
     static func launcherInitialPrompt(forProvider provider: String, planMode: Bool, initialPrompt rawPrompt: String?) -> String? {
         let prompt = rawPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard planMode, normalizedProvider(provider) == "codex" else {
-            return prompt.isEmpty ? nil : prompt
+        if planMode && normalizedProvider(provider) == "codex" {
+            return prompt.isEmpty ? "/plan" : "/plan \(prompt)"
         }
-        if prompt.isEmpty {
-            return codexPlanModeInstruction
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    static func launcherDisplayPrompt(forDeliveredInitialPrompt rawPrompt: String?) -> String? {
+        let prompt = rawPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !prompt.isEmpty else { return nil }
+        let lower = prompt.lowercased()
+        guard lower == "/plan" || lower.hasPrefix("/plan ") else {
+            return prompt
         }
-        return "\(codexPlanModeInstruction)\n\nUser request:\n\(prompt)"
+        let withoutPlan = prompt.dropFirst("/plan".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return withoutPlan.isEmpty ? nil : withoutPlan
     }
 
     static func normalizedProvider(_ raw: String) -> String {
@@ -158,17 +165,4 @@ enum AgentLaunchCommand {
         return parts.joined(separator: " ")
     }
 
-    private static func commandWithCodexPlanMode(_ command: String) -> String {
-        let lower = command.lowercased()
-        if lower.contains("collaboration_mode") {
-            return command
-        }
-        if lower == "codex" {
-            return "codex \(codexPlanModeConfig)"
-        }
-        if lower.hasPrefix("codex ") {
-            return "codex \(codexPlanModeConfig) \(command.dropFirst("codex ".count))"
-        }
-        return "\(command) \(codexPlanModeConfig)"
-    }
 }

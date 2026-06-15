@@ -41,6 +41,7 @@ final class SessionStoreContinuityTests: XCTestCase {
         )
         original.pendingPermissionTool = "Edit"
         original.pendingPermissionMessage = "Needs approval"
+        original.providerResumeSessionId = "8db44e39-685d-47ab-bd0e-5e97386ded80"
 
         store.create(original)
         _ = store.enqueue(oldId, message: "queued")
@@ -56,6 +57,7 @@ final class SessionStoreContinuityTests: XCTestCase {
         XCTAssertEqual(recovered?.terminalInfo?.tty, "ttys001")
         XCTAssertEqual(recovered?.tasks.first?.id, "task-1")
         XCTAssertEqual(recovered?.usageStats?.inputTokens, 1)
+        XCTAssertEqual(recovered?.providerResumeSessionId, "8db44e39-685d-47ab-bd0e-5e97386ded80")
         XCTAssertEqual(recovered?.pendingPermissionTool, "Edit")
         XCTAssertEqual(store.queueLength(newId), 1)
         XCTAssertEqual(store.dequeue(newId), "queued")
@@ -73,6 +75,7 @@ final class SessionStoreContinuityTests: XCTestCase {
         )
         original.pendingPermissionTool = "Bash"
         original.pendingPermissionMessage = "Run command"
+        original.providerResumeSessionId = "8db44e39-685d-47ab-bd0e-5e97386ded80"
 
         let copied = original.withSessionId("new")
 
@@ -82,6 +85,7 @@ final class SessionStoreContinuityTests: XCTestCase {
         XCTAssertEqual(copied.status, original.status)
         XCTAssertEqual(copied.currentTool, original.currentTool)
         XCTAssertEqual(copied.description, original.description)
+        XCTAssertEqual(copied.providerResumeSessionId, original.providerResumeSessionId)
         XCTAssertEqual(copied.pendingPermissionTool, original.pendingPermissionTool)
         XCTAssertEqual(copied.pendingPermissionMessage, original.pendingPermissionMessage)
 
@@ -89,6 +93,33 @@ final class SessionStoreContinuityTests: XCTestCase {
         let decoded = try JSONDecoder().decode(SessionData.self, from: data)
         XCTAssertEqual(decoded.sessionId, "new")
         XCTAssertEqual(decoded.pendingPermissionTool, "Bash")
+        XCTAssertEqual(decoded.providerResumeSessionId, "8db44e39-685d-47ab-bd0e-5e97386ded80")
+    }
+
+    func testSetProviderResumeSessionIdPreservesLastActivity() {
+        let sessionId = "resume-anchor-\(UUID().uuidString)"
+        let store = SessionStore.shared
+        let lastActivity = Date(timeIntervalSince1970: 200)
+
+        defer { store.delete(sessionId) }
+
+        store.create(SessionData(
+            sessionId: sessionId,
+            project: "project-a",
+            cwd: "/tmp/project-a",
+            startedAt: Date(timeIntervalSince1970: 100),
+            lastActivity: lastActivity,
+            status: .dead
+        ))
+
+        store.setProviderResumeSessionId(
+            sessionId: sessionId,
+            providerResumeSessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"
+        )
+
+        let recovered = store.get(sessionId)
+        XCTAssertEqual(recovered?.providerResumeSessionId, "8db44e39-685d-47ab-bd0e-5e97386ded80")
+        XCTAssertEqual(recovered?.lastActivity, lastActivity)
     }
 
     func testHistoricalStatusesAreNotLiveSurfaceStatuses() {

@@ -1093,6 +1093,7 @@ class ClaudePlugin: SessionPlugin {
                 pid: aiSession.pid,
                 ghosttyTerminalId: resolvedGhosttyTerminalId,
                 transcriptPath: transcriptPath,
+                providerResumeSessionId: AgentLaunchCommand.isLikelyProviderResumeSessionId(realSessionId) ? realSessionId : nil,
                 startedAt: aiSession.startedAt,
                 lastActivity: aiSession.lastUpdated,
                 status: hookDrivenStatus,

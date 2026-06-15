@@ -82,22 +82,22 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest", planMode: true),
-            "codex -c 'collaboration_mode=\"plan\"' --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
         )
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "plan"),
-            "codex -c 'collaboration_mode=\"plan\"' --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
         )
     }
 
-    func testLauncherInitialPromptWrapsCodexPlanMode() {
+    func testLauncherInitialPromptUsesCodexPlanSlashCommand() {
         XCTAssertEqual(
             AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: true, initialPrompt: "ship the launcher fix"),
-            "\(AgentLaunchCommand.codexPlanModeInstruction)\n\nUser request:\nship the launcher fix"
+            "/plan ship the launcher fix"
         )
         XCTAssertEqual(
             AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: true, initialPrompt: "   "),
-            AgentLaunchCommand.codexPlanModeInstruction
+            "/plan"
         )
         XCTAssertEqual(
             AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: false, initialPrompt: "  ship it  "),
@@ -106,6 +106,20 @@ final class AgentLaunchCommandTests: XCTestCase {
         XCTAssertEqual(
             AgentLaunchCommand.launcherInitialPrompt(forProvider: "claude", planMode: true, initialPrompt: "  plan this  "),
             "plan this"
+        )
+    }
+
+    func testLauncherDisplayPromptStripsCodexPlanSlashCommand() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "/plan ship the launcher fix"),
+            "ship the launcher fix"
+        )
+        XCTAssertNil(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "/plan")
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "ship it"),
+            "ship it"
         )
     }
 
@@ -122,6 +136,7 @@ final class AgentLaunchCommandTests: XCTestCase {
 
     func testProviderResumeIdHeuristicRequiresRealUuidAndRejectsInternalIds() {
         XCTAssertTrue(AgentLaunchCommand.isLikelyProviderResumeSessionId("8db44e39-685d-47ab-bd0e-5e97386ded80"))
+        XCTAssertTrue(AgentLaunchCommand.isLikelyProviderResumeSessionId("019ecba0-beb9-7dc3-b779-33f7f06453c0"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-8db44e39-685d-47ab-bd0e-5e97386ded80"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-ghostty-8db44e39-685d-47ab-bd0e-5e97386ded80"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-123"))

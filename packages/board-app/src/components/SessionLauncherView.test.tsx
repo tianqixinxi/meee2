@@ -35,7 +35,12 @@ const project: SessionProject = {
   lastUsedAt: null,
 }
 
-const providerResumeSessionId = '8db44e39-685d-47ab-bd0e-5e97386ded80'
+const providerResumeSessionId = '019ecba0-beb9-7dc3-b779-33f7f06453c0'
+const lastSelectionKey = 'meee2.sessionLauncher.lastSelection'
+
+function storeProjectSelection() {
+  localStorage.setItem(lastSelectionKey, JSON.stringify({ kind: 'project', projectId: project.id }))
+}
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -86,6 +91,7 @@ describe('SessionLauncherView', () => {
     vi.clearAllMocks()
     localStorage.clear()
     localStorage.setItem('meee2.locale', 'zh-CN')
+    storeProjectSelection()
     api.fetchSessionProjects.mockResolvedValue({ projects: [project] })
     api.renameSessionProject.mockResolvedValue(project)
     api.reopenLauncherSession.mockResolvedValue({
@@ -121,6 +127,79 @@ describe('SessionLauncherView', () => {
     expect(screen.getByRole('button', { name: 'Codex' })).toHaveClass('is-selected')
     expect(screen.getByRole('button', { name: '权限模式' })).toHaveTextContent('完全访问')
     expect(screen.getByPlaceholderText('随心输入')).toBeInTheDocument()
+  })
+
+  it('selects the latest session on first entry when no selection is stored', async () => {
+    localStorage.removeItem(lastSelectionKey)
+    const older = makeSession({
+      id: 'older-session',
+      recentMessages: [{ role: 'user', text: '较早的 Session' }],
+      surfaceId: 'older-surface',
+      lastActivity: '2026-06-14T08:00:00Z',
+    })
+    const latest = makeSession({
+      id: 'latest-session',
+      recentMessages: [{ role: 'user', text: '最近一次 Session' }],
+      surfaceId: 'latest-surface',
+      lastActivity: '2026-06-14T09:00:00Z',
+    })
+    const view = renderWithI18n(<SessionLauncherView state={makeState([older, latest])} />)
+
+    const latestButton = await screen.findByRole('button', { name: '最近一次 Session' })
+    await waitFor(() => expect(latestButton.closest('.session-launcher__session-item')).toHaveClass('is-selected'))
+    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('最近一次 Session')
+    expect(screen.queryByText('我们应该在meee2-workspace中做些什么？')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'latest-session',
+        surfaceId: 'latest-surface',
+      }))
+    })
+  })
+
+  it('auto-restores a stored stale session selection on first entry', async () => {
+    localStorage.setItem(lastSelectionKey, JSON.stringify({
+      kind: 'session',
+      sessionId: 'stale-session',
+      surfaceId: 'old-surface',
+    }))
+    const staleSession = makeSession({
+      id: 'stale-session',
+      title: 'Codex',
+      project: '/Users/kai/Code/meee2-workspace',
+      recentMessages: [{ role: 'user', text: '继续上次的 Session' }],
+      terminalBackend: 'ghostty-surface',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
+
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenCalledWith({
+        sessionId: 'stale-session',
+        providerResumeSessionId,
+        provider: 'codex',
+        cwd: '/Users/kai/Code/meee2-workspace',
+      })
+    })
+    expect(api.syncNativeSessionsWorkspace).not.toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'show',
+      surfaceId: 'old-surface',
+    }))
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        mode: 'terminal',
+        sessionId: 'restored-session',
+        surfaceId: 'restored-surface',
+      }))
+    })
   })
 
   it('resizes and fully collapses the launcher sidebar', async () => {
@@ -365,7 +444,7 @@ describe('SessionLauncherView', () => {
         surfaceId: 'plan-surface',
         title: 'Codex - meee2-workspace',
         cwd: project.path,
-        command: 'codex -c \'collaboration_mode="plan"\' --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
+        command: 'codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
         status: 'running',
         createdAt: '2026-06-14T00:00:00Z',
         updatedAt: '2026-06-14T00:00:00Z',
@@ -629,7 +708,7 @@ describe('SessionLauncherView', () => {
     expect(view.container.querySelector('.session-launcher-terminal__status')).toHaveTextContent('运行中')
   })
 
-  it('does not recreate a stale launcher session when no provider resume id is known', async () => {
+  it('hides a stale launcher session when no provider resume id is known', async () => {
     const staleSession = makeSession({
       id: 'historical-session-without-provider-id',
       recentMessages: [{ role: 'user', text: '没有 provider resume id 的旧 Session' }],
@@ -644,14 +723,132 @@ describe('SessionLauncherView', () => {
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
-    fireEvent.click(await screen.findByRole('button', { name: '没有 provider resume id 的旧 Session' }))
-
+    expect(screen.queryByRole('button', { name: '没有 provider resume id 的旧 Session' })).not.toBeInTheDocument()
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
-      phase: 'hide',
-      mode: 'terminal',
-    }))
-    expect(await screen.findByText('这个 session 还没有可挂载的原生 terminal surface')).toBeInTheDocument()
+  })
+
+  it('uses the user request instead of the plan-mode system prompt in resume toasts', async () => {
+    const onToast = vi.fn()
+    api.reopenLauncherSession.mockResolvedValueOnce({
+      ok: true,
+      action: 'resume',
+      surface: {
+        provider: 'codex',
+        sessionId: 'restored-session',
+        surfaceId: 'restored-surface',
+        title: 'Codex - restored',
+        cwd: '/Users/kai/Code/meee2-workspace',
+        command: `codex resume ${providerResumeSessionId} --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,
+        status: 'running',
+        createdAt: '2026-06-14T00:00:00Z',
+        updatedAt: '2026-06-14T00:00:00Z',
+      },
+    })
+    const staleSession = makeSession({
+      id: 'plan-mode-session',
+      currentTask: [
+        'Plan mode is enabled for this Codex session. First produce a plan.',
+        '',
+        'User request:',
+        '支持Session新建页面输入图片，用户粘贴即可',
+      ].join('\n'),
+      recentMessages: [],
+      terminalBackend: 'ghostty-surface',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} onToast={onToast} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    const title = await screen.findByText('支持Session新建页面输入图片，用户粘贴即可')
+    fireEvent.click(title.closest('button')!)
+
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenCalledWith({
+        sessionId: 'plan-mode-session',
+        providerResumeSessionId,
+        provider: 'codex',
+        cwd: '/Users/kai/Code/meee2-workspace',
+      })
+    })
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(
+        'success',
+        '已恢复 支持Session新建页面输入图片，用户粘贴即可',
+      )
+    })
+    expect(onToast).not.toHaveBeenCalledWith(
+      'success',
+      expect.stringContaining('Plan mode is enabled'),
+    )
+  })
+
+  it('labels reused restored terminals as switches instead of new terminal starts', async () => {
+    const onToast = vi.fn()
+    api.reopenLauncherSession.mockResolvedValueOnce({
+      ok: true,
+      action: 'reuse',
+      surface: {
+        provider: 'codex',
+        sessionId: 'restored-session',
+        surfaceId: 'restored-surface',
+        title: 'Codex - restored',
+        cwd: '/Users/kai/Code/meee2-workspace',
+        command: `codex resume ${providerResumeSessionId} --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,
+        status: 'running',
+        createdAt: '2026-06-14T00:00:00Z',
+        updatedAt: '2026-06-14T00:00:00Z',
+      },
+    })
+    const staleSession = makeSession({
+      id: 'already-restored-session',
+      title: 'Codex',
+      recentMessages: [{ role: 'user', text: '已经恢复过的 Session' }],
+      terminalBackend: 'ghostty-surface',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} onToast={onToast} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(await screen.findByRole('button', { name: '已经恢复过的 Session' }))
+
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith('success', '已切换到 已经恢复过的 Session')
+    })
+    expect(onToast).not.toHaveBeenCalledWith(
+      'success',
+      expect.stringContaining('启动新 terminal'),
+    )
+  })
+
+  it('does not include the Codex /plan slash command in session titles', async () => {
+    const planSession = makeSession({
+      id: 'plan-slash-session',
+      currentTask: '/plan hi',
+      recentMessages: [],
+      terminalBackend: 'ghostty-surface',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([planSession])} />)
+
+    expect(screen.getByRole('button', { name: 'hi' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('正在加载项目')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /^hi(?: ·|$)/ })).toBeInTheDocument()
+    expect(screen.queryByText('/plan hi')).not.toBeInTheDocument()
   })
 
   it('switches live native terminal targets without hiding the current pane first', async () => {
