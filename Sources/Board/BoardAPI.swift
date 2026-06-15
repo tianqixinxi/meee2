@@ -519,6 +519,11 @@ enum BoardAPI {
         let projects: [SessionProjectDTO]
     }
 
+    private struct SessionLaunchAttachmentsEnvelope: Encodable {
+        let ok: Bool
+        let attachments: [AgentLaunchAttachment]
+    }
+
     static func listSessionProjects(_ req: HttpRequest) -> HttpResponse {
         let projects = SessionProjectStore.shared
             .list()
@@ -640,6 +645,162 @@ enum BoardAPI {
         #endif
     }
 
+    static func pickSessionLaunchAttachments(_ req: HttpRequest) -> HttpResponse {
+        #if os(macOS)
+        var selectedAttachments: [AgentLaunchAttachment] = []
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            panel.canCreateDirectories = false
+            panel.resolvesAliases = true
+            panel.message = "Select files for the new session"
+            let finish: (NSApplication.ModalResponse) -> Void = { response in
+                if response == .OK {
+                    selectedAttachments = panel.urls.map { url in
+                        AgentLaunchAttachment(
+                            path: url.path,
+                            filename: url.lastPathComponent,
+                            contentType: nil
+                        )
+                    }
+                }
+                semaphore.signal()
+            }
+            if let window = NSApp.keyWindow {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                panel.begin(completionHandler: finish)
+            }
+        }
+        _ = semaphore.wait(timeout: .distantFuture)
+        do {
+            return jsonResponse(SessionLaunchAttachmentsEnvelope(
+                ok: !selectedAttachments.isEmpty,
+                attachments: try normalizeLaunchAttachments(selectedAttachments)
+            ))
+        } catch {
+            return errorResponse("attachment_pick_failed", error.localizedDescription, status: 400)
+        }
+        #else
+        return errorResponse("unsupported", "file picker is macOS only", status: 501)
+        #endif
+    }
+
+    static func uploadSessionLaunchAttachment(_ req: HttpRequest) -> HttpResponse {
+        struct UploadRequest: Decodable {
+            let filename: String?
+            let contentType: String?
+            let dataBase64: String?
+        }
+        guard let body = decodeJSONBody(req, as: UploadRequest.self) else {
+            return errorResponse("invalid_json", "body must include filename, contentType, and dataBase64", status: 400)
+        }
+        let filename = body.filename?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "paste"
+        let contentType = body.contentType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "application/octet-stream"
+        guard let dataBase64 = body.dataBase64, !dataBase64.isEmpty else {
+            return errorResponse("bad_request", "missing 'dataBase64'", status: 400)
+        }
+        if dataBase64.count > AttachmentsAPI.maxBytes * 2 {
+            return errorResponse("too_large", "attachment exceeds \(AttachmentsAPI.maxBytes) bytes", status: 413)
+        }
+        guard let rawData = Data(base64Encoded: dataBase64, options: .ignoreUnknownCharacters) else {
+            return errorResponse("bad_request", "'dataBase64' is not valid base64", status: 400)
+        }
+        guard rawData.count <= AttachmentsAPI.maxBytes else {
+            return errorResponse("too_large", "attachment exceeds \(AttachmentsAPI.maxBytes) bytes (got \(rawData.count))", status: 413)
+        }
+        do {
+            let saved = try saveLaunchAttachment(data: rawData, filename: filename, contentType: contentType)
+            return jsonResponse(SessionLaunchAttachmentsEnvelope(ok: true, attachments: [saved]), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("attachment_upload_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func normalizeLaunchAttachments(_ attachments: [AgentLaunchAttachment]?) throws -> [AgentLaunchAttachment] {
+        let raw = attachments ?? []
+        guard raw.count <= 24 else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "too many attachments (max 24)"])
+        }
+        var seen = Set<String>()
+        var normalized: [AgentLaunchAttachment] = []
+        for attachment in raw {
+            let path = try normalizeLaunchAttachmentPath(attachment.path)
+            guard !seen.contains(path) else { continue }
+            seen.insert(path)
+            normalized.append(AgentLaunchAttachment(
+                path: path,
+                filename: attachment.filename,
+                contentType: attachment.contentType
+            ))
+        }
+        return normalized
+    }
+
+    private static func normalizeLaunchAttachmentPath(_ rawPath: String) throws -> String {
+        var value = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "attachment path is empty"])
+        }
+        if value.hasPrefix("~") {
+            value = NSHomeDirectory() + String(value.dropFirst(1))
+        }
+        let path = (value as NSString).standardizingPath
+        guard path.hasPrefix("/") else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "attachment path must be absolute: \(rawPath)"])
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "attachment file does not exist: \(path)"])
+        }
+        return path
+    }
+
+    private static func saveLaunchAttachment(data: Data, filename rawFilename: String, contentType: String) throws -> AgentLaunchAttachment {
+        let baseDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("attachments", isDirectory: true)
+            .appendingPathComponent("launcher", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+
+        let safeName = sanitizedAttachmentFilename(rawFilename)
+        let ext = attachmentExtension(filename: safeName, contentType: contentType)
+        let stem = safeName.isEmpty ? "attachment" : (safeName as NSString).deletingPathExtension
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8)
+        let fileName = ext.isEmpty
+            ? "\(Int(Date().timeIntervalSince1970 * 1000))-\(suffix)-\(stem)"
+            : "\(Int(Date().timeIntervalSince1970 * 1000))-\(suffix)-\(stem).\(ext)"
+        let url = baseDir.appendingPathComponent(fileName, isDirectory: false)
+        try data.write(to: url, options: .atomic)
+        return AgentLaunchAttachment(path: url.path, filename: safeName, contentType: contentType)
+    }
+
+    private static func sanitizedAttachmentFilename(_ raw: String) -> String {
+        let name = (raw as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "attachment" : name
+    }
+
+    private static func attachmentExtension(filename: String, contentType: String) -> String {
+        let existing = (filename as NSString).pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !existing.isEmpty { return existing }
+        let main = contentType.lowercased().split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? contentType.lowercased()
+        switch main {
+        case "image/png": return "png"
+        case "image/jpeg", "image/jpg": return "jpg"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "application/pdf": return "pdf"
+        case "text/plain": return "txt"
+        case "text/markdown": return "md"
+        case "application/json": return "json"
+        default: return ""
+        }
+    }
+
     static func createSessionProjectSession(_ req: HttpRequest) -> HttpResponse {
         struct SpawnRequest: Decodable {
             let path: String?
@@ -647,6 +808,7 @@ enum BoardAPI {
             let permissionMode: String?
             let planMode: Bool?
             let initialPrompt: String?
+            let attachments: [AgentLaunchAttachment]?
         }
         struct SpawnResponse: Encodable {
             let ok: Bool
@@ -683,7 +845,8 @@ enum BoardAPI {
             let prompt = AgentLaunchCommand.launcherInitialPrompt(
                 forProvider: provider,
                 planMode: body?.planMode == true,
-                initialPrompt: body?.initialPrompt
+                initialPrompt: body?.initialPrompt,
+                attachments: try normalizeLaunchAttachments(body?.attachments)
             )
             let surface = try createInternalSessionSurface(
                 provider: provider,
@@ -710,6 +873,7 @@ enum BoardAPI {
             let permissionMode: String?
             let planMode: Bool?
             let initialPrompt: String?
+            let attachments: [AgentLaunchAttachment]?
         }
         struct SpawnResponse: Encodable {
             let ok: Bool
@@ -728,7 +892,8 @@ enum BoardAPI {
             let prompt = AgentLaunchCommand.launcherInitialPrompt(
                 forProvider: provider,
                 planMode: body?.planMode == true,
-                initialPrompt: body?.initialPrompt
+                initialPrompt: body?.initialPrompt,
+                attachments: try normalizeLaunchAttachments(body?.attachments)
             )
             let surface = try createInternalSessionSurface(
                 provider: provider,

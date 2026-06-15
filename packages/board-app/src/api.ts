@@ -25,6 +25,7 @@ import type {
   SessionProjectCreateInput,
   SessionProjectList,
   SessionProjectUpdateInput,
+  SessionLaunchAttachment,
   SpawnProvider,
   AgentPermissionMode,
   TemporarySessionCreateInput,
@@ -1195,6 +1196,7 @@ export function createProjectSession(input: {
   permissionMode?: AgentPermissionMode
   planMode?: boolean
   initialPrompt?: string
+  attachments?: SessionLaunchAttachment[]
 }): Promise<{ ok: boolean; project: SessionProject; surface: SessionSurface }> {
   return jsonRequest<{ ok: boolean; project: SessionProject; surface: SessionSurface }>(
     `/api/session-projects/${encodeURIComponent(input.projectId)}/sessions`,
@@ -1206,6 +1208,7 @@ export function createProjectSession(input: {
         permissionMode: input.permissionMode,
         planMode: input.planMode,
         initialPrompt: input.initialPrompt,
+        attachments: input.attachments,
       }),
     },
   )
@@ -1216,6 +1219,27 @@ export function createTemporarySession(input: TemporarySessionCreateInput): Prom
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export function pickSessionLaunchAttachments(): Promise<{ ok: boolean; attachments: SessionLaunchAttachment[] }> {
+  return jsonRequest<{ ok: boolean; attachments: SessionLaunchAttachment[] }>('/api/session-launcher/pick-attachments', {
+    method: 'POST',
+  })
+}
+
+export async function uploadSessionLaunchAttachment(file: File): Promise<SessionLaunchAttachment> {
+  const dataBase64 = await fileToBase64(file)
+  const result = await jsonRequest<{ ok: boolean; attachments: SessionLaunchAttachment[] }>('/api/session-launcher/attachments', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: file.name || 'paste',
+      contentType: file.type || 'application/octet-stream',
+      dataBase64,
+    }),
+  })
+  const attachment = result.attachments[0]
+  if (!attachment) throw new Error('Attachment upload returned no file')
+  return attachment
 }
 
 export function reopenLauncherSession(input: {

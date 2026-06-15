@@ -109,6 +109,41 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
     }
 
+    func testLauncherInitialPromptPrefixesAttachmentPaths() {
+        let attachments = [
+            AgentLaunchAttachment(path: "/tmp/screenshot.png", filename: "screenshot.png", contentType: "image/png"),
+            AgentLaunchAttachment(path: "/tmp/spec.md", filename: "spec.md", contentType: "text/markdown")
+        ]
+
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: "codex",
+                planMode: false,
+                initialPrompt: "review these",
+                attachments: attachments
+            ),
+            "@/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: "codex",
+                planMode: true,
+                initialPrompt: "review these",
+                attachments: attachments
+            ),
+            "/plan @/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: "claude",
+                planMode: false,
+                initialPrompt: "   ",
+                attachments: [attachments[0]]
+            ),
+            "@/tmp/screenshot.png"
+        )
+    }
+
     func testLauncherDisplayPromptStripsCodexPlanSlashCommand() {
         XCTAssertEqual(
             AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "/plan ship the launcher fix"),
@@ -120,6 +155,27 @@ final class AgentLaunchCommandTests: XCTestCase {
         XCTAssertEqual(
             AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "ship it"),
             "ship it"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(
+                forDeliveredInitialPrompt: "@/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+            ),
+            "review these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(
+                forDeliveredInitialPrompt: "@/tmp/My Project/screenshot.png\nreview these"
+            ),
+            "review these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(
+                forDeliveredInitialPrompt: "/plan @/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+            ),
+            "review these"
+        )
+        XCTAssertNil(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "@/tmp/screenshot.png")
         )
     }
 

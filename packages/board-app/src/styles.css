@@ -15763,20 +15763,36 @@ body.session-launcher-sidebar-resizing * {
   right: auto;
   z-index: 80;
   min-width: 190px;
+  border: 0;
 }
 
 .session-launcher__project-menu button,
 .session-launcher__context-menu button {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
   justify-content: start;
   width: 100%;
   height: 30px;
   gap: 8px;
   padding: 0 8px;
+  border: 0;
+  background: transparent;
   color: var(--text);
   font-size: 12px;
+  line-height: 1.2;
   text-align: left;
+}
+
+.session-launcher__context-menu button svg {
+  justify-self: center;
+}
+
+.session-launcher__context-menu button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-launcher__project-menu button:hover,
@@ -16095,11 +16111,71 @@ body.session-launcher-sidebar-resizing * {
 .session-launcher__prompt-card {
   display: grid;
   min-height: 104px;
-  grid-template-rows: minmax(48px, 1fr) auto;
+  grid-template-rows: auto minmax(48px, 1fr) auto auto;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--bg-paper);
   box-shadow: 0 8px 22px rgb(0 0 0 / 8%);
+}
+
+.session-launcher__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px 0;
+}
+
+.session-launcher__attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: min(260px, 100%);
+  min-height: 28px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-muted) 62%, transparent);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.session-launcher__attachment-chip > span {
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-launcher__attachment-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.session-launcher__attachment-chip button:hover,
+.session-launcher__attachment-chip button:focus-visible {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  outline: none;
+}
+
+.session-launcher__attachment-error {
+  padding: 0 16px 6px;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
 .session-launcher__composer textarea {
@@ -16159,6 +16235,7 @@ body.session-launcher-sidebar-resizing * {
 
 .session-launcher__runtime button,
 .session-launcher__access-mode,
+.session-launcher__attach-button,
 .session-launcher__plan-mode,
 .session-launcher__start,
 .session-launcher__empty-main button {
@@ -16216,6 +16293,22 @@ body.session-launcher-sidebar-resizing * {
   color: var(--danger);
   font-size: 13px;
   font-weight: 600;
+}
+
+.session-launcher__attach-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-muted) 54%, transparent);
+  color: var(--text-dim);
+}
+
+.session-launcher__attach-button:hover,
+.session-launcher__attach-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
+  outline: none;
 }
 
 .session-launcher__access-mode-trigger {
