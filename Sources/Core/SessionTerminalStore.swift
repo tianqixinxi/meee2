@@ -102,6 +102,12 @@ class SessionTerminalStore {
             info.provider = provider ?? info.provider
             if let providerResumeSessionId {
                 info.providerResumeSessionId = Self.validProviderResumeSessionId(providerResumeSessionId)
+                if let validResumeId = info.providerResumeSessionId {
+                    SessionStore.shared.setProviderResumeSessionId(
+                        sessionId: sessionId,
+                        providerResumeSessionId: validResumeId
+                    )
+                }
             }
             info.canvasId = canvasId ?? info.canvasId
             info.nodeId = nodeId ?? info.nodeId
@@ -144,6 +150,36 @@ class SessionTerminalStore {
         }
     }
 
+    func reconcileManagedSurfaceStatuses(liveSnapshots: [TerminalSessionSnapshot]) {
+        let liveIds = Set(liveSnapshots.flatMap { [$0.sessionId, $0.surfaceId] })
+        performSync {
+            var changed = false
+            for (sessionId, var info) in store {
+                let status = info.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard status == "running" || status == "starting" else { continue }
+                let backend = info.backend?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard backend == TerminalSessionBackendKind.ghosttySurface.rawValue ||
+                        InternalSessionIdentity.isSurfaceTerminal(
+                            termProgram: info.termProgram,
+                            termBundleId: info.termBundleId
+                        ) else {
+                    continue
+                }
+                let surfaceId = info.cmuxSurfaceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if liveIds.contains(sessionId) || (!surfaceId.isEmpty && liveIds.contains(surfaceId)) {
+                    continue
+                }
+                info.status = InternalTerminalLifecycle.exited.rawValue
+                store[sessionId] = info
+                changed = true
+            }
+            if changed {
+                save()
+                NSLog("[SessionTerminalStore] Reconciled stale managed terminal surfaces")
+            }
+        }
+    }
+
     /// 删除已结束的 session
     func remove(sessionId: String) {
         performSync {
@@ -156,15 +192,18 @@ class SessionTerminalStore {
         let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         performSync {
-            guard var info = store[sessionId] else { return }
             guard let validResumeId = Self.validProviderResumeSessionId(trimmed) else {
-                info.providerResumeSessionId = nil
-                info.lastActivityAt = Date()
-                store[sessionId] = info
-                save()
+                if var info = store[sessionId] {
+                    info.providerResumeSessionId = nil
+                    info.lastActivityAt = Date()
+                    store[sessionId] = info
+                    save()
+                }
                 NSLog("[SessionTerminalStore] Ignored invalid provider resume id for internal session \(sessionId.prefix(8))")
                 return
             }
+            SessionStore.shared.setProviderResumeSessionId(sessionId: sessionId, providerResumeSessionId: validResumeId)
+            guard var info = store[sessionId] else { return }
             info.providerResumeSessionId = validResumeId
             info.lastActivityAt = Date()
             store[sessionId] = info
@@ -195,6 +234,7 @@ class SessionTerminalStore {
                 return nil
             }
             var info = store[sessionId]!
+            SessionStore.shared.setProviderResumeSessionId(sessionId: sessionId, providerResumeSessionId: validResumeId)
             guard info.providerResumeSessionId != validResumeId else { return sessionId }
             info.providerResumeSessionId = validResumeId
             info.lastActivityAt = Date()
@@ -212,7 +252,10 @@ class SessionTerminalStore {
             let before = store.count
             var changed = false
 
-            store = store.filter { $0.value.lastActivityAt > threshold }
+            store = store.filter { _, info in
+                if info.lastActivityAt > threshold { return true }
+                return Self.validProviderResumeSessionId(info.providerResumeSessionId) != nil
+            }
             changed = migrateInvalidInternalResumeCommandsLocked() || changed
 
             let removed = before - store.count

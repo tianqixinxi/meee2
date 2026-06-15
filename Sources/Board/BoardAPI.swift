@@ -4604,13 +4604,7 @@ enum BoardAPI {
     }
 
     private static func providerResumeSessionIdForManagedSurface(_ sessionId: String) -> String? {
-        if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !mapped.isEmpty,
-           !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
-            return mapped
-        }
-        return nil
+        SessionSurfaceLauncher.providerResumeSessionId(forSessionId: sessionId)
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {

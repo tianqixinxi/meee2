@@ -182,11 +182,26 @@ enum SessionSurfaceLauncher {
     }
 
     private static func providerResumeSessionIdForManagedSurface(_ sessionId: String) -> String? {
-        if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
+        let sessionData = SessionStore.shared.get(sessionId)
+        if let mapped = sessionData?.providerResumeSessionId?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !mapped.isEmpty,
            !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
             return mapped
+        }
+        if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !mapped.isEmpty,
+           !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
+            SessionStore.shared.setProviderResumeSessionId(sessionId: sessionId, providerResumeSessionId: mapped)
+            return mapped
+        }
+        let terminalInfo = SessionTerminalStore.shared.get(sessionId: sessionId)
+        if let backfilled = CodexProviderSessionBackfill.findAndPersistProviderResumeSessionId(
+            sessionData: sessionData,
+            terminalInfo: terminalInfo
+        ) {
+            return backfilled
         }
         return nil
     }
@@ -211,8 +226,9 @@ enum SessionSurfaceLauncher {
     }
 
     private static func recordInitialPrompt(_ sessionId: String, initialPrompt: String?) {
-        let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !prompt.isEmpty else { return }
+        guard let prompt = AgentLaunchCommand.launcherDisplayPrompt(
+            forDeliveredInitialPrompt: initialPrompt
+        ) else { return }
         SessionStore.shared.update(sessionId) { session in
             session.currentTask = prompt
             session.lastMessage = prompt

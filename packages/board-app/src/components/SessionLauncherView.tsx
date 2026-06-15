@@ -126,7 +126,7 @@ function readStoredSelection(): Selection | null {
       return {
         kind: 'session',
         sessionId: parsed.sessionId,
-        surfaceId: typeof parsed.surfaceId === 'string' && parsed.surfaceId.trim() ? parsed.surfaceId : null,
+        surfaceId: null,
       }
     }
   } catch {
@@ -192,11 +192,14 @@ export function SessionLauncherView({
 }: Props) {
   const { t } = useI18n()
   const { resolvedTheme } = useTheme()
+  const [initialSelection] = useState<Selection | null>(() => readStoredSelection())
   const [projects, setProjects] = useState<SessionProject[]>([])
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [projectsError, setProjectsError] = useState<string | null>(null)
-  const [selection, setSelection] = useState<Selection | null>(() => readStoredSelection())
-  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set())
+  const [selection, setSelection] = useState<Selection | null>(initialSelection)
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => (
+    initialSelection?.kind === 'project' ? new Set([initialSelection.projectId]) : new Set()
+  ))
   const [expandedSessionGroups, setExpandedSessionGroups] = useState<Set<string>>(() => new Set())
   const [promptByProjectId, setPromptByProjectId] = useState<Record<string, string>>({})
   const [providerByProjectId, setProviderByProjectId] = useState<Record<string, SpawnProvider>>({})
@@ -228,7 +231,8 @@ export function SessionLauncherView({
   const [restoredSessionTargets, setRestoredSessionTargets] = useState<Record<string, RestoredTerminalTarget>>({})
   const [sidebarWidth, setSidebarWidth] = useState(() => readStoredSidebarWidth())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
-  const initializedSelectionRef = useRef(selection !== null)
+  const initializedSelectionRef = useRef(initialSelection !== null)
+  const autoRestoreAttemptedRef = useRef<Set<string>>(new Set())
   const pointerSidebarResizeActiveRef = useRef(false)
   const sessions = state?.sessions ?? []
 
@@ -238,13 +242,7 @@ export function SessionLauncherView({
     fetchSessionProjects()
       .then((result) => {
         const projectList = Array.isArray(result?.projects) ? result.projects : []
-        const explicit = projectList.filter((project) => project.explicit)
-        setProjects(explicit)
-        if (!initializedSelectionRef.current && explicit[0]) {
-          initializedSelectionRef.current = true
-          setSelection({ kind: 'project', projectId: explicit[0].id })
-          setExpandedProjectIds(new Set([explicit[0].id]))
-        }
+        setProjects(projectList.filter((project) => project.explicit))
       })
       .catch((err: Error) => setProjectsError(err.message || t('sessions.launcher.projectsLoadFailed')))
       .finally(() => setProjectsLoading(false))
@@ -306,7 +304,12 @@ export function SessionLauncherView({
   }, [explicitProjects])
 
   const activeSessions = useMemo(
-    () => sessions.filter((session) => session.controlState !== 'archived' && session.controlState !== 'hidden' && !locallyArchivedSessionIds.has(session.id)),
+    () => sessions.filter((session) => (
+      session.controlState !== 'archived'
+      && session.controlState !== 'hidden'
+      && !locallyArchivedSessionIds.has(session.id)
+      && sessionIsVisibleInLauncher(session)
+    )),
     [locallyArchivedSessionIds, sessions],
   )
   const launcherSessions = useMemo(
@@ -361,15 +364,58 @@ export function SessionLauncherView({
     })
   }, [explicitProjects, latestProjectSessionTimes])
 
+  const reopenLauncherSessionForSession = useCallback((session: Session) => {
+    const resumeSessionId = providerResumeTargetForSession(session)
+    if (!sessionCanBeReopened(session) || reopeningSessionId === session.id) return
+    setReopeningSessionId(session.id)
+    reopenLauncherSession({
+      sessionId: session.id,
+      providerResumeSessionId: resumeSessionId,
+      provider: launcherProviderForSession(session),
+      cwd: session.project || undefined,
+    })
+      .then((result) => {
+        setRestoredSessionTargets((current) => ({
+          ...current,
+          [session.id]: {
+            sessionId: result.surface.sessionId,
+            surfaceId: result.surface.surfaceId,
+          },
+        }))
+        setSelection((current) => current?.kind === 'session' && current.sessionId === session.id
+          ? { kind: 'session', sessionId: session.id, surfaceId: result.surface.surfaceId }
+          : current)
+        onSessionCreated?.()
+        const title = sessionDisplayTitle(session, titleOverrides)
+        const toastKey = result.action === 'reuse'
+          ? 'sessions.launcher.reusedSession'
+          : result.action === 'resume'
+            ? 'sessions.launcher.resumedSession'
+            : 'sessions.launcher.recreatedSession'
+        onToast?.('success', t(toastKey, { title }))
+      })
+      .catch((err: Error) => {
+        onToast?.('error', err.message || t('sessions.launcher.noTerminalSurface'))
+      })
+      .finally(() => setReopeningSessionId((current) => current === session.id ? null : current))
+  }, [onSessionCreated, onToast, reopeningSessionId, t, titleOverrides])
+
   useEffect(() => {
-    if (selection) return
+    if (selection || initializedSelectionRef.current || state === null) return
+    const latestSession = [...launcherSessions].sort(compareSessions)[0]
+    if (latestSession) {
+      initializedSelectionRef.current = true
+      setSelection({ kind: 'session', sessionId: latestSession.id, surfaceId: latestSession.surfaceId })
+      reopenLauncherSessionForSession(latestSession)
+      return
+    }
     const first = sortedProjects[0]
     if (first) {
       initializedSelectionRef.current = true
       setSelection({ kind: 'project', projectId: first.id })
       setExpandedProjectIds(new Set([first.id]))
     }
-  }, [selection, sortedProjects])
+  }, [launcherSessions, reopenLauncherSessionForSession, selection, sortedProjects, state])
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
@@ -417,6 +463,7 @@ export function SessionLauncherView({
     if (selection?.kind !== 'session') return null
     return selectedSessionForSelection(sessions, selection)
   }, [selection, sessions])
+  const selectedLiveTarget = nativeTerminalTargetForSession(selectedSession)
   const selectedRestoredTarget = selection?.kind === 'session'
     ? restoredSessionTargets[selection.sessionId] ?? null
     : null
@@ -427,6 +474,16 @@ export function SessionLauncherView({
       return Boolean(selectedRestoredTarget.surfaceId && session.surfaceId === selectedRestoredTarget.surfaceId)
     }) ?? null
   }, [selectedRestoredTarget, sessions])
+
+  useEffect(() => {
+    if (selection?.kind !== 'session' || !selectedSession || selectedRestoredTarget) return
+    if (!sessionCanBeReopened(selectedSession)) return
+    const resumeTarget = providerResumeTargetForSession(selectedSession)
+    const restoreKey = `${selection.sessionId}:${resumeTarget ?? ''}`
+    if (autoRestoreAttemptedRef.current.has(restoreKey)) return
+    autoRestoreAttemptedRef.current.add(restoreKey)
+    reopenLauncherSessionForSession(selectedSession)
+  }, [reopenLauncherSessionForSession, selectedRestoredTarget, selectedSession, selection])
 
   const selectedProjectProvider = selectedProject
     ? providerByProjectId[selectedProject.id] ?? selectedProject.preferredProvider
@@ -598,36 +655,8 @@ export function SessionLauncherView({
   const handleSelectSession = useCallback((session: Session) => {
     setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
-    const resumeSessionId = providerResumeTargetForSession(session)
-    if (!sessionCanBeReopened(session) || !resumeSessionId || reopeningSessionId === session.id) return
-    setReopeningSessionId(session.id)
-    reopenLauncherSession({
-      sessionId: session.id,
-      providerResumeSessionId: resumeSessionId,
-      provider: launcherProviderForSession(session),
-      cwd: session.project || undefined,
-    })
-      .then((result) => {
-        setRestoredSessionTargets((current) => ({
-          ...current,
-          [session.id]: {
-            sessionId: result.surface.sessionId,
-            surfaceId: result.surface.surfaceId,
-          },
-        }))
-        setSelection((current) => current?.kind === 'session' && current.sessionId === session.id
-          ? { kind: 'session', sessionId: session.id, surfaceId: result.surface.surfaceId }
-          : current)
-        onSessionCreated?.()
-        onToast?.('success', t('sessions.launcher.resumedSession', {
-          title: sessionDisplayTitle(session, titleOverrides),
-        }))
-      })
-      .catch((err: Error) => {
-        onToast?.('error', err.message || t('sessions.launcher.noTerminalSurface'))
-      })
-      .finally(() => setReopeningSessionId((current) => current === session.id ? null : current))
-  }, [onSessionCreated, onToast, reopeningSessionId, t, titleOverrides])
+    reopenLauncherSessionForSession(session)
+  }, [reopenLauncherSessionForSession])
 
   const handleTogglePinned = useCallback((session: Session) => {
     setSessionMenu(null)
@@ -946,8 +975,8 @@ export function SessionLauncherView({
           <SessionLauncherTerminal
             session={selectedSession}
             statusSession={selectedRestoredSession}
-            sessionId={selectedRestoredTarget?.sessionId ?? selection.sessionId}
-            surfaceId={selectedRestoredTarget?.surfaceId ?? selection.surfaceId}
+            sessionId={selectedRestoredTarget?.sessionId ?? selectedLiveTarget.sessionId ?? selection.sessionId}
+            surfaceId={selectedRestoredTarget?.surfaceId ?? selectedLiveTarget.surfaceId ?? selection.surfaceId ?? null}
             usingRestoredSurface={Boolean(selectedRestoredTarget)}
             reopening={reopeningSessionId === selection.sessionId && !selectedRestoredTarget}
             titleOverrides={titleOverrides}
@@ -1808,19 +1837,35 @@ function SessionLauncherTerminal({
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
+  const switchTraceIdRef = useRef<string>('')
+  const switchStartedAtRef = useRef<number>(Date.now())
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
   const targetSurfaceId = liveTarget.surfaceId ?? suppliedSurfaceId
   const targetSessionId = liveTarget.sessionId ?? (targetSurfaceId ? sessionId : undefined)
   const canOpenNativeTerminal = Boolean(targetSurfaceId && targetSessionId)
+  const targetKey = `${targetSessionId ?? 'missing'}:${targetSurfaceId ?? 'missing'}`
+
+  useLayoutEffect(() => {
+    const startedAt = Date.now()
+    const targetPrefix = (targetSurfaceId || targetSessionId || 'missing').slice(0, 8)
+    switchStartedAtRef.current = startedAt
+    switchTraceIdRef.current = `launcher-${targetPrefix}-${startedAt.toString(36)}`
+    lastRectRef.current = null
+  }, [canOpenNativeTerminal, targetKey, targetSessionId, targetSurfaceId])
 
   const syncTerminal = useCallback((phase: 'show' | 'layout' | 'focus' = 'layout', force = false) => {
+    const traceId = switchTraceIdRef.current
+    const clickStartedAtMs = switchStartedAtRef.current
     const host = hostRef.current
     if (!host || !canOpenNativeTerminal) {
       syncNativeSessionsWorkspace({
         phase: 'hide',
         mode: 'terminal',
         theme,
+        traceId,
+        clickStartedAtMs,
+        sentAtMs: Date.now(),
         webPhase: 'sessionLauncher.hide.missingTarget',
       })
       lastRectRef.current = null
@@ -1842,6 +1887,8 @@ function SessionLauncherTerminal({
       sessionId: targetSessionId,
       theme,
       rect: nextRect,
+      traceId,
+      clickStartedAtMs,
       sentAtMs: Date.now(),
       webPhase: `sessionLauncher.${phase}`,
     })
@@ -1876,16 +1923,25 @@ function SessionLauncherTerminal({
 
   useEffect(() => {
     return () => {
-      syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal', theme })
+      syncNativeSessionsWorkspace({
+        phase: 'hide',
+        mode: 'terminal',
+        theme,
+        traceId: switchTraceIdRef.current,
+        clickStartedAtMs: switchStartedAtRef.current,
+        sentAtMs: Date.now(),
+        webPhase: 'sessionLauncher.hide.unmount',
+      })
     }
   }, [theme])
 
   if (!canOpenNativeTerminal) {
+    const fallbackMessage = sessionLauncherTerminalFallbackMessage(session, reopening, t)
     return (
       <div className="session-launcher__terminal-empty">
         <strong>{session ? sessionDisplayTitle(session, titleOverrides) : t('rail.session')}</strong>
         {reopening ? <Loader2 size={16} className="spin" aria-hidden /> : null}
-        <span>{reopening ? t('sessions.launcher.reopeningTerminal') : t('sessions.launcher.noTerminalSurface')}</span>
+        <span>{fallbackMessage}</span>
       </div>
     )
   }
@@ -2009,9 +2065,17 @@ function sessionScope(session: Session): 'meee2' | 'canvas' | 'node' | 'external
 
 function sessionCanBeReopened(session: Session): boolean {
   if (nativeTerminalTargetForSession(session).surfaceId) return false
-  if (!providerResumeTargetForSession(session)) return false
-  if (session.terminalBackend === 'ghostty-surface') return true
-  return session.sessionScope === 'meee2' && session.openTarget === 'web-fallback'
+  return Boolean(providerResumeTargetForSession(session))
+}
+
+function sessionIsVisibleInLauncher(session: Session): boolean {
+  if (nativeTerminalTargetForSession(session).surfaceId) return true
+  if (providerResumeTargetForSession(session)) return true
+  const raw = (session.surfaceStatus ?? session.status ?? '').toLowerCase()
+  if (session.terminalBackend === 'ghostty-surface' && (raw === 'exited' || raw === 'dead' || raw === 'failed')) {
+    return false
+  }
+  return true
 }
 
 function providerResumeTargetForSession(session: Session): string | null {
@@ -2024,7 +2088,7 @@ function providerResumeTargetForSession(session: Session): string | null {
 }
 
 function isLikelyProviderResumeSessionId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
 function sessionArtifactFilter(session: Session, title: string): SessionArtifactFilterPayload {
@@ -2129,6 +2193,22 @@ function sessionTerminalStatus(
   return { label: t('sessions.launcher.starting'), tone: 'running' }
 }
 
+function sessionLauncherTerminalFallbackMessage(
+  session: Session | null,
+  reopening: boolean,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (reopening) return t('sessions.launcher.reopeningTerminal')
+  if (!session) return t('sessions.launcher.noTerminalSurface')
+  const raw = (session.surfaceStatus ?? session.status ?? '').toLowerCase()
+  if (raw === 'exited' || raw === 'dead' || raw === 'failed') {
+    return providerResumeTargetForSession(session)
+      ? t('sessions.launcher.exitedResumeAvailable')
+      : t('sessions.launcher.noTerminalSurface')
+  }
+  return t('sessions.launcher.waitingForTerminalSurface')
+}
+
 function sessionDisplayTitle(session: Session, titleOverrides: Record<string, string>): string {
   const override = titleOverrides[session.id]?.replace(/\s+/g, ' ').trim()
   return override || sessionTitle(session)
@@ -2156,18 +2236,30 @@ function initialUserMessage(session: Session): string | null {
 }
 
 function cleanSessionTitle(raw: string | null | undefined): string {
-  const value = raw
-    ?.replace(/\[[^\]]+\]\([^)]+\)/g, '')
+  const rawValue = raw ?? ''
+  const planModeUserRequest = extractPlanModeUserRequest(rawValue)
+  if (planModeUserRequest) return cleanSessionTitle(planModeUserRequest)
+  if (/^\s*Plan mode is enabled for this Codex session\./i.test(rawValue)) return ''
+  const value = rawValue
+    .replace(/\[[^\]]+\]\([^)]+\)/g, '')
     .replace(/\s+/g, ' ')
-    .trim() ?? ''
+    .trim()
   if (!value) return ''
   const firstSentence = value.split(/\n|。|[.!?]\s/)[0]?.trim() ?? value
   const withoutSpeaker = firstSentence.replace(/^(user|assistant|human|system)\s*:\s*/i, '').trim()
+  const withoutPlanSlash = withoutSpeaker.replace(/^\/plan(?:\s+|$)/i, '').trim()
   const genericProviderTitle = /^(codex|claude code|claude)\s+-\s+[^/\\]+$/i
   const internalNodeTitle = /^node\s+(?:node-)?[a-z0-9][a-z0-9-]{10,}(?:-transcript)?$/i
-  if (genericProviderTitle.test(withoutSpeaker)) return ''
-  if (internalNodeTitle.test(withoutSpeaker)) return ''
-  return withoutSpeaker.length > 56 ? `${withoutSpeaker.slice(0, 54).trim()}...` : withoutSpeaker
+  if (!withoutPlanSlash) return ''
+  if (genericProviderTitle.test(withoutPlanSlash)) return ''
+  if (internalNodeTitle.test(withoutPlanSlash)) return ''
+  return withoutPlanSlash.length > 56 ? `${withoutPlanSlash.slice(0, 54).trim()}...` : withoutPlanSlash
+}
+
+function extractPlanModeUserRequest(raw: string): string | null {
+  if (!/^\s*Plan mode is enabled for this Codex session\./i.test(raw)) return null
+  const match = raw.match(/\bUser request:\s*([\s\S]+)$/i)
+  return match?.[1]?.trim() || null
 }
 
 function sameRect(a: NativeTerminalRect | null, b: NativeTerminalRect): boolean {

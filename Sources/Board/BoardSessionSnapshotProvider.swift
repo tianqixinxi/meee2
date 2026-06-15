@@ -3,9 +3,10 @@ import Meee2PluginKit
 
 enum BoardSessionSnapshotProvider {
     static func currentBoardSessions() -> [SessionDTO] {
+        let snapshots = TerminalSessionBackendRegistry.shared.listSnapshots()
+        SessionTerminalStore.shared.reconcileManagedSurfaceStatuses(liveSnapshots: snapshots)
         let terminalInfos = SessionTerminalStore.shared.getAll()
-        let internalSessions = TerminalSessionBackendRegistry.shared
-            .listSnapshots()
+        let internalSessions = snapshots
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
         let staleInternalSessions = SessionStore.shared.listAll()
@@ -38,6 +39,7 @@ enum BoardSessionSnapshotProvider {
             let resumeId = SessionTerminalStore.shared.get(sessionId: dto.id)?
                 .providerResumeSessionId?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? dto.providerResumeSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             let cli = InternalSessionIdentity.authoritativeCliSession(
                 forProviderResumeSessionId: resumeId,
                 in: cliCorrelationIndex

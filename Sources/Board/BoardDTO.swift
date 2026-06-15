@@ -1052,10 +1052,11 @@ enum BoardDTOBuilder {
         let openTarget = orphanedInternalResume ? "web-fallback" : "external"
         let sync = syncInfo(forSessionId: session.id)
         let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
+        let storedTerminalInfo = SessionTerminalStore.shared.get(sessionId: session.id)
+            ?? SessionTerminalStore.shared.get(sessionId: realSessionId)
         let scope = sessionScope(
             sessionId: session.id,
-            terminalInfo: SessionTerminalStore.shared.get(sessionId: session.id)
-                ?? SessionTerminalStore.shared.get(sessionId: realSessionId),
+            terminalInfo: storedTerminalInfo,
             terminalKind: terminalKind
         )
 
@@ -1082,7 +1083,10 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             terminalKind: terminalKind,
             surfaceId: nil,
-            providerResumeSessionId: nil,
+            providerResumeSessionId: resolvedProviderResumeSessionId(
+                sessionData: sessionData,
+                terminalInfo: storedTerminalInfo
+            ),
             surfaceStatus: externalSurfaceStatus,
             canOpenExternal: canOpenExternal,
             terminalBackend: terminalBackend,
@@ -1194,8 +1198,14 @@ enum BoardDTOBuilder {
         let colorHex = info.map { hexString(from: $0.themeColor) } ?? (isCodex ? "#3B82F6" : "#FF9230")
         let cwd = sessionData.cwd ?? terminalInfo?.cwd ?? sessionData.project
         let basename = URL(fileURLWithPath: cwd).lastPathComponent
+        let providerResumeId = resolvedProviderResumeSessionId(
+            sessionData: sessionData,
+            terminalInfo: terminalInfo
+        )
         let storedSurfaceStatus = terminalInfo?.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let surfaceStatus = storedSurfaceStatus == "failed" ? "failed" : "exited"
+        let surfaceStatus: String? = providerResumeId?.isEmpty == false
+            ? nil
+            : (storedSurfaceStatus == "failed" ? "failed" : "exited")
         let backend: String = {
             if let raw = terminalInfo?.backend?.trimmingCharacters(in: .whitespacesAndNewlines),
                !raw.isEmpty {
@@ -1208,7 +1218,6 @@ enum BoardDTOBuilder {
             return TerminalSessionBackendKind.external.rawValue
         }()
         let sync = syncInfo(forSessionId: sessionData.sessionId)
-        let providerResumeId = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId)
         let controlIds = [sessionData.sessionId, terminalInfo?.cmuxSurfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -1288,7 +1297,10 @@ enum BoardDTOBuilder {
         }()
         let sync = syncInfo(forSessionId: surface.sessionId)
         let terminalInfo = SessionTerminalStore.shared.get(sessionId: surface.sessionId)
-        let providerResumeId = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId)
+        let providerResumeId = resolvedProviderResumeSessionId(
+            sessionData: sessionData,
+            terminalInfo: terminalInfo
+        )
         let controlIds = [surface.sessionId, surface.surfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -1405,7 +1417,8 @@ enum BoardDTOBuilder {
             termProgram: surface.termProgram,
             terminalKind: surface.terminalKind,
             surfaceId: surface.surfaceId,
-            providerResumeSessionId: validProviderResumeSessionId(surface.providerResumeSessionId),
+            providerResumeSessionId: validProviderResumeSessionId(surface.providerResumeSessionId)
+                ?? validProviderResumeSessionId(cli.providerResumeSessionId),
             surfaceStatus: surface.surfaceStatus,
             canOpenExternal: surface.canOpenExternal,
             terminalBackend: surface.terminalBackend,
@@ -1425,6 +1438,28 @@ enum BoardDTOBuilder {
     private static func validProviderResumeSessionId(_ raw: String?) -> String? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) ? trimmed : nil
+    }
+
+    private static func resolvedProviderResumeSessionId(
+        sessionData: SessionData?,
+        terminalInfo: SessionTerminalInfo?
+    ) -> String? {
+        if let stored = validProviderResumeSessionId(sessionData?.providerResumeSessionId) {
+            return stored
+        }
+        if let mapped = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId) {
+            if let sessionId = sessionData?.sessionId ?? terminalInfo?.sessionId {
+                SessionStore.shared.setProviderResumeSessionId(
+                    sessionId: sessionId,
+                    providerResumeSessionId: mapped
+                )
+            }
+            return mapped
+        }
+        return CodexProviderSessionBackfill.findAndPersistProviderResumeSessionId(
+            sessionData: sessionData,
+            terminalInfo: terminalInfo
+        )
     }
 
     private static func externalSessionCanOpen(
