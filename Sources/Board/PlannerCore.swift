@@ -2579,10 +2579,30 @@ extension NodeContractV2 {
         )
 
         let cardinality: NodeContractCardinality = (node.nodeKind == .external) ? .list : .single
+        // external-first writeback: an OUTPUT slot whose reference carries a
+        // recognized *named* connector scheme (gsheet:// / lark:// / notion:// …)
+        // declares the node writes its result directly to that external object —
+        // mirror of the input-side `inferConnector`. The executing agent reads
+        // `output.external_write_target` + the standing MCP rule and writes
+        // external-first (not the mirror); meee2 reconciles the mirror snapshot
+        // after a gating submit. Generic http/file/internal schemes are NOT
+        // external write targets — only the named connectors below.
+        var externalWriteTarget: NodeContractExternalWriteTarget?
+        let externalOutputs = node.schema.outputs.compactMap { slot -> NodeContractExternalWriteTarget? in
+            externalWriteConnector(forOutputRef: slot).map {
+                NodeContractExternalWriteTarget(connector: $0, ref: slot)
+            }
+        }
+        if let first = externalOutputs.first {
+            externalWriteTarget = first
+            if externalOutputs.count > 1 {
+                warnings.append("Node \(node.id) declares \(externalOutputs.count) external output slots; contract external_write_target keeps only \(first.ref) — split extra external writes into separate nodes.")
+            }
+        }
         let output = NodeContractOutput(
             cardinality: cardinality,
             payloadKind: .artifactRef,
-            externalWriteTarget: nil
+            externalWriteTarget: externalWriteTarget
         )
 
         let v2 = NodeContractV2(
@@ -2590,6 +2610,20 @@ extension NodeContractV2 {
             output: output
         )
         return (v2, warnings)
+    }
+
+    /// Generic / internal schemes that `inferConnector` recognizes but which are
+    /// NOT external-connector write targets: a bare http(s) URL, a local file,
+    /// or the internal `meee2-artifact://` mirror scheme. An output slot using
+    /// these is just a plain artifact reference, not "write to an external object."
+    private static let nonExternalWriteConnectors: Set<String> = ["http", "file", "meee2-artifact"]
+
+    /// The external connector an OUTPUT slot reference writes to, or nil if the
+    /// slot is a plain name / generic / internal reference. Reuses the same
+    /// scheme table as the input side so input and output stay symmetric.
+    static func externalWriteConnector(forOutputRef ref: String) -> String? {
+        guard let connector = inferConnector(from: ref) else { return nil }
+        return nonExternalWriteConnectors.contains(connector) ? nil : connector
     }
 
     /// Best-effort connector inference from a context-source reference. This
@@ -2646,6 +2680,13 @@ struct PlannerNodeOutputResult: Codable, Equatable {
     /// creating…" without a manual click. UI surfaces the same node ids so it
     /// can render the affordance immediately on the optimistic path.
     var autoDispatchedNodeIds: [String]?
+    /// external-first writeback: external-object references (e.g.
+    /// `gsheet://venture-tracker/Pipeline`) whose mirror should be reconciled
+    /// after THIS (gating) submit. Computed engine-side; BoardAPI materializes
+    /// each into a dedicated artifact-sync session — same split as
+    /// `autoDispatchedNodeIds` (engine decides, BoardAPI spawns). Only populated
+    /// on a downstream-gating `.done` submit; nil/empty otherwise.
+    var reconcileReferences: [String]?
 }
 
 struct PlannerEvent: Codable, Equatable {
@@ -9192,13 +9233,35 @@ enum PlannerBoardBridge {
                     artifacts: graph.artifacts.filter { $0.nodeId == nodeId }
                 )
             }
+        // external-first writeback: on a downstream-gating submit (`.done`),
+        // reconcile the mirror of every external-object reference this submit
+        // wrote — the agent wrote the real object external-first, so meee2 pulls
+        // the authoritative snapshot back. Driven by the artifacts ACTUALLY
+        // submitted (not just declared slots) so we only reconcile what changed.
+        // A custom stateSchema's gatesDownstream state is already folded to
+        // `.done` by the BoardAPI handler before decode, so `.done` covers both.
+        // blocked / needs_review never reach here — the external write likely
+        // didn't happen, and an empty list spawns no sync session.
+        var reconcileRefs: [String] = []
+        if output.status == .done {
+            var seen = Set<String>()
+            for artifact in normalizedOutput.artifacts {
+                let ref = artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !ref.isEmpty,
+                      NodeContractV2.externalWriteConnector(forOutputRef: ref) != nil,
+                      seen.insert(ref).inserted
+                else { continue }
+                reconcileRefs.append(ref)
+            }
+        }
         return PlannerNodeOutputResult(
             graph: graph,
             routes: submitted.routes,
             hint: requirementHint,
             versionId: submitted.version?.id,
             versionIndex: submitted.version?.versionIndex,
-            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
+            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds,
+            reconcileReferences: reconcileRefs.isEmpty ? nil : reconcileRefs
         )
     }
 
