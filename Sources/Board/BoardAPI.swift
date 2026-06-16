@@ -1274,6 +1274,27 @@ enum BoardAPI {
         NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
     }
 
+    /// external-first writeback: after a gating submit, dispatch one dedicated
+    /// artifact-sync session per external-object reference the agent just wrote,
+    /// so the mirror snapshot catches up to the real external object. Best-effort
+    /// — a sync-dispatch failure must NEVER fail the submit (the external write
+    /// already landed; the worst case is a stale mirror the user can refresh
+    /// manually). Reuses the same per-reference dedupe + session registry as the
+    /// manual 「同步快照」 button via `dispatchArtifactSyncSession`. Engine decided
+    /// the references (`result.reconcileReferences`); this materializes them —
+    /// the same engine-decides / BoardAPI-spawns split as auto-dispatch.
+    static func reconcileExternalWriteMirrors(canvasId: String, references: [String]?) {
+        guard let references, !references.isEmpty else { return }
+        for reference in references {
+            do {
+                let result = try dispatchArtifactSyncSession(canvasId: canvasId, reference: reference, hint: "")
+                NSLog("[ExternalWriteback][reconcile] canvas=\(canvasId) reference=\(reference) -> \(result.action)")
+            } catch {
+                NSLog("[ExternalWriteback][reconcile] skip reference=\(reference) reason=\(error.localizedDescription)")
+            }
+        }
+    }
+
     private static func parseISODate(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
         let formatter = ISO8601DateFormatter()
@@ -3070,103 +3091,106 @@ enum BoardAPI {
             }
 
             let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
-            // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
-            let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
-
-            // 投递矩阵 — 专属会话每 reference 至多一条:
-            //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY
-            //                          (空闲立即执行,忙碌则排成下一轮输入)
-            //   surface 活着但 hook 未链接(启动窗口内)→ 刚派发还在启动,开场
-            //                          指令在就绪门控队列里,此刻再打字会落进
-            //                          半渲染的 TUI 而丢失 → 去重
-            //   其余 → 收掉旧 pane(如还在),fresh spawn,指令作开场 prompt
-            // 「claude 活着」不能用 resolvePluginSession(surfaceId) 判:surface
-            // 一建立 recordManagedSession 就造出 .active 的合成 SessionData,
-            // 解析得到不证明 hook 注册过。真正的注册证据是 hook 事件把 provider
-            // session id 链到 surface(providerResumeSessionIdForManagedSurface),
-            // 活着的证据是该 provider 会话未走到 .dead(进程没了)/.completed
-            // (sessionEnd,REPL 已退出只剩 shell — 此时打字等于执行乱码命令)。
-            let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
-            let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
-            let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
-            let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
-            let providerSession = providerSessionId.flatMap(resolvePluginSession)
-            let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
-            // spawn 后超时仍未链接 hook = 启动即崩的僵尸 pane;放着会让每次
-            // 点击都误判「启动中」,必须收掉重建。
-            let bootTimeout: TimeInterval = 120
-            let stillBooting = providerSessionId == nil
-                && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
-            let response: SyncResponse
-            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
-                // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
-                // composer 里是插入换行不是提交,指令会一直躺在输入框里。
-                switch TerminalSessionBackendRegistry.shared.deliverPrompt(
-                    id: trackedSessionId,
-                    text: instruction
-                ) {
-                case .delivered:
-                    response = SyncResponse(
-                        ok: true,
-                        sessionId: trackedSessionId,
-                        reference: reference,
-                        action: "reused",
-                        detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
-                    )
-                case .busy:
-                    // 上一条同步指令还在提交窗口里 — 连点去重,不能再打字
-                    // (两条文本会被同一个 Return 拼成一条畸形请求)。
-                    response = SyncResponse(
-                        ok: true,
-                        sessionId: trackedSessionId,
-                        reference: reference,
-                        action: "pending",
-                        detail: "上一条同步指令正在提交,本次点击已去重。"
-                    )
-                case .sessionNotFound:
-                    return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
-                }
-            } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
-                response = SyncResponse(
-                    ok: true,
-                    sessionId: trackedSessionId,
-                    reference: reference,
-                    action: "pending",
-                    detail: "专属同步会话正在启动并执行同步指令,无需重复触发。"
-                )
-            } else {
-                if let trackedSessionId, liveSurface != nil {
-                    _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
-                }
-                let surface = try createInternalSessionSurface(
-                    provider: "claude",
-                    cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
-                    command: artifactSyncLaunchCommand(),
-                    createIfMissing: true,
-                    canvasId: canvasId,
-                    // 专属 sync 会话不绑节点:进不了节点账本、不挂节点会话三态,
-                    // 也不参与 planner run-state(不调 observe)。
-                    nodeId: nil,
-                    initialPrompt: instruction
-                )
-                recordArtifactSyncSession(surface.sessionId, forKey: registryKey)
-                response = SyncResponse(
-                    ok: true,
-                    sessionId: surface.sessionId,
-                    reference: reference,
-                    action: "created",
-                    detail: "已派发专属同步会话,完成后卡片自动更新。"
-                )
-            }
-            NSLog("[ArtifactSync] reference=\(reference) -> session=\(response.sessionId.prefix(12)) action=\(response.action)")
+            let result = try dispatchArtifactSyncSession(canvasId: canvasId, reference: reference, hint: hint)
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(response)
+            return jsonResponse(SyncResponse(
+                ok: true,
+                sessionId: result.sessionId,
+                reference: reference,
+                action: result.action,
+                detail: result.detail
+            ))
+        } catch is ArtifactSyncDeliveryRejected {
+            return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    /// 专属 sync 会话的终端拒绝了投递(`deliverPrompt` → `.sessionNotFound`)。
+    /// HTTP handler 映射成 500;自动对账路径吞掉(best-effort,记日志)。
+    struct ArtifactSyncDeliveryRejected: Error {}
+
+    /// external-first 写穿契约的 sync 派发核心:为某 reference 派发/复用其**专属
+    /// 轻量同步会话**(每 reference 至多一条,活着复用、死了重建,不绑节点),把
+    /// 「get_artifact → 核对外部对象 → update_artifact 回写」指令下达给它。
+    /// 手动「同步快照」HTTP 入口(`syncPlannerArtifact`)与门控提交后的自动对账
+    /// (`submitPlannerNodeOutput`)共用本例程 —— 同一去重矩阵、同一会话注册表。
+    @discardableResult
+    static func dispatchArtifactSyncSession(
+        canvasId: String,
+        reference: String,
+        hint: String
+    ) throws -> (sessionId: String, action: String, detail: String) {
+        // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
+        // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
+        let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
+
+        // 投递矩阵 — 专属会话每 reference 至多一条:
+        //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY
+        //                          (空闲立即执行,忙碌则排成下一轮输入)
+        //   surface 活着但 hook 未链接(启动窗口内)→ 刚派发还在启动,开场
+        //                          指令在就绪门控队列里,此刻再打字会落进
+        //                          半渲染的 TUI 而丢失 → 去重
+        //   其余 → 收掉旧 pane(如还在),fresh spawn,指令作开场 prompt
+        // 「claude 活着」不能用 resolvePluginSession(surfaceId) 判:surface
+        // 一建立 recordManagedSession 就造出 .active 的合成 SessionData,
+        // 解析得到不证明 hook 注册过。真正的注册证据是 hook 事件把 provider
+        // session id 链到 surface(providerResumeSessionIdForManagedSurface),
+        // 活着的证据是该 provider 会话未走到 .dead(进程没了)/.completed
+        // (sessionEnd,REPL 已退出只剩 shell — 此时打字等于执行乱码命令)。
+        let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
+        let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
+        let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
+        let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
+        let providerSession = providerSessionId.flatMap(resolvePluginSession)
+        let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+        // spawn 后超时仍未链接 hook = 启动即崩的僵尸 pane;放着会让每次
+        // 点击都误判「启动中」,必须收掉重建。
+        let bootTimeout: TimeInterval = 120
+        let stillBooting = providerSessionId == nil
+            && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
+        let result: (sessionId: String, action: String, detail: String)
+        if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
+            // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
+            // composer 里是插入换行不是提交,指令会一直躺在输入框里。
+            switch TerminalSessionBackendRegistry.shared.deliverPrompt(
+                id: trackedSessionId,
+                text: instruction
+            ) {
+            case .delivered:
+                result = (trackedSessionId, "reused", "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。")
+            case .busy:
+                // 上一条同步指令还在提交窗口里 — 连点去重,不能再打字
+                // (两条文本会被同一个 Return 拼成一条畸形请求)。
+                result = (trackedSessionId, "pending", "上一条同步指令正在提交,本次点击已去重。")
+            case .sessionNotFound:
+                throw ArtifactSyncDeliveryRejected()
+            }
+        } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
+            result = (trackedSessionId, "pending", "专属同步会话正在启动并执行同步指令,无需重复触发。")
+        } else {
+            if let trackedSessionId, liveSurface != nil {
+                _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+            }
+            let surface = try createInternalSessionSurface(
+                provider: "claude",
+                cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
+                command: artifactSyncLaunchCommand(),
+                createIfMissing: true,
+                canvasId: canvasId,
+                // 专属 sync 会话不绑节点:进不了节点账本、不挂节点会话三态,
+                // 也不参与 planner run-state(不调 observe)。
+                nodeId: nil,
+                initialPrompt: instruction
+            )
+            recordArtifactSyncSession(surface.sessionId, forKey: registryKey)
+            result = (surface.sessionId, "created", "已派发专属同步会话,完成后卡片自动更新。")
+        }
+        NSLog("[ArtifactSync] reference=\(reference) -> session=\(result.sessionId.prefix(12)) action=\(result.action)")
+        return result
     }
 
     // MARK: - Artifact sync 专属会话注册表
@@ -3510,6 +3534,7 @@ enum BoardAPI {
             }
             routePlannerOutputMessages(result.routes)
             materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+            reconcileExternalWriteMirrors(canvasId: canvasId, references: result.reconcileReferences)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {

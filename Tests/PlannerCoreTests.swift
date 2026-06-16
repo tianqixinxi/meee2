@@ -3942,6 +3942,133 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(v2.output.cardinality, .list)
     }
 
+    // MARK: - external-first writeback (external_write_target)
+
+    private func makeNode(id: String = "node-ext-write", outputs: [String]) -> PlanningNode {
+        PlanningNode(
+            id: id,
+            canvasId: "canvas-a",
+            title: "Writer",
+            schema: NodeSchema(inputs: ["upstream"], outputs: outputs, goal: "write to tracker"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step
+        )
+    }
+
+    func testDeriveFillsExternalWriteTargetFromConnectorOutputSlot() {
+        let node = makeNode(outputs: ["gsheet://venture-tracker/Pipeline"])
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.output.externalWriteTarget?.connector, "google-sheets")
+        XCTAssertEqual(v2.output.externalWriteTarget?.ref, "gsheet://venture-tracker/Pipeline")
+    }
+
+    func testDeriveLeavesExternalWriteTargetNilForProseOutputSlot() {
+        // venture-tracker as-built: a prose slot name must NOT be mistaken for an
+        // external write target (back-compat — only opted-in connector refs trip it).
+        let node = makeNode(outputs: ["1. Sourcing：按行业找 startups output"])
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertNil(v2.output.externalWriteTarget)
+    }
+
+    func testDeriveDoesNotTreatGenericOrInternalRefsAsExternalWrite() {
+        // http(s) fallback, local file, and the internal mirror scheme are plain
+        // references, not external-connector write targets.
+        for ref in ["https://example.com/report", "file://local/out.json", "meee2-artifact://canvas-a/slot"] {
+            let node = makeNode(outputs: [ref])
+            XCTAssertNil(NodeContractV2.derive(from: node).contract.output.externalWriteTarget, "\(ref) should not be an external write target")
+        }
+    }
+
+    func testDeriveKeepsFirstExternalOutputAndWarnsOnExtras() {
+        let node = makeNode(outputs: ["gsheet://tracker/Pipeline", "notion://db/scoring"])
+        let (v2, warnings) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.output.externalWriteTarget?.connector, "google-sheets")
+        XCTAssertEqual(v2.output.externalWriteTarget?.ref, "gsheet://tracker/Pipeline")
+        XCTAssertTrue(warnings.contains { $0.contains("2 external output slots") })
+    }
+
+    func testSubmitNodeOutputReconcilesExternalReferenceOnGatingDone() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "C", plannerContext: "canvas:canvas-a")
+        let node = makeNode(id: "canvas-a-writer", outputs: ["gsheet://venture-tracker/Pipeline"])
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let done = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "wrote 4 rows", routeTo: ["owner"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "Pipeline",
+                    reference: "gsheet://venture-tracker/Pipeline",
+                    payload: .object(["type": .string("integration"), "connector": .string("google-sheets")]),
+                    routeTo: ["owner"]
+                )],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(done.reconcileReferences, ["gsheet://venture-tracker/Pipeline"])
+    }
+
+    func testSubmitNodeOutputDoesNotReconcileOnBlocked() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "C", plannerContext: "canvas:canvas-a")
+        let node = makeNode(id: "canvas-a-writer", outputs: ["gsheet://venture-tracker/Pipeline"])
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let blocked = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .blocked,
+                message: PlannerNodeOutputMessage(summary: "sheets connector not connected", routeTo: ["owner"]),
+                artifacts: [],
+                next: .blocked
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertNil(blocked.reconcileReferences)
+    }
+
+    func testSubmitNodeOutputDoesNotReconcileNonExternalArtifact() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "C", plannerContext: "canvas:canvas-a")
+        let node = makeNode(id: "canvas-a-plain", outputs: ["plain-output"])
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let done = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "done", routeTo: ["owner"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "Result",
+                    reference: "plain-output",
+                    payload: .object(["type": .string("json"), "json": .string("{}")]),
+                    routeTo: ["owner"]
+                )],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertNil(done.reconcileReferences)
+    }
+
     func testNodeContractValidatorRejectsReplaceStrategy() {
         let raw: BoardJSONValue = .object([
             "replace_strategy": .string("overwrite")
