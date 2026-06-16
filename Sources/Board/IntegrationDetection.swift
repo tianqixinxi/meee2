@@ -246,7 +246,14 @@ enum IntegrationCatalog {
         IntegrationDescriptor(
             id: "google-sheets", name: "Google Sheets", category: "data",
             mcpServerNames: ["google-sheets", "sheets", "google_sheets", "gdrive"],
-            credentialProbes: [],
+            // OAuth-via-server: "connected" only once the server has cached its
+            // token (token.json). Without this probe, writing the MCP config
+            // entry alone would make the matrix claim connected before the user
+            // has authorized — but no write would actually work yet. Token path
+            // mirrors IntegrationInstaller.connectorDir + TOKEN_PATH.
+            credentialProbes: [
+                .init(kind: .cliAuth, value: "test -f " + IntegrationInstaller.connectorDir("google-sheets").appendingPathComponent("token.json").path)
+            ],
             // 社区 stdio server xing5/mcp-google-sheets(`uvx mcp-google-sheets@latest`),
             // OAuth installed-app 模式:CREDENTIALS_PATH(用户在 Connect 时上传的 OAuth
             // client)+ TOKEN_PATH(server 自缓存的授权 token)。OAuth 浏览器同意 + token

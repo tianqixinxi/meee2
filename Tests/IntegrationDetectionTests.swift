@@ -54,6 +54,24 @@ final class IntegrationDetectionTests: XCTestCase {
         XCTAssertTrue(dir.path.hasSuffix("/.meee2/connectors/google-sheets"), "got \(dir.path)")
     }
 
+    /// P2 fix — google-sheets must gate `connected` on a cached OAuth token,
+    /// not flip to connected the moment the MCP config entry is written.
+    func testGoogleSheetsNotConnectedUntilTokenPresent() throws {
+        let sheets = try XCTUnwrap(IntegrationCatalog.all.first { $0.id == "google-sheets" })
+        XCTAssertFalse(sheets.credentialProbes.isEmpty, "needs a token probe so connected ⇒ authorized")
+        // Config written (mcpConfigured) but no token yet (credentialPresent=false)
+        // ⇒ partial, never connected.
+        let pending = IntegrationDetector.resolveState(
+            descriptor: sheets, mcpConfigured: true, credentialPresent: false
+        )
+        XCTAssertNotEqual(pending, .connected)
+        // Token cached ⇒ connected.
+        let authed = IntegrationDetector.resolveState(
+            descriptor: sheets, mcpConfigured: true, credentialPresent: true
+        )
+        XCTAssertEqual(authed, .connected)
+    }
+
     // MARK: side-effect inference (P2)
 
     func testRepositoryContextSourceInfersGithubRead() {
