@@ -2313,6 +2313,30 @@ export function installIntegration(integrationId: string): Promise<IntegrationIn
   )
 }
 
+/** POST /api/integrations/:id/credentials — upload the OAuth client
+ *  credentials.json for a localStdio connector (e.g. google-sheets). Body is
+ *  the raw file content. */
+export function uploadIntegrationCredentials(
+  integrationId: string,
+  credentialsJson: string,
+): Promise<{ ok: boolean; path: string; message: string }> {
+  return jsonRequest(
+    `/api/integrations/${encodeURIComponent(integrationId)}/credentials`,
+    { method: 'POST', body: credentialsJson },
+  )
+}
+
+/** POST /api/integrations/:id/preauth — provoke the stdio connector's server
+ *  OAuth browser flow now, so the token caches before headless dispatch. */
+export function preauthIntegration(
+  integrationId: string,
+): Promise<{ status: string; message: string }> {
+  return jsonRequest(
+    `/api/integrations/${encodeURIComponent(integrationId)}/preauth`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
 /** POST /api/integrations/:id/recommend-workflow —— planner agent 提议
  *  一份使用刚装好这个 integration 的小流程到 `canvasId`,产物是一条
  *  pending PlanProposal,会在 planner UI 的审批闸门里出现。 */

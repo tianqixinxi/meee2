@@ -247,14 +247,17 @@ enum IntegrationCatalog {
             id: "google-sheets", name: "Google Sheets", category: "data",
             mcpServerNames: ["google-sheets", "sheets", "google_sheets", "gdrive"],
             credentialProbes: [],
-            // Google 没有官方 hosted Sheets MCP;社区 stdio server 各有各的
-            // service-account 配置,没法给一键安装。canvas 侧 view-schema
-            // (google-sheets:sheet/tab)不依赖连接状态 — tracker artifact 由
-            // session attach,view 永远可渲染。
-            install: .unsupported(
-                reason: "No official Google Sheets MCP server yet. Connect any community stdio server (service-account auth) under one of the recognized server names."
+            // 社区 stdio server xing5/mcp-google-sheets(`uvx mcp-google-sheets@latest`),
+            // OAuth installed-app 模式:CREDENTIALS_PATH(用户在 Connect 时上传的 OAuth
+            // client)+ TOKEN_PATH(server 自缓存的授权 token)。OAuth 浏览器同意 + token
+            // 刷新都由 server 自管,meee2 只注册 + 注入凭证路径 + Connect 时预触发授权。
+            // 需本机有 uv/uvx(Python),缺失时 installer 给安装指引。
+            install: .localStdio(
+                command: "uvx",
+                args: ["mcp-google-sheets@latest"],
+                envKeys: ["CREDENTIALS_PATH", "TOKEN_PATH"]
             ),
-            setupHint: "Google Sheets MCP needs a community server + service account — see install.reason."
+            setupHint: "Connect Google Sheets: upload your GCP OAuth client credentials.json once, then authorize in the browser. Needs `uv` installed."
         )
     ]
 }

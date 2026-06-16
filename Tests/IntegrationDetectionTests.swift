@@ -28,6 +28,32 @@ final class IntegrationDetectionTests: XCTestCase {
         XCTAssertEqual(Set(ids).count, ids.count, "catalog ids must be unique")
     }
 
+    // MARK: localStdio install spec (connector-localstdio-install)
+
+    func testGoogleSheetsIsLocalStdioWithOAuthEnvKeys() throws {
+        let sheets = try XCTUnwrap(IntegrationCatalog.all.first { $0.id == "google-sheets" })
+        guard case let .localStdio(command, args, envKeys) = sheets.install else {
+            return XCTFail("google-sheets should be a localStdio connector now, got \(sheets.install)")
+        }
+        XCTAssertEqual(command, "uvx")
+        XCTAssertEqual(args, ["mcp-google-sheets@latest"])
+        // OAuth-via-server model: server reads the client + caches the token.
+        XCTAssertTrue(envKeys.contains("CREDENTIALS_PATH"))
+        XCTAssertTrue(envKeys.contains("TOKEN_PATH"))
+    }
+
+    func testLarkRemainsLocalStdio() throws {
+        let lark = try XCTUnwrap(IntegrationCatalog.all.first { $0.id == "lark" })
+        guard case .localStdio = lark.install else {
+            return XCTFail("lark should remain a localStdio connector, got \(lark.install)")
+        }
+    }
+
+    func testConnectorDirIsUnderMeee2Connectors() {
+        let dir = IntegrationInstaller.connectorDir("google-sheets")
+        XCTAssertTrue(dir.path.hasSuffix("/.meee2/connectors/google-sheets"), "got \(dir.path)")
+    }
+
     // MARK: side-effect inference (P2)
 
     func testRepositoryContextSourceInfersGithubRead() {
