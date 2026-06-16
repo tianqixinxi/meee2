@@ -482,6 +482,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let surfaceId = (payload["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch phase {
+        case "obscure":
+            logWorkspaceTrace(tracePayload, phase: "native.workspace.received", extra: "phase=obscure mode=\(mode)")
+            let obscureStartedAt = Self.timestampMillis()
+            obscureNativeSessionsWorkspace()
+            logWorkspaceTrace(
+                tracePayload,
+                phase: "native.workspace.obscure.done",
+                startedAt: obscureStartedAt,
+                extra: "mode=\(mode)"
+            )
+            MInfo("[BoardWebWindow] native sessions workspace obscured")
         case "hide":
             logWorkspaceTrace(tracePayload, phase: "native.workspace.received", extra: "phase=hide mode=\(mode)")
             let hideStartedAt = Self.timestampMillis()
@@ -542,6 +553,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         if !hidden {
             rootView.addSubview(view, positioned: .above, relativeTo: nil)
         }
+    }
+
+    private func obscureNativeSessionsWorkspace() {
+        nativeSessionsController.view.isHidden = true
     }
 
     private func hideNativeSessionsWorkspace() {

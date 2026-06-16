@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   artifactGroupCounts,
+  buildCandidateArtifactIndex,
   buildArtifactIndex,
   classifyArtifactGroup,
   filterArtifactIndex,
@@ -153,5 +154,33 @@ describe('artifactIndex', () => {
 
     expect(filterArtifactIndex(items, { scope: 'personal' }).map((item) => item.latest.id)).toEqual(['personal-prd'])
     expect(filterArtifactIndex(items, { scope: 'team' }).map((item) => item.latest.id)).toEqual(['team-check'])
+  })
+
+  it('adapts session artifact candidates into index items', () => {
+    const items = buildCandidateArtifactIndex([
+      {
+        id: 'candidate-1',
+        sessionId: 'session-a',
+        provider: 'codex',
+        cwd: '/repo',
+        title: 'Smoke test',
+        kind: 'check-result',
+        status: 'candidate',
+        createdAt: '2026-06-03T12:00:00Z',
+        updatedAt: '2026-06-03T12:00:00Z',
+        sourceEvent: 'PostToolUse',
+        toolName: 'Bash',
+        toolUseId: 'tool-a',
+        references: [{ kind: 'url', value: 'https://example.com/run/1' }],
+        summary: 'Command: pnpm test',
+      },
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0].sourceKind).toBe('candidate')
+    expect(items[0].displayState).toBe('candidate')
+    expect(items[0].sessionId).toBe('session-a')
+    expect(items[0].groupId).toBe('validation')
+    expect(filterArtifactIndex(items, { sessionId: 'session-a', displayState: 'candidate' })).toHaveLength(1)
   })
 })

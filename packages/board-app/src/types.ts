@@ -924,6 +924,59 @@ export interface PlannerArtifact {
   views?: PlannerArtifactView[] | null
 }
 
+export type SessionArtifactCandidateStatus = 'candidate' | 'promoted' | 'discarded'
+
+export interface SessionArtifactReference {
+  kind: string
+  value: string
+  label?: string | null
+}
+
+export interface SessionArtifactCandidate {
+  id: string
+  sessionId: string
+  provider: string
+  cwd?: string | null
+  title: string
+  kind: string
+  status: SessionArtifactCandidateStatus
+  createdAt: string
+  updatedAt: string
+  sourceEvent: string
+  toolName?: string | null
+  toolUseId?: string | null
+  references: SessionArtifactReference[]
+  summary: string
+  promotedCanvasId?: string | null
+  promotedNodeId?: string | null
+  promotedArtifactId?: string | null
+}
+
+export interface SessionArtifactAttachTarget {
+  canvasId: string
+  canvasName: string
+  nodeId: string
+  nodeTitle: string
+}
+
+export interface SessionArtifactsEnvelope {
+  sessionId: string
+  candidates: SessionArtifactCandidate[]
+  artifacts: PlannerArtifact[]
+  totalCount: number
+  attachTargets: SessionArtifactAttachTarget[]
+}
+
+export interface ArtifactCandidateListEnvelope {
+  candidates: SessionArtifactCandidate[]
+}
+
+export interface ArtifactCandidateMutationEnvelope {
+  candidate: SessionArtifactCandidate
+  artifact?: PlannerArtifact | null
+  attachTargets: SessionArtifactAttachTarget[]
+}
+
 /** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /
  *  badge+detail 行)。`payload`:typed payload 的结构化预览(prd tldr /
  *  check-result 统计…)。两者缺位时,这些 artifact 的派生默认 view 只能标成

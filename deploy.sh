@@ -106,15 +106,15 @@ if [ -n "${EXISTING_VERSION:-}" ] && command -v plutil >/dev/null 2>&1; then
         /Applications/meee2.app/Contents/Info.plist 2>/dev/null || true
 fi
 
-# Copy SwiftPM resource bundle (contains WebDist).
-# Single-arch builds drop it under `.build/arm64-apple-macosx/release/`;
-# universal builds put it in `.build/apple/Products/Release/`. Glob picks
-# whichever exists for this build mode.
-RESOURCE_BUNDLE_SRC=$(find .build -maxdepth 4 -name "meee2_meee2Kit.bundle" -type d 2>/dev/null | head -1)
-if [ -n "$RESOURCE_BUNDLE_SRC" ]; then
+# Copy SwiftPM resource bundle (contains WebDist). Use the same output
+# directory as the binary so stale universal/debug bundles cannot shadow the
+# freshly built frontend on cold app launch.
+RESOURCE_BUNDLE_SRC="$BUILD_DIR/meee2_meee2Kit.bundle"
+if [ -d "$RESOURCE_BUNDLE_SRC" ]; then
+    rm -rf /Applications/meee2.app/Contents/Resources/meee2_meee2Kit.bundle
     cp -R "$RESOURCE_BUNDLE_SRC" /Applications/meee2.app/Contents/Resources/
 else
-    echo "Warning: meee2_meee2Kit.bundle not found under .build/"
+    echo "Warning: meee2_meee2Kit.bundle not found at $RESOURCE_BUNDLE_SRC"
 fi
 
 # Copy app icon
