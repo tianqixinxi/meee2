@@ -60,6 +60,9 @@ import type {
   ContextSourceKind,
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
+  SessionArtifactsEnvelope,
+  ArtifactCandidateListEnvelope,
+  ArtifactCandidateMutationEnvelope,
 } from './types'
 import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
@@ -1317,7 +1320,7 @@ export function openNativeTerminalSurface(input: {
 
 export function syncNativeSessionsWorkspace(input: {
   rect?: NativeTerminalRect
-  phase?: 'show' | 'layout' | 'hide' | 'focus'
+  phase?: 'show' | 'layout' | 'hide' | 'focus' | 'obscure'
   mode?: 'full' | 'terminal'
   sessionId?: string | null
   surfaceId?: string | null
@@ -1945,6 +1948,44 @@ export function getPlannerArtifactContent(
 ): Promise<PlannerArtifactContent> {
   return jsonRequest<PlannerArtifactContent>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/content`,
+  )
+}
+
+export function fetchSessionArtifacts(sessionId: string): Promise<SessionArtifactsEnvelope> {
+  return jsonRequest<SessionArtifactsEnvelope>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+  )
+}
+
+export function fetchArtifactCandidates(sessionId?: string): Promise<ArtifactCandidateListEnvelope> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+  return jsonRequest<ArtifactCandidateListEnvelope>(`/api/artifact-candidates${query}`)
+}
+
+export function promoteArtifactCandidate(
+  candidateId: string,
+  input?: {
+    canvasId?: string
+    nodeId?: string
+    kind?: PlannerArtifactKind
+    title?: string
+    reference?: string
+    status?: string
+  },
+): Promise<ArtifactCandidateMutationEnvelope> {
+  return jsonRequest<ArtifactCandidateMutationEnvelope>(
+    `/api/artifact-candidates/${encodeURIComponent(candidateId)}/promote`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input ?? {}),
+    },
+  )
+}
+
+export function discardArtifactCandidate(candidateId: string): Promise<ArtifactCandidateMutationEnvelope> {
+  return jsonRequest<ArtifactCandidateMutationEnvelope>(
+    `/api/artifact-candidates/${encodeURIComponent(candidateId)}/discard`,
+    { method: 'POST', body: JSON.stringify({}) },
   )
 }
 

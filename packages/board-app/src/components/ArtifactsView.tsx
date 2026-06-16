@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   fetchPlannerGraphState,
+  fetchArtifactCandidates,
   getArtifactVersion,
   getPlannerArtifactContent,
   listArtifactVersions,
@@ -22,6 +23,7 @@ import { requestBoardTarget } from '../lib/boardTarget'
 import {
   ARTIFACT_TYPE_GROUPS,
   artifactGroupCounts,
+  buildCandidateArtifactIndex,
   buildArtifactIndex,
   filterArtifactIndex,
   type ArtifactDisplayState,
@@ -57,6 +59,7 @@ export interface ArtifactSessionFilter {
 }
 
 const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
+  'candidate',
   'needs-review',
   'ready',
   'working',
@@ -91,6 +94,7 @@ export function ArtifactsView({
   const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
   const [stateFilter, setStateFilter] = useState<StateFilter>('all')
   const [sources, setSources] = useState<CanvasArtifactsSource[]>([])
+  const [candidateItems, setCandidateItems] = useState<ArtifactIndexItem[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -112,7 +116,8 @@ export function ArtifactsView({
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all(canvases.map(async (canvas) => {
+    Promise.all([
+      Promise.all(canvases.map(async (canvas) => {
       try {
         const state = await fetchPlannerGraphState(canvas.id)
         return {
@@ -128,10 +133,13 @@ export function ArtifactsView({
           error: (err as Error).message || t('artifacts.loadFailed'),
         } satisfies CanvasArtifactsSource
       }
-    }))
-      .then((items) => {
+    })),
+      fetchArtifactCandidates(sessionFilter?.sessionId).catch(() => ({ candidates: [] })),
+    ])
+      .then(([items, candidateEnvelope]) => {
         if (cancelled) return
         setSources(items)
+        setCandidateItems(buildCandidateArtifactIndex(candidateEnvelope.candidates))
         const failures = items.filter((item) => item.error)
         setError(failures.length ? t('artifacts.groupLoadFailed', { count: failures.length }) : null)
       })
@@ -144,9 +152,12 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature, t])
+  }, [canvasSignature, sessionFilter?.sessionId, t])
 
-  const allItems = useMemo(() => buildArtifactIndex(sources), [sources])
+  const allItems = useMemo(() => [
+    ...buildArtifactIndex(sources),
+    ...candidateItems,
+  ].sort((a, b) => new Date(b.latest.createdAt).getTime() - new Date(a.latest.createdAt).getTime()), [candidateItems, sources])
   const sessionScopedItems = useMemo(
     () => sessionFilter?.sessionId
       ? allItems.filter((item) => artifactMatchesSessionFilter(item, sessionFilter))
@@ -226,6 +237,12 @@ export function ArtifactsView({
   )
 
   const openExternalArtifact = useCallback((item: ArtifactIndexItem): boolean => {
+    if (item.sourceKind === 'candidate') {
+      const ref = item.candidate?.references.find((reference) => reference.kind === 'url')
+      if (!ref) return false
+      window.open(ref.value, '_blank', 'noopener,noreferrer')
+      return true
+    }
     const url = artifactExternalUrl(item.latest)
     if (!url) return false
     window.open(url, '_blank', 'noopener,noreferrer')
@@ -233,6 +250,7 @@ export function ArtifactsView({
   }, [])
 
   const loadVersions = useCallback((item: ArtifactIndexItem) => {
+    if (item.sourceKind === 'candidate') return
     if (versionsBySlot[item.key] || versionsLoading.has(item.key)) return
     setVersionsLoading((current) => new Set(current).add(item.key))
     listArtifactVersions(item.canvas.id, item.latest.nodeId, item.latest.reference)
@@ -258,6 +276,7 @@ export function ArtifactsView({
 
   useEffect(() => {
     if (!selectedItem) return
+    if (selectedItem.sourceKind === 'candidate') return
     loadContent(selectedItem.latest)
     loadVersions(selectedItem)
   }, [loadContent, loadVersions, selectedItem])
@@ -271,6 +290,10 @@ export function ArtifactsView({
   }
 
   const openSourceArtifact = useCallback((item: ArtifactIndexItem) => {
+    if (item.sourceKind === 'candidate') {
+      openExternalArtifact(item)
+      return
+    }
     requestBoardTarget({
       kind: 'planner-artifact',
       canvasId: item.canvas.id,
@@ -283,9 +306,13 @@ export function ArtifactsView({
         body: item.latest.reference,
       },
     })
-  }, [])
+  }, [openExternalArtifact])
 
   const openContentPreview = useCallback((item: ArtifactIndexItem) => {
+    if (item.sourceKind === 'candidate') {
+      setContentModalKey(item.key)
+      return
+    }
     if (resolvedArtifactPayload(item.latest)) {
       setContentModalKey(item.key)
       return
@@ -661,6 +688,7 @@ function ArtifactDetailPanel({
       </aside>
     )
   }
+  const isCandidate = item.sourceKind === 'candidate'
 
   return (
     <aside className="artifacts-detail" aria-label={t('artifacts.detailPanel')}>
@@ -680,7 +708,7 @@ function ArtifactDetailPanel({
         </div>
         <div>
           <dt>{t('artifacts.node')}</dt>
-          <dd>{item.node?.title ?? item.latest.nodeId}</dd>
+          <dd>{isCandidate ? item.latest.nodeId.slice(0, 8) : (item.node?.title ?? item.latest.nodeId)}</dd>
         </div>
         <div>
           <dt>{t('artifacts.latest')}</dt>
@@ -688,7 +716,7 @@ function ArtifactDetailPanel({
         </div>
         <div>
           <dt>{t('artifacts.versionCount')}</dt>
-          <dd>{item.artifacts.length}</dd>
+          <dd>{isCandidate ? t('artifacts.candidate') : item.artifacts.length}</dd>
         </div>
       </dl>
 
@@ -704,6 +732,12 @@ function ArtifactDetailPanel({
         )}
       </section>
 
+      {isCandidate ? (
+        <section className="artifacts-detail__section">
+          <h3>{t('artifacts.references')}</h3>
+          <CandidateReferences item={item} />
+        </section>
+      ) : (
       <section className="artifacts-detail__section">
         <div className="artifacts-detail__section-head">
           <h3>{t('artifacts.versions')}</h3>
@@ -742,9 +776,10 @@ function ArtifactDetailPanel({
           <div className="artifacts-preview">{t('artifacts.noVersions')}</div>
         )}
       </section>
+      )}
 
       <footer className="artifacts-detail__actions">
-        {item.displayState === 'needs-review' && (
+        {item.displayState === 'needs-review' && !isCandidate && (
           <>
             <button
               type="button"
@@ -774,14 +809,16 @@ function ArtifactDetailPanel({
           <ExternalLink size={14} aria-hidden />
           <span>{t('artifacts.revealSource')}</span>
         </button>
-        <button
-          type="button"
-          className="artifacts-link-button"
-          onClick={() => onOpenCanvas(item.canvas.id)}
-        >
-          <FileText size={13} aria-hidden />
-          <span>{item.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
-        </button>
+        {!isCandidate && (
+          <button
+            type="button"
+            className="artifacts-link-button"
+            onClick={() => onOpenCanvas(item.canvas.id)}
+          >
+            <FileText size={13} aria-hidden />
+            <span>{item.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
+          </button>
+        )}
         <button
           type="button"
           className="artifacts-load-button"
@@ -868,6 +905,38 @@ function ArtifactContentModal({
       </section>
     </div>
   )
+}
+
+function CandidateReferences({ item }: { item: ArtifactIndexItem }) {
+  const refs = item.candidate?.references ?? []
+  if (refs.length === 0) {
+    return <TextSummary text={item.candidate?.summary ?? ''} fallback={item.latest.reference} />
+  }
+  return (
+    <div className="artifacts-candidate-refs">
+      {refs.map((reference, index) => (
+        <button
+          type="button"
+          key={`${reference.kind}:${reference.value}:${index}`}
+          onClick={() => openCandidateReference(reference.value)}
+          title={reference.value}
+        >
+          <span>{reference.kind}</span>
+          <strong>{reference.label ?? reference.value}</strong>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function openCandidateReference(value: string) {
+  if (/^https?:\/\//i.test(value) || /^file:\/\//i.test(value)) {
+    window.open(value, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (value.startsWith('/')) {
+    window.open(`file://${value}`, '_blank', 'noopener,noreferrer')
+  }
 }
 
 function ArtifactRenderedContent({
@@ -1156,6 +1225,8 @@ function formatBytes(value: number | null | undefined, t: ReturnType<typeof useI
 
 function artifactStateLabel(state: ArtifactDisplayState, t: ReturnType<typeof useI18n>['t']): string {
   switch (state) {
+    case 'candidate':
+      return t('artifacts.candidate')
     case 'ready':
       return t('artifacts.stateReady')
     case 'needs-review':

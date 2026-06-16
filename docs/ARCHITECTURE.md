@@ -156,8 +156,11 @@ The event handler lives in `ClaudePlugin` (a built-in `SessionPlugin`). It:
 
 - Upserts an `AISession` / `SessionData` into `SessionStore`, preserving sticky fields (see §7).
 - Derives `SessionStatus` from `HookEvent.inferredStatus` as a first cut.
+- Sends material `PostToolUse` / `Stop` evidence to `SessionArtifactCandidateStore`, which indexes session-scoped Artifact Candidates without mutating `SessionData` or planner node outputs.
 - Publishes an urgent event (`UrgentEventInfo`) when the event is a permission request or a user-facing notification.
 - Calls `onSessionsUpdated` so `StatusManager` re-publishes to the UI.
+
+Codex plugin hooks follow the same candidate path through the local Board API. The `meee2` Codex plugin bundles `hooks/hooks.json`; Codex still requires users to review and trust plugin-bundled hooks before they run. See OpenAI's Codex [plugin](https://developers.openai.com/codex/plugins/build) and [hook](https://developers.openai.com/codex/hooks) documentation.
 
 ---
 

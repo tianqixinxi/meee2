@@ -216,6 +216,10 @@ _Avoid_: Manual status as truth, done-only workflow state
 Traceable work proof attached to a Canvas Workspace or node, such as file diffs, command results, tool calls, documents, screenshots, pull requests, and node outputs.
 _Avoid_: Canvas Evidence, status without proof, hidden artifact
 
+**Artifact Candidate**:
+Session-attached traceable work proof captured from agent hooks before it is archived into a Canvas Workspace or node. Artifact Candidates are globally searchable evidence, but they are not canonical node outputs until promoted into an Artifact.
+_Avoid_: Draft Artifact, hidden hook output, automatic node output
+
 **Artifact View**:
 A named projection over an Artifact's data, owned by the Artifact and carried with it wherever the Artifact is shown. Canvas cards, Inspector detail, and the Artifacts rail choose and render Artifact Views, but do not own the view definitions.
 _Avoid_: Canvas Render Value, widget-local tab, duplicate artifact data

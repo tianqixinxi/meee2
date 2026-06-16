@@ -666,6 +666,34 @@ Migration warnings surface via `MLog("[NodeContractV2][migrate] ...")` for every
 - Version chain that snapshots all three sources per submit → ENG-3.
 - Sub-canvas atomic assign that flips a node to `item_scoped` in-place → ENG-4.
 
+### Session Artifact Candidates
+
+**File** `Sources/Board/SessionArtifactCandidateStore.swift`
+
+**Purpose** Persistent session-scoped evidence captured from Claude/Codex hooks before the evidence is archived into a planner node as a canonical `PlannerArtifact`. Stored separately under `~/.meee2/artifact-candidates/<sessionId>.json`; does not change `SessionData`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | Stable local candidate id |
+| `sessionId` | `String` | Owning live or historical session |
+| `provider` | `String` | `claude`, `codex`, or future hook producer |
+| `cwd` | `String?` | Session cwd when captured |
+| `title`, `kind`, `summary` | `String` | Human-facing index fields |
+| `status` | `candidate/promoted/discarded` | Promotion records the target artifact; discard hides it from default lists |
+| `sourceEvent`, `toolName`, `toolUseId` | `String?` | Hook provenance and dedupe anchors |
+| `references[]` | `{kind,value,label?}` | Paths, URLs, or command references; full content is not snapshotted |
+| `promotedCanvasId`, `promotedNodeId`, `promotedArtifactId` | `String?` | Filled after promotion |
+
+**Board API**
+
+| Route | Purpose |
+|---|---|
+| `GET /api/sessions/:sessionId/artifacts` | Returns `{candidates, artifacts, totalCount, attachTargets}` for the session modal and `Artifacts[count]` |
+| `GET /api/artifact-candidates?sessionId=` | Lists visible candidates for the global Artifacts rail |
+| `POST /api/artifact-candidates/hook` | Codex plugin hook ingress; accepts hook JSON and never requires global user hook config |
+| `POST /api/artifact-candidates/:id/promote` | Attaches the candidate to the unique bound node, or requires `{canvasId,nodeId}` when ambiguous |
+| `POST /api/artifact-candidates/:id/discard` | Marks a candidate discarded |
+
 ---
 
 ## Changing a Schema

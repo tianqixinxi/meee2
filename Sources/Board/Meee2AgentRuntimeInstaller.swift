@@ -149,6 +149,7 @@ enum Meee2AgentRuntimeInstaller {
         let codexPluginInstalled = codexCLIAvailable && codexPluginInstalled()
         let codexMarketplace = codexCLIAvailable && codexMarketplaceConfigured()
         let codexMCPConfigured = codexMCPConfigured()
+        let codexHooksBundled = codexHooksBundled()
         let codexConfigured = codexCLIAvailable && codexMCPConfigured && (codexPluginInstalled || codexSkillInstalled)
 
         let needsAttention =
@@ -186,8 +187,8 @@ enum Meee2AgentRuntimeInstaller {
                 detail: codexCLIAvailable
                     ? (codexConfigured
                         ? (codexPathOnPATH == nil
-                            ? "Meee2 Codex runtime is configured; Codex.app CLI binary was found outside PATH."
-                            : "Meee2 Codex MCP and local skill are configured.")
+                            ? "Meee2 Codex runtime is configured; Codex.app CLI binary was found outside PATH. Artifact hooks are \(codexHooksBundled ? "bundled" : "missing from this plugin package"); review/trust them in Codex /hooks if prompted."
+                            : "Meee2 Codex MCP and local skill are configured. Artifact hooks are \(codexHooksBundled ? "bundled" : "missing from this plugin package"); review/trust them in Codex /hooks if prompted.")
                         : (codexPathOnPATH == nil
                             ? "Codex.app binary was found outside PATH; Meee2 MCP or local skill is missing."
                             : (codexMarketplace ? "Meee2 Codex marketplace is added; plugin, MCP, or local skill is missing." : "Codex was found; Meee2 marketplace, MCP, or local skill is missing.")))
@@ -408,6 +409,13 @@ enum Meee2AgentRuntimeInstaller {
         let config = codexHome().appendingPathComponent("config.toml")
         guard let text = try? String(contentsOf: config, encoding: .utf8) else { return false }
         return text.contains("[mcp_servers.meee2]")
+    }
+
+    private static func codexHooksBundled() -> Bool {
+        let hooks = resolvePluginPath()
+            .appendingPathComponent("hooks", isDirectory: true)
+            .appendingPathComponent("hooks.json", isDirectory: false)
+        return FileManager.default.fileExists(atPath: hooks.path)
     }
 
     private static func codexMarketplaceConfigured() -> Bool {

@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   createProjectSession: vi.fn(),
   createSessionProject: vi.fn(),
   createTemporarySession: vi.fn(),
+  fetchSessionArtifacts: vi.fn(),
   forgetSessionProject: vi.fn(),
   pickSessionLaunchAttachments: vi.fn(),
   pickSessionProjectDirectory: vi.fn(),
@@ -95,6 +96,13 @@ describe('SessionLauncherView', () => {
     localStorage.setItem('meee2.locale', 'zh-CN')
     storeProjectSelection()
     api.fetchSessionProjects.mockResolvedValue({ projects: [project] })
+    api.fetchSessionArtifacts.mockResolvedValue({
+      sessionId: 'session-a',
+      candidates: [],
+      artifacts: [],
+      totalCount: 0,
+      attachTargets: [],
+    })
     api.renameSessionProject.mockResolvedValue(project)
     api.reopenLauncherSession.mockResolvedValue({
       ok: true,
@@ -984,6 +992,36 @@ describe('SessionLauncherView', () => {
       }))
     })
     expect(api.syncNativeSessionsWorkspace.mock.calls.some(([payload]) => payload.phase === 'hide')).toBe(false)
+  })
+
+  it('forces native terminal show when an artifact modal restore event fires', async () => {
+    const session = makeSession({
+      currentTask: '修复 Session 标题',
+      recentMessages: [],
+    })
+    renderWithI18n(<SessionLauncherView state={makeState([session])} />)
+
+    await screen.findByText('修复 Session 标题')
+    fireEvent.click(screen.getByRole('button', { name: '修复 Session 标题' }))
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        sessionId: 'session-a',
+        surfaceId: 'surface-a',
+      }))
+    })
+
+    api.syncNativeSessionsWorkspace.mockClear()
+    window.dispatchEvent(new Event('meee2:restore-native-sessions-workspace'))
+
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'show',
+        sessionId: 'session-a',
+        surfaceId: 'surface-a',
+        webPhase: 'sessionLauncher.show',
+      }))
+    })
   })
 
   it('uses task context instead of internal node transcript titles', async () => {

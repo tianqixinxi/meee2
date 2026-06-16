@@ -38,6 +38,7 @@ import {
   createProjectSession,
   createSessionProject,
   createTemporarySession,
+  fetchSessionArtifacts,
   fetchSessionProjects,
   forgetSessionProject,
   pickSessionProjectDirectory,
@@ -2012,12 +2013,48 @@ function SessionLauncherTerminal({
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const switchTraceIdRef = useRef<string>('')
   const switchStartedAtRef = useRef<number>(Date.now())
+  const [artifactCount, setArtifactCount] = useState(0)
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
   const targetSurfaceId = liveTarget.surfaceId ?? suppliedSurfaceId
   const targetSessionId = liveTarget.sessionId ?? (targetSurfaceId ? sessionId : undefined)
   const canOpenNativeTerminal = Boolean(targetSurfaceId && targetSessionId)
   const targetKey = `${targetSessionId ?? 'missing'}:${targetSurfaceId ?? 'missing'}`
+  const obscureForArtifacts = useCallback(() => {
+    syncNativeSessionsWorkspace({
+      phase: 'obscure',
+      mode: 'terminal',
+      theme,
+      traceId: switchTraceIdRef.current,
+      clickStartedAtMs: Date.now(),
+      sentAtMs: Date.now(),
+      webPhase: 'sessionLauncher.artifacts.pointerDown',
+    })
+  }, [theme])
+
+  useEffect(() => {
+    if (!session?.id) {
+      setArtifactCount(0)
+      return undefined
+    }
+    let cancelled = false
+    let timer: number | null = null
+    const load = () => {
+      fetchSessionArtifacts(session.id)
+        .then((payload) => {
+          if (!cancelled) setArtifactCount(payload.totalCount)
+        })
+        .catch(() => {
+          if (!cancelled) setArtifactCount(0)
+        })
+    }
+    load()
+    timer = window.setInterval(load, 5000)
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearInterval(timer)
+    }
+  }, [session?.id])
 
   useLayoutEffect(() => {
     const startedAt = Date.now()
@@ -2083,13 +2120,16 @@ function SessionLauncherTerminal({
     const resizeObserver = new ResizeObserver(() => scheduleLayout())
     resizeObserver.observe(host)
     const handleWindowLayout = () => scheduleLayout()
+    const handleNativeRestore = () => syncTerminal('show', true)
     window.addEventListener('resize', handleWindowLayout)
     window.addEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
+    window.addEventListener('meee2:restore-native-sessions-workspace', handleNativeRestore)
     return () => {
       if (layoutFrameRef.current !== null) window.cancelAnimationFrame(layoutFrameRef.current)
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleWindowLayout)
       window.removeEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
+      window.removeEventListener('meee2:restore-native-sessions-workspace', handleNativeRestore)
       lastRectRef.current = null
     }
   }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId])
@@ -2145,11 +2185,12 @@ function SessionLauncherTerminal({
             <button
               type="button"
               className="session-launcher-terminal__artifact-button"
+              onPointerDown={obscureForArtifacts}
               onClick={() => onOpenSessionArtifacts?.(session, title, sessionArtifactFilter(session, title))}
               aria-label={t('sessions.launcher.openArtifactsForSession', { title })}
               title={t('sessions.launcher.openArtifacts')}
             >
-              <FileText size={13} aria-hidden />
+              <span>Artifacts[{artifactCount}]</span>
             </button>
           )}
         </div>
