@@ -13,7 +13,7 @@ meee2 is a single macOS process that:
 3. **Publishes** a unified session model to four surfaces: the Dynamic Island (SwiftUI), a TUI dashboard (ncurses), a CLI, and a Web Board (React, served by an embedded HTTP server).
 4. **Routes** messages between AI sessions through A2A channels, and handles permission-request round-trips back to the CLI.
 
-The whole app runs as a `.accessory` activation policy process — no Dock icon, just the menu bar + overlay window. The CLI/TUI and GUI share the same `meee2Kit` Swift module; the binary dispatches on argv in `Meee2App.init()`.
+The app runs as a standard `.regular` activation policy process — Dock icon, App Switcher entry, and a main Board window as the **primary surface** (opened on launch). The menu bar item + Dynamic Island overlay are secondary, always-on accessories. The CLI/TUI and GUI share the same `meee2Kit` Swift module; the binary dispatches on argv in `Meee2App.init()`.
 
 ---
 
