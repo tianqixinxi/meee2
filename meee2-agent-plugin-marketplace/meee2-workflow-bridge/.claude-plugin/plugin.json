@@ -1,0 +1,15 @@
+{
+  "name": "meee2-workflow-bridge",
+  "displayName": "Meee2 Workflow Bridge",
+  "version": "0.1.2",
+  "description": "Intercepts Claude Code native Workflow tool invocations and relays them to a meee2 session for execution, with automatic result write-back to the origin session.",
+  "author": {
+    "name": "Meee2"
+  },
+  "keywords": [
+    "meee2",
+    "workflow",
+    "hooks",
+    "orchestration"
+  ]
+}

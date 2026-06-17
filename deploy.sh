@@ -138,6 +138,13 @@ for f in server.js package.json package-lock.json; do
 done
 chmod +x /Applications/meee2.app/Contents/Resources/Bridge/mcp-meee2/server.js 2>/dev/null
 
+# Bundle the Claude/Codex plugin marketplace (see create-dmg.sh for rationale):
+# the in-app "Configure Claude Code" resolves it via Bundle.main.url(...).
+if [ -d "meee2-agent-plugin-marketplace/.claude-plugin" ]; then
+    rm -rf /Applications/meee2.app/Contents/Resources/meee2-agent-plugin-marketplace
+    cp -R "meee2-agent-plugin-marketplace" /Applications/meee2.app/Contents/Resources/meee2-agent-plugin-marketplace
+fi
+
 # Sign in the right order:
 #   1) inner dylibs first (codesign rejects re-signing a bundle whose
 #      contents change signature later)

@@ -1,0 +1,19 @@
+{
+  "name": "meee2-official",
+  "owner": {
+    "name": "Meee2"
+  },
+  "description": "Local Meee2 agent runtime plugins for canvas context, planner execution, orchestration profiles, and artifact writeback.",
+  "plugins": [
+    {
+      "name": "meee2",
+      "source": "./meee2",
+      "description": "Meee2 Skill and MCP tools for planner canvas context, node execution, orchestration profiles, and artifact writeback."
+    },
+    {
+      "name": "meee2-workflow-bridge",
+      "source": "./meee2-workflow-bridge",
+      "description": "Intercepts Claude Code native Workflow tool invocations and relays them to a meee2 session for execution, with result write-back to the origin session."
+    }
+  ]
+}
