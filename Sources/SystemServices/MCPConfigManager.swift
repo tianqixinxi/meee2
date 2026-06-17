@@ -262,6 +262,49 @@ public final class MCPConfigManager {
         }
     }
 
+    /// Generic upsert of a stdio MCP server into `~/.claude.json` mcpServers —
+    /// used by `IntegrationInstaller` to one-click register a community stdio
+    /// server (e.g. google-sheets via uvx, lark via npx) with credential env.
+    /// Read → merge → atomic write (same path as the self-registration above,
+    /// so it coexists with other tools' writes). Idempotent: a no-op when the
+    /// entry already matches. Returns false if the config couldn't be written.
+    @discardableResult
+    public func upsertClaudeStdioMCPServer(
+        name: String,
+        command: String,
+        args: [String],
+        env: [String: String] = [:]
+    ) -> Bool {
+        var rootObject: [String: Any] = readConfig() ?? [:]
+        var mcpServers = (rootObject["mcpServers"] as? [String: Any]) ?? [:]
+
+        let existing = mcpServers[name] as? [String: Any]
+        let existingCmd = existing?["command"] as? String
+        let existingArgs = existing?["args"] as? [String]
+        let existingEnv = existing?["env"] as? [String: String] ?? [:]
+        if existingCmd == command, existingArgs == args, existingEnv == env {
+            return true
+        }
+
+        var entry: [String: Any] = [
+            "type": "stdio",
+            "command": command,
+            "args": args
+        ]
+        if !env.isEmpty { entry["env"] = env }
+        mcpServers[name] = entry
+        rootObject["mcpServers"] = mcpServers
+
+        guard writeConfigAtomic(rootObject) else {
+            NSLog("[MCPConfigManager] failed to write ~/.claude.json for stdio server \(name)")
+            return false
+        }
+        NSLog(existing == nil
+            ? "[MCPConfigManager] registered stdio MCP server \(name) → \(command)"
+            : "[MCPConfigManager] updated stdio MCP server \(name) → \(command)")
+        return true
+    }
+
     public func currentServerScriptPath() -> String {
         resolveServerScriptPath()
     }
@@ -349,15 +392,21 @@ public final class MCPConfigManager {
     public func upsertCodexMCPServer(
         name: String,
         command: String,
-        args: [String]
+        args: [String],
+        env: [String: String] = [:]
     ) throws {
         let header = "[mcp_servers.\(name)]"
         let argsBlock = args.map { tomlString($0) }.joined(separator: ", ")
+        // Credential env as a TOML inline table — `env = { K = "v", ... }`.
+        // Sorted keys so the emitted block is stable (idempotent upsert).
+        let envLine = env.isEmpty
+            ? ""
+            : "\nenv = { " + env.keys.sorted().map { "\($0) = \(tomlString(env[$0]!))" }.joined(separator: ", ") + " }"
         let block = """
         \(header)
         command = \(tomlString(command))
         args = [\(argsBlock)]
-        """
+        """ + envLine
         let original = (try? String(contentsOf: codexConfigPath, encoding: .utf8)) ?? ""
         let next = upsertTomlTableBlock(in: original, tableHeader: header, block: block)
         guard next != original else { return }

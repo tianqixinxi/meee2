@@ -1,11 +1,13 @@
 import { RefreshCw, Sparkles, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   completeIntegrationAuth,
   fetchAgentScan,
   fetchCanvases,
   generateIntegrationRunbook,
   installIntegration,
+  preauthIntegration,
+  uploadIntegrationCredentials,
 } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import type {
@@ -235,6 +237,56 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
       .finally(() => setBusyId(null))
   }
 
+  // localStdio Connect — credentials.json file picker + install + pre-auth.
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const connectPendingId = useRef<string | null>(null)
+
+  /** localStdio connector Connect entry. OAuth-via-server connectors (envKeys
+   *  include CREDENTIALS_PATH, e.g. google-sheets) need the user's OAuth client
+   *  credentials.json first → file picker. Others (e.g. lark, creds via ccops)
+   *  install directly. */
+  const handleConnectLocalStdio = (id: string, install: IntegrationInstall) => {
+    if (install.kind !== 'localStdio') return
+    if (install.envKeys.includes('CREDENTIALS_PATH')) {
+      connectPendingId.current = id
+      fileInputRef.current?.click()
+      return
+    }
+    handleInstall(id)
+  }
+
+  /** credentials.json chosen → upload, install (registers + injects env), then
+   *  pre-auth (provoke the server's browser OAuth). Aggregate the step messages
+   *  into the install-result modal. */
+  const onCredentialsFileChosen = async (file: File) => {
+    const id = connectPendingId.current
+    connectPendingId.current = null
+    if (!id) return
+    setBusyId(id)
+    setError(null)
+    try {
+      const content = await file.text()
+      const messages: string[] = []
+      const cred = await uploadIntegrationCredentials(id, content)
+      messages.push(cred.message)
+      const installed = await installIntegration(id)
+      messages.push(...installed.messages)
+      const preauth = await preauthIntegration(id)
+      messages.push(preauth.message)
+      setInstallResult({
+        integrationId: id,
+        claudeOK: installed.claudeOK,
+        codexOK: installed.codexOK,
+        messages,
+      })
+      load()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t('integrations.installFailed'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const rowFullyConnected = (row: IntegrationRow) =>
     agents.length > 0 && agents.every((agent) => row.byAgent[agent]?.state === 'connected')
 
@@ -328,6 +380,20 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                   </button>
                 )
               }
+              if (install?.kind === 'localStdio') {
+                const needsCredentials = install.envKeys.includes('CREDENTIALS_PATH')
+                return (
+                  <button
+                    type="button"
+                    className="agent-matrix__install"
+                    disabled={busyId === row.id}
+                    onClick={() => handleConnectLocalStdio(row.id, install)}
+                    title={needsCredentials ? t('integrations.connectOAuthHint') : t('integrations.oneClickInstall')}
+                  >
+                    {busyId === row.id ? '...' : t('integrations.connect')}
+                  </button>
+                )
+              }
               return (
                 <button
                   type="button"
@@ -357,6 +423,18 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
 
   return (
     <section className="agent-matrix" aria-label={t('integrations.agentMatrix')}>
+      {/* localStdio Connect: hidden picker for the OAuth client credentials.json. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = '' // allow re-picking the same file
+          if (file) void onCredentialsFileChosen(file)
+        }}
+      />
       <header className="agent-matrix__header">
         <div>
           <span>{t('integrations.agentKicker')}</span>

@@ -467,6 +467,17 @@ public final class BoardServer {
         "/api/system/delete-local-data/token"
     ]
 
+    /// True for paths that must not be reachable cross-origin (no wildcard CORS).
+    /// Exact members of `localUIOnlyPaths`, plus the parameterized connector
+    /// credential/preauth routes — `POST /api/integrations/:id/credentials`
+    /// writes a secret to disk and `/preauth` spawns a process + opens a browser,
+    /// so a foreign origin must fail at preflight (same posture as delete-local-data).
+    static func isLocalUIOnlyPath(_ path: String) -> Bool {
+        if localUIOnlyPaths.contains(path) { return true }
+        return path.hasPrefix("/api/integrations/")
+            && (path.hasSuffix("/credentials") || path.hasSuffix("/preauth"))
+    }
+
     private func registerRoutes(on server: HttpServer) {
         // CORS preflight (OPTIONS) — meee2 browser sends a preflight before
         // POSTs with custom Content-Type / Authorization. Middleware short-
@@ -479,7 +490,7 @@ public final class BoardServer {
             // already. Echo the request Origin only when it's on the local-UI
             // allow list; otherwise reply with empty Allow-Origin so the
             // browser refuses to send the real request.
-            if BoardServer.localUIOnlyPaths.contains(request.path) {
+            if BoardServer.isLocalUIOnlyPath(request.path) {
                 let headers = BoardServer.localUICORSHeaders(for: request)
                 return .raw(204, "No Content", headers) { _ in }
             }
@@ -692,6 +703,8 @@ public final class BoardServer {
         server.GET["/api/integrations/agent-scan"] = BoardServer.cors(IntegrationsAPI.getAgentScan)
         server.GET["/api/integrations/side-effects"] = BoardServer.cors(IntegrationsAPI.getCanvasSideEffects)
         server.POST["/api/integrations/:id/install"] = BoardServer.cors(IntegrationsAPI.installIntegration)
+        server.POST["/api/integrations/:id/credentials"] = BoardServer.cors(IntegrationsAPI.uploadIntegrationCredentials)
+        server.POST["/api/integrations/:id/preauth"] = BoardServer.cors(IntegrationsAPI.preauthIntegration)
         server.POST["/api/integrations/:id/complete-auth"] = BoardServer.cors(IntegrationsAPI.completeAuth)
         server.POST["/api/integrations/:id/recommend-workflow"] = BoardServer.cors(IntegrationsAPI.recommendWorkflow)
         server.POST["/api/integrations/:id/runbook"] = BoardServer.cors(IntegrationsAPI.generateRunbook)
