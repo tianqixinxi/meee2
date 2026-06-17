@@ -7925,7 +7925,7 @@ final class PlannerStore {
             inlinePayloadLimitBytes: PlannerArtifactStorage.inlinePayloadLimitBytes,
             artifactPayloadTypes: PlannerArtifactPayloadType.allCases,
             completionCriteria: [
-                node.schema.goal,
+                node.schema.goal
             ] + ((node.contribution?.doneWhen?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
                 $0.isEmpty ? nil : ["共建收齐判据(达成时经 suggest_contribution_completion 发建议收口信号,勿直接交付): \($0)"]
             } ?? []) + [
