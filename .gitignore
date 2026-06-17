@@ -47,6 +47,11 @@ packages/*/tsconfig.tsbuildinfo
 Sources/Board/WebDist/*
 !Sources/Board/WebDist/.gitkeep
 
+# Generated at build time by scripts/gen-build-info.sh (git commit/branch/date
+# baked into the binary for the dev "About Meee2" panel). Regenerated before
+# every swift build; not tracked.
+App/BuildInfo.swift
+
 # Claude Code 本地配置 + 子 agent worktree
 .claude/
 Bridge/mcp-meee2/node_modules/

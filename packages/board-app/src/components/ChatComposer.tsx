@@ -94,7 +94,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   const [attachments, setAttachments] = useState<AttachmentItem[]>([])
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dragActive, setDragActive] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const dragDepthRef = useRef(0)
 
   const busy = sending || !!externalBusy
 
@@ -203,22 +205,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     }
   }
 
-  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (!uploadImage) return
-    const items = e.clipboardData?.items
-    if (!items || items.length === 0) return
-
-    const files: File[] = []
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i]
-      if (it.kind === 'file' && it.type.startsWith('image/')) {
-        const f = it.getAsFile()
-        if (f) files.push(f)
-      }
-    }
-    if (files.length === 0) return
-    e.preventDefault()
-
+  // paste 和 drag 共用的上传体。逐个上传任意类型文件并把结果挂成附件 chip。
+  const ingestFiles = async (files: File[]) => {
+    if (!uploadImage || files.length === 0) return
     for (const f of files) {
       try {
         const r = await uploadImage(f)
@@ -227,7 +216,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
           {
             id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
             path: r.path,
-            filename: r.filename || f.name || 'image',
+            filename: r.filename || f.name || 'file',
           },
         ])
         setError(null)
@@ -235,6 +224,67 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
         setError(`Upload failed: ${(err as Error).message || 'unknown'}`)
       }
     }
+  }
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!uploadImage) return
+    const items = e.clipboardData?.items
+    if (!items || items.length === 0) return
+
+    const files: File[] = []
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      if (it.kind === 'file') {
+        const f = it.getAsFile()
+        if (f) files.push(f)
+      }
+    }
+    if (files.length === 0) return
+    e.preventDefault()
+    await ingestFiles(files)
+  }
+
+  // 拖拽进入输入框 → 走同一条上传管线,接收任意类型文件。dragDepth 抵消子元素
+  // 冒泡的 enter/leave,避免高亮闪烁;dragHasFiles 确保不拦普通文本/链接拖动。
+  const dragHasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!uploadImage || !dragHasFiles(e)) return
+    e.preventDefault()
+    dragDepthRef.current += 1
+    setDragActive(true)
+  }
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!uploadImage || !dragHasFiles(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!uploadImage || !dragHasFiles(e)) return
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDragActive(false)
+  }
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    if (!uploadImage || !dragHasFiles(e)) return
+    e.preventDefault()
+    dragDepthRef.current = 0
+    setDragActive(false)
+    const files: File[] = []
+    const items = e.dataTransfer?.items
+    if (items?.length) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        if (it.kind === 'file') {
+          const f = it.getAsFile()
+          if (f) files.push(f)
+        }
+      }
+    } else {
+      for (const f of Array.from(e.dataTransfer?.files ?? [])) {
+        files.push(f)
+      }
+    }
+    await ingestFiles(files)
   }
 
   const removeAttachment = (id: string) => {
@@ -249,7 +299,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   return (
     <>
       {/* ── input box（attachments + textarea + send button）─────── */}
-      <div className="session-dock__input-box">
+      <div
+        className={`session-dock__input-box${dragActive ? ' is-drag-active' : ''}`}
+        onDragEnter={uploadImage ? handleDragEnter : undefined}
+        onDragOver={uploadImage ? handleDragOver : undefined}
+        onDragLeave={uploadImage ? handleDragLeave : undefined}
+        onDrop={uploadImage ? (e) => void handleDrop(e) : undefined}
+      >
         {contextTags && contextTags.length > 0 && (
           <div className="cc-context-tags" aria-label="Selected canvas context">
             {contextTags.map((tag) => (

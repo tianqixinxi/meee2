@@ -648,14 +648,47 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Main Menu Bar
 
+    /// Custom "About Meee2" panel. Shows the version, and for dev builds also the
+    /// git commit/branch/date baked in by scripts/gen-build-info.sh — the dev
+    /// binary has no embedded Info.plist, so the standard panel would show nothing.
+    @objc private func showAboutPanel(_ sender: Any?) {
+        NSApp.activate(ignoringOtherApps: true)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        // Dev builds either have no embedded Info.plist (bare swift build) or a
+        // "-dev" placeholder version; release .app bundles carry a real version.
+        let isDev = version == nil || version!.contains("-dev")
+        let shownVersion = version ?? "0.0.0-dev"
+
+        var creditLines: [String] = []
+        if isDev {
+            creditLines.append("Build \(BuildInfo.gitCommit) · \(BuildInfo.gitBranch)")
+            creditLines.append(BuildInfo.buildDate)
+        }
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationName: "Meee2",
+            .applicationVersion: shownVersion
+        ]
+        if !creditLines.isEmpty {
+            options[.credits] = NSAttributedString(
+                string: creditLines.joined(separator: "\n"),
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 11),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]
+            )
+        }
+        NSApp.orderFrontStandardAboutPanel(options: options)
+    }
+
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
         // ── App menu (Meee2) ──
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Meee2",
-                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+        let aboutItem = appMenu.addItem(withTitle: "About Meee2",
+                        action: #selector(showAboutPanel(_:)),
                         keyEquivalent: "")
+        aboutItem.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Meee2",
                         action: #selector(NSApplication.hide(_:)),

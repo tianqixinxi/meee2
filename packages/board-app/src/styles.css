@@ -8087,6 +8087,10 @@ html.board-empty-omni .canvas-toolbar__panel {
 .session-dock__input-box:focus-within {
   border-color: rgba(255, 255, 255, 0.2);
 }
+.session-dock__input-box.is-drag-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+}
 
 .session-dock--assistant .session-dock__transcript {
   min-height: 72px;
@@ -16116,6 +16120,12 @@ body.session-launcher-sidebar-resizing * {
   border-radius: 16px;
   background: var(--bg-paper);
   box-shadow: 0 8px 22px rgb(0 0 0 / 8%);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.session-launcher__prompt-card.is-drag-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .session-launcher__attachments {
