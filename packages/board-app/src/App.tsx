@@ -10,7 +10,9 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
-import { ArtifactsView } from './components/ArtifactsView'
+import { ArtifactsView, type ArtifactSessionFilter } from './components/ArtifactsView'
+import { SessionLauncherView } from './components/SessionLauncherView'
+import { SessionArtifactsModal, type SessionArtifactsModalTarget } from './components/SessionArtifactsModal'
 import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -21,6 +23,8 @@ import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
 import { GuideOverlay } from './components/GuideOverlay'
+import { Notice } from './components/feedback/Notice'
+import { ToastViewport, type ToastMessage } from './components/feedback/ToastViewport'
 import { useI18n } from './lib/i18n'
 import {
   boardTargetFromPlannerItem,
@@ -229,13 +233,8 @@ function canvasListSignature(list: CanvasList): string {
 
 // -- toast context ---------------------------------------------------------
 
-interface Toast {
-  id: number
-  kind: 'info' | 'error' | 'success'
-  text: string
-}
 interface ToastCtx {
-  push: (kind: Toast['kind'], text: string) => void
+  push: (kind: ToastMessage['kind'], text: string) => void
 }
 const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
@@ -418,7 +417,9 @@ export default function App() {
     plannerState: currentPlannerState,
     boardState: boardState.state,
   })
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
+  const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
+  const [sessionArtifactsModalTarget, setSessionArtifactsModalTarget] = useState<SessionArtifactsModalTarget | null>(null)
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [sessionTerminalTarget, setSessionTerminalTarget] = useState<SessionOpenTarget | null>(null)
@@ -438,7 +439,7 @@ export default function App() {
     if (hydrated) setUnreadSids(hydrated.unreadSids)
   }, [hydrated])
   const prevStatusRef = useRef<Record<string, string>>({})
-  const [toasts, setToasts] = useState<Toast[]>([])
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
   const [plannerClearRevision, setPlannerClearRevision] = useState(0)
   const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(readStoredPlannerPanelCollapsed)
 
@@ -516,10 +517,11 @@ export default function App() {
 
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
-    setToasts((t) => [...t, { id, kind, text }])
+    const timeoutMs = kind === 'error' ? 6000 : 4000
+    setToasts((t) => [...t.filter((toast) => toast.kind !== kind || toast.text !== text), { id, kind, text }])
     setTimeout(() => {
       setToasts((t) => t.filter((x) => x.id !== id))
-    }, 4000)
+    }, timeoutMs)
   }, [])
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
@@ -1179,7 +1181,12 @@ export default function App() {
   }, [boardSessionSignature, refreshCanvases])
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
+    if (nextMode === 'artifacts') setArtifactSessionFilter(null)
     setWorkspaceMode(nextMode)
+  }, [])
+
+  const handleOpenSessionArtifacts = useCallback((_session: Session, _title: string, filter: ArtifactSessionFilter) => {
+    setSessionArtifactsModalTarget(filter)
   }, [])
 
   const refreshUserProfile = useCallback(() => {
@@ -1194,7 +1201,12 @@ export default function App() {
     return () => window.removeEventListener('focus', refreshUserProfile)
   }, [refreshUserProfile])
 
-  if (!firstRunOnboardingCompleted && !degradedEntry) {
+  const hasExistingSessions = (boardState.state?.sessions.length ?? 0) > 0
+  // LocalStorage can disappear across app/browser resets; persisted sessions are
+  // stronger evidence that this is not a first-run workspace.
+  const shouldShowFirstRunOnboarding = !firstRunOnboardingCompleted && !degradedEntry && !hasExistingSessions
+
+  if (shouldShowFirstRunOnboarding) {
     return (
       <ToastContext.Provider value={toastCtx}>
         <FirstRunOnboarding
@@ -1207,13 +1219,7 @@ export default function App() {
           onComplete={completeFirstRunOnboarding}
           onDegradedEntry={enterDegradedWorkspace}
         />
-        <div className="toasts">
-          {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.kind}`}>
-              {t.text}
-            </div>
-          ))}
-        </div>
+        <ToastViewport toasts={toasts} />
       </ToastContext.Provider>
     )
   }
@@ -1241,17 +1247,28 @@ export default function App() {
         />
         <div className={`board-area${workspaceMode === 'planner' && activeWorkspaceCanvasKind === 'monitor' ? ' board-area--monitor' : ''}`}>
           {readinessReport && !readinessReport.ready && (
-            <div className="readiness-banner" role="status">
-              <div>
-                <strong>Local session readiness needs setup</strong>
-                <span>{readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.</span>
-              </div>
-              <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
-                Open Settings
-              </button>
-            </div>
+            <Notice
+              tone="warning"
+              placement="canvas"
+              className="readiness-banner"
+              title="Local setup incomplete"
+              action={(
+                <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
+                  Settings
+                </button>
+              )}
+            >
+              {readinessReport.requiredFailed} readiness check{readinessReport.requiredFailed === 1 ? '' : 's'} failed. Some local session features may run in fallback mode.
+            </Notice>
           )}
-          {workspaceMode === 'planner' ? (
+          {workspaceMode === 'session' ? (
+            <SessionLauncherView
+              state={boardState.state}
+              onSessionCreated={() => boardState.forceRefresh()}
+              onOpenSessionArtifacts={handleOpenSessionArtifacts}
+              onToast={pushToast}
+            />
+          ) : workspaceMode === 'planner' ? (
             activeWorkspaceCanvasKind === 'monitor' ? (
               <PlannerGraph
                 canvasId={activeWorkspaceCanvasId}
@@ -1314,6 +1331,8 @@ export default function App() {
             <ArtifactsView
               canvases={workspaceCanvases}
               activeCanvasId={activeWorkspaceCanvasId}
+              sessionFilter={artifactSessionFilter}
+              onClearSessionFilter={() => setArtifactSessionFilter(null)}
               onOpenCanvas={(canvasId) => {
                 handleSetActiveCanvas(canvasId)
                 setWorkspaceMode('planner')
@@ -1346,6 +1365,8 @@ export default function App() {
               readinessRepairLogs={readinessRepairLogs}
               onRepairReadiness={handleRepairReadiness}
               onRefreshReadiness={refreshReadiness}
+              sessions={boardState.state?.sessions ?? []}
+              onSessionControlChanged={() => boardState.forceRefresh()}
               devMode={BOARD_DEV_MODE}
               onRestartOnboarding={restartFirstRunOnboarding}
             />
@@ -1409,6 +1430,13 @@ export default function App() {
             onClose={() => setAgentRuntimeModalOpen(false)}
           />
         )}
+        {sessionArtifactsModalTarget && (
+          <SessionArtifactsModal
+            target={sessionArtifactsModalTarget}
+            onClose={() => setSessionArtifactsModalTarget(null)}
+            onChanged={() => boardState.forceRefresh()}
+          />
+        )}
         <CommandPalette
           canvases={canvasList.canvases}
           boardState={boardState.state}
@@ -1417,13 +1445,7 @@ export default function App() {
           onOpenSession={handlePaletteOpenSession}
         />
         <GuideOverlay />
-        <div className="toasts">
-          {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.kind}`}>
-              {t.text}
-            </div>
-          ))}
-        </div>
+        <ToastViewport toasts={toasts} />
       </div>
     </ToastContext.Provider>
   )

@@ -16,6 +16,9 @@ vi.mock('../api', async () => {
     syncNativeSessionsWorkspace: apiMocks.syncNativeSessionsWorkspace,
   }
 })
+vi.mock('../lib/theme', () => ({
+  useTheme: () => ({ resolvedTheme: 'dark' }),
+}))
 
 const session: Session = {
   id: 'session-1',

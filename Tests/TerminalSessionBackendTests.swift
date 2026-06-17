@@ -23,6 +23,48 @@ final class TerminalSessionBackendTests: XCTestCase {
         XCTAssertEqual(request.preferredSessionId, "session-a")
         XCTAssertEqual(request.cols, 100)
         XCTAssertEqual(request.rows, 28)
+        XCTAssertEqual(request.sessionScope, .node)
+    }
+
+    func testTerminalSessionScopeDefaultsToManagedBuckets() {
+        let meee2 = TerminalSessionRequest(
+            provider: "codex",
+            cwd: "/tmp/project",
+            command: "codex",
+            canvasId: nil,
+            nodeId: nil,
+            initialPrompt: nil
+        )
+        let canvas = TerminalSessionRequest(
+            provider: "codex",
+            cwd: "/tmp/project",
+            command: "codex",
+            canvasId: "canvas-a",
+            nodeId: nil,
+            initialPrompt: nil
+        )
+        let node = TerminalSessionRequest(
+            provider: "codex",
+            cwd: "/tmp/project",
+            command: "codex",
+            canvasId: "canvas-a",
+            nodeId: "node-a",
+            initialPrompt: nil
+        )
+        let explicitExternal = TerminalSessionRequest(
+            provider: "codex",
+            cwd: "/tmp/project",
+            command: "codex",
+            canvasId: nil,
+            nodeId: nil,
+            sessionScope: .external,
+            initialPrompt: nil
+        )
+
+        XCTAssertEqual(meee2.sessionScope, Meee2SessionScope.meee2)
+        XCTAssertEqual(canvas.sessionScope, Meee2SessionScope.canvas)
+        XCTAssertEqual(node.sessionScope, Meee2SessionScope.node)
+        XCTAssertEqual(explicitExternal.sessionScope, Meee2SessionScope.external)
     }
 
     func testSessionTerminalInfoDecodesLegacyRecordsWithoutBackend() throws {
@@ -70,6 +112,7 @@ final class TerminalSessionBackendTests: XCTestCase {
 
         XCTAssertEqual(snapshot.backend, .ghosttySurface)
         XCTAssertEqual(snapshot.surfaceId, "surface-a")
+        XCTAssertEqual(snapshot.sessionScope, .node)
         XCTAssertNil(snapshot.fallbackReason)
     }
 

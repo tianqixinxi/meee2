@@ -151,6 +151,48 @@ const TOOLS = [
     },
   },
   {
+    name: 'propose_add_node',
+    description:
+      'Propose adding a NEW step node to the canvas from your current planner ' +
+      'node (e.g. a triage step spawning a feature/bugfix sub-step). This does ' +
+      'NOT change the graph directly — it files a pending proposal that the ' +
+      'canvas owner must review and approve in the meee2 UI. Returns the ' +
+      'proposal (status=pending); continue your work without waiting for the ' +
+      'review. The new step defaults to depending on your node (parent→child ' +
+      'edge on the canvas); pass dependsOnNodeIds: [] for no dependency. If ' +
+      'the call fails validation, fix the arguments per the error message and ' +
+      'retry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        nodeId: {
+          type: 'string',
+          description: 'Your planner node id — the node proposing the new step.',
+        },
+        title: {
+          type: 'string',
+          description: 'Title of the new step, e.g. "bugfix: sheet snapshot rendering".',
+        },
+        goal: {
+          type: 'string',
+          description: 'Optional completion criterion for the new step (defaults to the title).',
+        },
+        summary: {
+          type: 'string',
+          description: 'Optional one-line proposal summary shown to the owner in the review UI.',
+        },
+        dependsOnNodeIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Upstream node ids for the new step. Omit to default to your node; pass [] for none.',
+        },
+      },
+      required: ['canvasId', 'nodeId', 'title'],
+    },
+  },
+  {
     name: 'get_artifact',
     description:
       'Read the latest version of meee2 canvas artifacts directly — no node ' +
@@ -575,6 +617,63 @@ async function handleAttachArtifactToNode(args) {
   )
 }
 
+// propose_add_node 的会话 scope:比 assertPlannerToolScope 更严。后者对未绑定
+// session 的节点放行(执行类工具的兜底语义),但提案带 provenance 归属
+// (originNodeId/originSessionId),放行未绑定节点等于允许会话冒用任意空节点
+// 当 origin(codex review P2)。有会话上下文时,发起节点必须绑定到当前会话;
+// 没有会话上下文(operator / 人工)放行,由服务端按节点权限兜底。
+async function assertProposeAddNodeScope(canvasId, nodeId) {
+  const candidates = envSessionCandidates()
+  if (candidates.length === 0) return
+  const graph = await callApi(
+    'GET',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`,
+  )
+  const node = (graph.nodes || []).find((n) => n.id === nodeId)
+  if (!node) throw new Error(`planner node not found: ${nodeId}`)
+  const boundSessionId = node.sessionId
+  if (!boundSessionId) {
+    throw new Error(
+      'propose_add_node requires the origin node to be bound to the current session — bind or dispatch it first',
+    )
+  }
+  const allowed = candidates.some((candidate) =>
+    boundSessionId === candidate || boundSessionId.endsWith(candidate) || candidate.endsWith(boundSessionId),
+  )
+  if (!allowed) {
+    throw new Error('propose_add_node can only propose from the node bound to the current session')
+  }
+}
+
+// proposal 子功能:节点会话从自己的节点发起 addNode 提案。产物是 pending
+// proposal,owner 在 UI approve+apply 后才落图 —— 本工具不直接改图。校验 /
+// 权限错误由 callApi 原样抛回,MCP 透传给 agent 自纠。来源会话经 env 解析
+// 后随 body 带给后端做归属(proposal.originSessionId)。
+async function handleProposeAddNode(args) {
+  const { canvasId, nodeId } = args
+  if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
+  if (!args.title || !String(args.title).trim()) throw new Error('title is required')
+  await assertProposeAddNodeScope(canvasId, nodeId)
+  let sessionId = null
+  try {
+    const state = await callApi('GET', '/api/state')
+    sessionId = resolveSession(state, undefined)?.id ?? null
+  } catch {
+    sessionId = envSessionCandidates()[0] ?? null
+  }
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/propose-add-node`,
+    {
+      title: args.title,
+      goal: args.goal,
+      summary: args.summary,
+      dependsOnNodeIds: args.dependsOnNodeIds,
+      sessionId,
+    },
+  )
+}
+
 // Direct artifact-layer write 的会话 scope:assertPlannerToolScope 的
 // 「绑定会话只能动自己节点」语义按 reference 翻译 — 绑定会话只能更新
 // **自己节点挂着的 reference**(共享引用照常扇出到其他节点的镜像槽位,
@@ -677,7 +776,11 @@ const INSTRUCTIONS = [
   'interface for reading node contracts and submitting structured canvas output.',
   '',
   'Core tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
-  'get_artifact, update_artifact, update_artifact_views, read_inbox, list_sessions.',
+  'propose_add_node, get_artifact, update_artifact, update_artifact_views,',
+  'read_inbox, list_sessions.',
+  'Governance rule: propose_add_node files a PENDING proposal for a new step',
+  '(e.g. triage spawning a feature/bugfix sub-step); it never mutates the graph',
+  'directly — the canvas owner reviews and applies it in the meee2 UI.',
   'Artifact rule: get_artifact pulls the latest snapshot of a shared ledger',
   'artifact (by reference); update_artifact refreshes it in place (new version,',
   'node state untouched) — use them when data changed but the node is not',
@@ -688,6 +791,14 @@ const INSTRUCTIONS = [
   'submit_node_output exactly once per completed/blocked attempt. If the contract',
   'says output.payload_kind=artifact_ref, submit artifacts[] and put the output',
   'slot name in artifact.reference; do not invent an artifact_ref wrapper.',
+  'External-write rule: if your node contract has output.external_write_target',
+  '{connector, ref}, your result goes to that REAL external object — write it',
+  'directly using that connector\'s tools (e.g. the Google Sheets MCP), then',
+  'submit_node_output(done) with the same ref as artifact.reference. Do NOT use',
+  'update_artifact to fake the mirror — meee2 reconciles the mirror snapshot',
+  'automatically after your done submit. If the connector is not connected or',
+  'the write fails, submit_node_output(blocked) explaining why; never degrade to',
+  'writing only the mirror.',
   'Artifact payloads are typed objects such as {"type":"json","json":"{...}"}',
   'or {"type":"text","text":"..."}. Large text/html/json/file artifacts should',
   'be written to a workspace file and submitted as payload.file.path.',
@@ -711,6 +822,9 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'attach_artifact_to_node':
         result = await handleAttachArtifactToNode(args)
+        break
+      case 'propose_add_node':
+        result = await handleProposeAddNode(args)
         break
       case 'get_artifact':
         result = await handleGetArtifact(args)

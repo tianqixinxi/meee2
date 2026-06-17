@@ -131,6 +131,12 @@ if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/"
     echo "Copied AppIcon.icns"
 fi
+for icon in Resources/meee2StatusTemplate.png Resources/meee2StatusTemplate@2x.png Resources/meee2StatusTemplate@3x.png; do
+    if [ -f "$icon" ]; then
+        cp "$icon" "$APP_DIR/Contents/Resources/"
+    fi
+done
+echo "Copied menu bar template icon"
 
 # Copy Bridge scripts and install MCP server dependencies
 if [ -d "Bridge" ]; then

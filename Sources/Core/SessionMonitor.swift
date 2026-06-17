@@ -178,17 +178,25 @@ class SessionMonitor: ObservableObject {
     }
 
     /// 合新旧 sessions，保留运行时状态
-    private func mergeSessions(_ newSessions: [AISession], existing: [AISession]) -> [AISession] {
+    /// internal（非 private）以便 SessionMonitorMergeTests 直接验证去重，详见该测试。
+    func mergeSessions(_ newSessions: [AISession], existing: [AISession]) -> [AISession] {
         var merged: [AISession] = []
         // Dedupe by sessionId: a respawn (or two live `claude` subprocesses for
-        // the same session, which Claude.app does sometimes) can leave two
-        // PID.json files in `~/.claude/sessions/` keyed to the same sessionId.
-        // `Dictionary(uniqueKeysWithValues:)` would fatal-error on the dup;
-        // keep the last-seen entry instead.
+        // the same session, which Claude.app does sometimes) can leave several
+        // PID.json files in `~/.claude/sessions/` keyed to the same sessionId —
+        // a session restore was observed to leave 7. Collapse `newSessions` by id
+        // FIRST: each duplicate not matched against `existing` would otherwise fall
+        // into the "new session" branch below and surface as a duplicate card.
+        // Keep the most-recently-updated file (`uniqueKeysWithValues` would also
+        // fatal-error on the dup).
+        let dedupedNew = Dictionary(newSessions.map { ($0.id, $0) },
+                                    uniquingKeysWith: { current, next in
+                                        next.lastUpdated >= current.lastUpdated ? next : current
+                                    }).values
         var existingMap = Dictionary(existing.map { ($0.id, $0) },
                                      uniquingKeysWith: { _, latest in latest })
 
-        for newSession in newSessions {
+        for newSession in dedupedNew {
             if let existingSession = existingMap[newSession.id] {
                 // 保留运行时状态，只更新基本信息
                 var mergedSession = newSession

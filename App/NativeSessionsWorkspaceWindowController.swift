@@ -17,7 +17,7 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
             backing: .buffered,
             defer: false
         )
-        window.title = "meee2 Sessions"
+        window.title = "Meee2 Sessions"
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName(Self.frameAutosaveName)
@@ -66,6 +66,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private var lastRailSignature = ""
     private var pendingReloadWorkItem: DispatchWorkItem?
     private var terminalOnlyMode = false
+    private var terminalTheme = "dark"
 
     init() {
         registry = TerminalPaneRegistry(hostView: terminalHostView)
@@ -98,19 +99,44 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         }
     }
 
+    func applyTerminalTheme(_ theme: String) {
+        let normalized = theme == "light" ? "light" : "dark"
+        terminalTheme = normalized
+        registry.applyTheme(normalized)
+    }
+
     func activate(
         sessionId: String? = nil,
         surfaceId: String? = nil,
         terminalOnly: Bool = false,
         tracePayload: [String: Any]? = nil
     ) {
+        let startedAt = Self.timestampMillis()
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.activate.begin",
+            extra: "terminalOnly=\(terminalOnly) session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
+        )
         setTerminalOnlyMode(terminalOnly)
         if !terminalOnly {
             reloadRows()
         }
+        let resolveStartedAt = Self.timestampMillis()
         if let target = resolveTarget(sessionId: sessionId, surfaceId: surfaceId) {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.done",
+                startedAt: resolveStartedAt,
+                extra: "surface=\(target.surfaceId.prefix(8)) session=\(target.sessionId.prefix(8)) backend=\(target.backend.rawValue)"
+            )
             focus(target, tracePayload: tracePayload)
         } else if terminalOnly {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.miss",
+                startedAt: resolveStartedAt,
+                extra: "terminalOnly=true session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
+            )
             selectedRailId = nil
             registry.hideActive()
             emptyTerminalLabel.stringValue = "Select an internal session"
@@ -120,8 +146,27 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
                       $0.status == InternalTerminalLifecycle.starting.rawValue
                           || $0.status == InternalTerminalLifecycle.running.rawValue
                   }) ?? internalSessions().first {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.fallback",
+                startedAt: resolveStartedAt,
+                extra: "surface=\(first.surfaceId.prefix(8)) session=\(first.sessionId.prefix(8))"
+            )
             focus(first, tracePayload: tracePayload)
+        } else {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.resolve.miss",
+                startedAt: resolveStartedAt,
+                extra: "terminalOnly=false session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
+            )
         }
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.activate.done",
+            startedAt: startedAt,
+            extra: "terminalOnly=\(terminalOnly)"
+        )
     }
 
     func suspend() {
@@ -392,7 +437,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         selectedRailId = NativeSessionRailItem.internalId(for: surface)
         updateRowSelection()
         emptyTerminalLabel.isHidden = true
-        if !registry.focus(surface: surface, tracePayload: tracePayload) {
+        if !registry.focus(surface: surface, theme: terminalTheme, tracePayload: tracePayload) {
             emptyTerminalLabel.stringValue = "Unable to open terminal surface"
             emptyTerminalLabel.isHidden = false
         }
@@ -456,6 +501,44 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private func internalSessions() -> [TerminalSessionSnapshot] {
         TerminalSessionBackendRegistry.shared.listSnapshots()
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func timestampMillis() -> Double {
+        Date().timeIntervalSince1970 * 1000
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? CGFloat { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
+    }
+
+    private static func logTrace(
+        _ payload: [String: Any]?,
+        phase: String,
+        startedAt: Double? = nil,
+        extra: String = ""
+    ) {
+        guard
+            let payload,
+            let traceId = payload["traceId"] as? String,
+            !traceId.isEmpty
+        else {
+            return
+        }
+        let now = timestampMillis()
+        let sentAt = doubleValue(payload["sentAtMs"])
+        let clickStartedAt = doubleValue(payload["clickStartedAtMs"])
+        let sendToNative = sentAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let clickToNative = clickStartedAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let duration = startedAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let webPhase = payload["webPhase"] as? String ?? "-"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        NSLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
+        )
     }
 
 }
@@ -593,12 +676,11 @@ private final class TerminalPaneRegistry {
         self.hostView = hostView
     }
 
-    func focus(surface: TerminalSessionSnapshot, tracePayload: [String: Any]? = nil) -> Bool {
+    func focus(surface: TerminalSessionSnapshot, theme: String, tracePayload: [String: Any]? = nil) -> Bool {
         let startedAt = Self.timestampMillis()
         let key = surface.surfaceId
-        if activeKey != key {
-            activeController?.hide()
-        }
+        let retiringKey = activeKey != key ? activeKey : nil
+        let retiringController = retiringKey.flatMap { controllers[$0] }
         let controller: NativeTerminalPaneControlling
         if let cached = controllers[key] {
             Self.logTrace(
@@ -638,9 +720,39 @@ private final class TerminalPaneRegistry {
         }
         activeKey = key
         remember(key)
+        let attachStartedAt = Self.timestampMillis()
         attach(controller)
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.attach.done",
+            startedAt: attachStartedAt,
+            extra: "surface=\(key.prefix(8))"
+        )
+        let themeStartedAt = Self.timestampMillis()
+        controller.applyTheme(theme)
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.theme.done",
+            startedAt: themeStartedAt,
+            extra: "surface=\(key.prefix(8)) theme=\(theme)"
+        )
+        let paneFocusStartedAt = Self.timestampMillis()
         controller.focus()
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.focus.done",
+            startedAt: paneFocusStartedAt,
+            extra: "surface=\(key.prefix(8))"
+        )
+        let cleanupStartedAt = Self.timestampMillis()
+        retire(controller: retiringController, key: retiringKey)
         scheduleStabilizedLayouts(for: key, tracePayload: tracePayload)
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.pane.cleanup.done",
+            startedAt: cleanupStartedAt,
+            extra: "surface=\(key.prefix(8)) retiring=\(retiringKey?.prefix(8) ?? "-")"
+        )
         Self.logTrace(
             tracePayload,
             phase: "native.workspace.focus.done",
@@ -672,6 +784,10 @@ private final class TerminalPaneRegistry {
         activeKey = nil
     }
 
+    func applyTheme(_ theme: String) {
+        controllers.values.forEach { $0.applyTheme(theme) }
+    }
+
     private var activeController: NativeTerminalPaneControlling? {
         guard let activeKey else { return nil }
         return controllers[activeKey]
@@ -683,8 +799,20 @@ private final class TerminalPaneRegistry {
             controller.paneView.removeFromSuperview()
             controller.paneView.autoresizingMask = [.width, .height]
             hostView.addSubview(controller.paneView)
+        } else if hostView.subviews.last !== controller.paneView {
+            controller.paneView.removeFromSuperview()
+            hostView.addSubview(controller.paneView)
         }
         controller.layout(in: hostView.bounds, hidden: false)
+    }
+
+    private func retire(controller: NativeTerminalPaneControlling?, key: String?) {
+        guard let controller, let key else { return }
+        DispatchQueue.main.async { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            guard self.activeKey != key else { return }
+            controller.hide()
+        }
     }
 
     private func scheduleStabilizedLayouts(for key: String, tracePayload: [String: Any]?) {
@@ -777,6 +905,7 @@ protocol NativeTerminalPaneControlling: AnyObject {
     func detach()
     func matches(surfaceId: String, sessionId: String?) -> Bool
     func scrollWheel(with event: NSEvent)
+    func applyTheme(_ theme: String)
 }
 
 extension NativeTerminalPaneControlling {
@@ -792,6 +921,10 @@ extension NativeTerminalPaneControlling {
         guard !paneView.isHidden else { return }
         paneView.window?.makeFirstResponder(paneView)
         paneView.scrollWheel(with: event)
+    }
+
+    func applyTheme(_ theme: String) {
+        _ = theme
     }
 }
 

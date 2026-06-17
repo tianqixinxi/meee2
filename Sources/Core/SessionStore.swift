@@ -28,7 +28,7 @@ public struct SessionData: Codable, Identifiable {
 
     /// 当前磁盘格式版本。新增迁移时 +1，永不回退。
     /// 早于 schemaVersion 引入的旧文件解码为 0，由 SessionStore 加载时自动迁移。
-    public static let currentSchemaVersion: Int = 1
+    public static let currentSchemaVersion: Int = 2
 
     /// 本条记录对应的 schema 版本。新建记录默认为 currentSchemaVersion；
     /// 磁盘上的旧文件会带着解码出的版本号进入内存，迁移完成后覆写。
@@ -48,6 +48,7 @@ public struct SessionData: Codable, Identifiable {
     public var iTermSessionId: String?      // iTerm2 native per-tab UUID（$ITERM_SESSION_ID）
     public var appleTerminalSessionId: String?  // Apple Terminal per-tab UUID（$TERM_SESSION_ID）
     public var transcriptPath: String?      // Transcript JSONL 文件路径
+    public var providerResumeSessionId: String? // Provider-native id usable with `codex resume` / `claude --resume`
 
     // MARK: - 时间信息
 
@@ -98,6 +99,7 @@ public struct SessionData: Codable, Identifiable {
         iTermSessionId: String? = nil,
         appleTerminalSessionId: String? = nil,
         transcriptPath: String? = nil,
+        providerResumeSessionId: String? = nil,
         startedAt: Date = Date(),
         lastActivity: Date = Date(),
         status: SessionStatus = .idle,
@@ -117,6 +119,7 @@ public struct SessionData: Codable, Identifiable {
         self.iTermSessionId = iTermSessionId
         self.appleTerminalSessionId = appleTerminalSessionId
         self.transcriptPath = transcriptPath
+        self.providerResumeSessionId = providerResumeSessionId
         self.startedAt = startedAt
         self.lastActivity = lastActivity
         self.status = status
@@ -141,6 +144,7 @@ public struct SessionData: Codable, Identifiable {
         case iTermSessionId = "iterm_session_id"
         case appleTerminalSessionId = "apple_terminal_session_id"
         case transcriptPath = "transcript_path"
+        case providerResumeSessionId = "provider_resume_session_id"
         case startedAt = "started_at"
         case lastActivity = "last_activity"
         case status
@@ -171,6 +175,7 @@ public struct SessionData: Codable, Identifiable {
         iTermSessionId = try container.decodeIfPresent(String.self, forKey: .iTermSessionId)
         appleTerminalSessionId = try container.decodeIfPresent(String.self, forKey: .appleTerminalSessionId)
         transcriptPath = try container.decodeIfPresent(String.self, forKey: .transcriptPath)
+        providerResumeSessionId = try container.decodeIfPresent(String.self, forKey: .providerResumeSessionId)
 
         // 时间解析
         let startedAtStr = try container.decodeIfPresent(String.self, forKey: .startedAt) ?? ""
@@ -212,6 +217,7 @@ public struct SessionData: Codable, Identifiable {
         try container.encodeIfPresent(iTermSessionId, forKey: .iTermSessionId)
         try container.encodeIfPresent(appleTerminalSessionId, forKey: .appleTerminalSessionId)
         try container.encodeIfPresent(transcriptPath, forKey: .transcriptPath)
+        try container.encodeIfPresent(providerResumeSessionId, forKey: .providerResumeSessionId)
 
         try container.encode(Self.dateString(from: startedAt), forKey: .startedAt)
         try container.encode(Self.dateString(from: lastActivity), forKey: .lastActivity)
@@ -240,6 +246,7 @@ public struct SessionData: Codable, Identifiable {
             iTermSessionId: iTermSessionId,
             appleTerminalSessionId: appleTerminalSessionId,
             transcriptPath: transcriptPath,
+            providerResumeSessionId: providerResumeSessionId,
             startedAt: startedAt,
             lastActivity: lastActivity,
             status: status,
@@ -341,6 +348,10 @@ public class SessionStore: ObservableObject {
 
     /// 更新会话 (自动更新 @Published sessions)
     public func update(_ sessionId: String, _ changes: (inout SessionData) -> Void) {
+        update(sessionId, touchLastActivity: true, changes)
+    }
+
+    private func update(_ sessionId: String, touchLastActivity: Bool, _ changes: (inout SessionData) -> Void) {
         guard let idx = sessions.firstIndex(where: { $0.sessionId == sessionId }) else { return }
         let previous = sessions[idx]
         var updated = previous
@@ -348,12 +359,20 @@ public class SessionStore: ObservableObject {
         guard hasSessionChanged(previous, updated, allowLastActivityOnly: false) else {
             return
         }
-        if updated.lastActivity == previous.lastActivity {
+        if touchLastActivity && updated.lastActivity == previous.lastActivity {
             updated.lastActivity = Date()
         }
         sessions[idx] = updated
         saveToDisk(updated)
         SessionEventBus.shared.publish(.sessionMetadataChanged(sessionId: sessionId))
+    }
+
+    public func setProviderResumeSessionId(sessionId: String, providerResumeSessionId: String) {
+        let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) else { return }
+        update(sessionId, touchLastActivity: false) { session in
+            session.providerResumeSessionId = trimmed
+        }
     }
 
     /// 删除会话 (自动更新 @Published sessions)
@@ -425,6 +444,10 @@ public class SessionStore: ObservableObject {
             if (merged.appleTerminalSessionId ?? "").isEmpty,
                let prev = ex.appleTerminalSessionId, !prev.isEmpty {
                 merged.appleTerminalSessionId = prev
+            }
+            if (merged.providerResumeSessionId ?? "").isEmpty,
+               let prev = ex.providerResumeSessionId, !prev.isEmpty {
+                merged.providerResumeSessionId = prev
             }
             // terminalInfo：若 incoming 完全没有 tty/termProgram/cmuxSocket 就沿用旧的
             let ti = merged.terminalInfo
@@ -625,6 +648,7 @@ public class SessionStore: ObservableObject {
         if (merged.iTermSessionId ?? "").isEmpty { merged.iTermSessionId = old.iTermSessionId }
         if (merged.appleTerminalSessionId ?? "").isEmpty { merged.appleTerminalSessionId = old.appleTerminalSessionId }
         if (merged.transcriptPath ?? "").isEmpty { merged.transcriptPath = old.transcriptPath }
+        if (merged.providerResumeSessionId ?? "").isEmpty { merged.providerResumeSessionId = old.providerResumeSessionId }
         if merged.description == nil { merged.description = old.description }
         if merged.tasks.isEmpty { merged.tasks = old.tasks }
         if merged.currentTask == nil { merged.currentTask = old.currentTask }
@@ -725,6 +749,7 @@ public class SessionStore: ObservableObject {
         if old.iTermSessionId != new.iTermSessionId { return true }
         if old.appleTerminalSessionId != new.appleTerminalSessionId { return true }
         if old.transcriptPath != new.transcriptPath { return true }
+        if old.providerResumeSessionId != new.providerResumeSessionId { return true }
         if old.startedAt != new.startedAt { return true }
         if old.status != new.status { return true }
         if old.currentTool != new.currentTool { return true }
@@ -781,6 +806,10 @@ enum SessionDataMigrations {
             // v0 → v1：首次引入 `schema_version` 字段本身。
             // 旧文件的 `detailed_status` → `status` 映射已经由 `init(from:)` 处理，
             // 这里不需要额外改动数据；只是把版本号打上。
+            return s
+        case 1:
+            // v1 → v2：新增 `provider_resume_session_id` 长期恢复锚点。
+            // 旧记录没有这个字段；后续由 terminal store 或 Codex jsonl backfill 补齐。
             return s
         default:
             return s

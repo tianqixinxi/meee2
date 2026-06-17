@@ -6,6 +6,8 @@
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>meee2</string>
+    <key>CFBundleDisplayName</key>
+    <string>Meee2</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
@@ -13,7 +15,7 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>meee2</string>
+    <string>Meee2</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -37,8 +39,6 @@
         <key>NSAllowsArbitraryLoadsInWebContent</key>
         <true/>
     </dict>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <!-- Apple Events automation usage description. Triggered the first time
@@ -47,7 +47,7 @@
          Desktop now" keystroke flow). Without this key the privacy prompt
          has no explainer and reads as suspicious. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>meee2 scripts terminal apps and Claude.app to focus session windows and to deliver messages typed in the meee2 board into the running session.</string>
+    <string>Meee2 scripts terminal apps and Claude.app to focus session windows and to deliver messages typed in the Meee2 board into the running session.</string>
 
     <!-- Sparkle auto-update. SUFeedURL is the appcast.xml that lives on the
          dedicated appcast branch (raw-served by GitHub) — release.yml's

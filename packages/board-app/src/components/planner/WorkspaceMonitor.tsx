@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Clock3,
   GitPullRequestArrow,
-  LayoutGrid,
   List,
   PlayCircle,
   Route,
@@ -31,7 +30,6 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
 
 type MonitorLaneKey = 'blocked' | 'approval' | 'running' | 'ready' | 'done'
 type MonitorSourceFilter = 'all' | 'live' | 'node' | 'canvas' | 'approval' | 'artifact'
-type MonitorDensity = 'compact' | 'comfortable'
 type MonitorSort = 'severity' | 'updated'
 type Translator = ReturnType<typeof useI18n>['t']
 
@@ -63,7 +61,6 @@ export function WorkspaceMonitor({
   const [query, setQuery] = useState('')
   const [laneFilter, setLaneFilter] = useState<MonitorLaneKey | 'all'>('all')
   const [sourceFilter, setSourceFilter] = useState<MonitorSourceFilter>('all')
-  const [density, setDensity] = useState<MonitorDensity>('compact')
   const [sortMode, setSortMode] = useState<MonitorSort>('severity')
   const [collapsedLanes, setCollapsedLanes] = useState<MonitorLaneKey[]>([])
   const activeCanvasName = monitorCanvasName(canvases.find((canvas) => canvas.id === activeCanvasId)?.name ?? t('monitor.title'))
@@ -164,23 +161,6 @@ export function WorkspaceMonitor({
               <option value="updated">{t('monitor.sortUpdated')}</option>
             </select>
           </label>
-          <div className="planner-monitor__density" role="group" aria-label={t('monitor.density')}>
-            <button
-              type="button"
-              className={density === 'compact' ? 'is-active' : ''}
-              onClick={() => setDensity('compact')}
-            >
-              <LayoutGrid size={12} aria-hidden />
-              <span>{t('monitor.compact')}</span>
-            </button>
-            <button
-              type="button"
-              className={density === 'comfortable' ? 'is-active' : ''}
-              onClick={() => setDensity('comfortable')}
-            >
-              <span>{t('monitor.comfortable')}</span>
-            </button>
-          </div>
           <span className="planner-monitor__result-count">{t('monitor.resultCount', { count: String(totalItems) })}</span>
         </div>
 
@@ -191,7 +171,7 @@ export function WorkspaceMonitor({
             <span>{t('monitor.loading')}</span>
           </div>
         ) : (
-          <div className="planner-monitor__kanban" data-density={density}>
+          <div className="planner-monitor__kanban" data-density="comfortable">
             {lanes.map((lane) => {
               const collapsed = collapsedLanes.includes(lane.key)
               const Icon = lane.icon
@@ -215,7 +195,6 @@ export function WorkspaceMonitor({
                         <MonitorCard
                           key={item.id}
                           item={item}
-                          density={density}
                           generatedAt={monitor?.generatedAt}
                           onOpenItem={onOpenItem}
                           t={t}
@@ -238,13 +217,11 @@ export function WorkspaceMonitor({
 
 function MonitorCard({
   item,
-  density,
   generatedAt,
   onOpenItem,
   t,
 }: {
   item: PlannerMonitorItem
-  density: MonitorDensity
   generatedAt?: string
   onOpenItem: (item: PlannerMonitorItem) => void
   t: Translator
@@ -260,16 +237,18 @@ function MonitorCard({
   const evidence = evidenceCount(item)
   const title = item.nodeTitle ?? item.summary
   const summary = item.summary.trim()
-  const showSummary = density === 'comfortable' && summary.length > 0 && summary !== title
-  const blockers = item.blockers.filter((blocker) => blocker.trim().length > 0)
-  const attention = blockers.length > 0 ? blockers.join('; ') : item.nextAction?.trim()
+  const showSummary = summary.length > 0 && summary !== title
+  const rawBlockers = item.blockers.filter((blocker) => blocker.trim().length > 0)
+  const blockers = rawBlockers.filter((blocker) => !isPlaceholderBlocker(blocker))
   const progress = item.nextAction?.trim()
+  const onlyPlaceholderBlockers = rawBlockers.length > 0 && blockers.length === 0
+  const attention = blockers.length > 0 ? blockers.join('; ') : onlyPlaceholderBlockers ? '' : progress
   const awaiting = formatAwaitingDuration(item.awaitingInputSince, t)
   const openLabel = monitorOpenLabel(item, t)
   return (
     <button
       type="button"
-      className={`planner-monitor-card planner-monitor-card--${density} planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
+      className={`planner-monitor-card planner-monitor-card--comfortable planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
       onClick={() => onOpenItem(item)}
       aria-label={`${openLabel}: ${title}`}
       title={`${openLabel}: ${item.canvasTitle}`}
@@ -284,7 +263,7 @@ function MonitorCard({
       <h3>{title}</h3>
       <div className="planner-monitor-card__meta">
         <span>{monitorCanvasName(item.canvasTitle)}</span>
-        {density === 'comfortable' && <span>{item.doerId || t('monitor.unassigned')}</span>}
+        <span>{item.doerId || t('monitor.unassigned')}</span>
         <span>{statusLabel(item, t)}</span>
       </div>
       {showSummary && (
@@ -293,7 +272,7 @@ function MonitorCard({
           {summary}
         </p>
       )}
-      {density === 'comfortable' && attention && (
+      {attention && (
         <p className={`planner-monitor-card__attention${blockers.length > 0 ? ' is-blocker' : ''}`}>
           <strong>{blockers.length > 0 ? t('monitor.attention') : t('monitor.progress')}</strong>
           {attention}
@@ -303,23 +282,21 @@ function MonitorCard({
         <span className={evidence > 0 ? 'has-evidence' : ''}>
           {t('monitor.evidenceCount', { count: String(evidence) })}
         </span>
-        {progress && (density === 'compact' || blockers.length > 0) && (
+        {progress && blockers.length > 0 && (
           <span className="planner-monitor-card__next">
             <Signpost size={11} aria-hidden />
             {progress}
           </span>
         )}
-        {density === 'comfortable' && awaiting && (
+        {awaiting && (
           <span className="planner-monitor-card__wait">
             <Clock3 size={11} aria-hidden />
             {awaiting}
           </span>
         )}
-        {density === 'comfortable' && (
-          <span className="planner-monitor-card__open-target">
-            {openLabel}
-          </span>
-        )}
+        <span className="planner-monitor-card__open-target">
+          {openLabel}
+        </span>
       </div>
     </button>
   )
@@ -349,6 +326,10 @@ function matchesSearch(item: PlannerMonitorItem, term: string): boolean {
     item.proposalStatus ?? '',
     ...item.blockers,
   ].some((value) => value.toLowerCase().includes(term))
+}
+
+function isPlaceholderBlocker(value: string): boolean {
+  return value.trim().toLowerCase() === 'blocked: no reason was provided by the session.'
 }
 
 function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): boolean {

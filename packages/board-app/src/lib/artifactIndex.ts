@@ -3,6 +3,7 @@ import type {
   CanvasInfo,
   CanvasScope,
   PlannerArtifact,
+  SessionArtifactCandidate,
   PlanningNode,
 } from '../types'
 import { resolvedArtifactPayload } from './artifactPayload'
@@ -38,9 +39,12 @@ export interface CanvasArtifactsSource {
 
 export interface ArtifactIndexItem {
   key: string
+  sourceKind: 'artifact' | 'candidate'
   groupId: ArtifactTypeGroupId
   canvas: CanvasInfo
   node?: PlanningNode
+  sessionId?: string | null
+  candidate?: SessionArtifactCandidate
   latest: PlannerArtifact
   artifacts: PlannerArtifact[]
   reviewStatus: ArtifactReviewStatus
@@ -50,6 +54,7 @@ export interface ArtifactIndexItem {
 }
 
 export type ArtifactDisplayState =
+  | 'candidate'
   | 'ready'
   | 'needs-review'
   | 'rejected'
@@ -64,6 +69,7 @@ export interface ArtifactIndexFilters {
   scope?: CanvasScope | 'all'
   canvasId?: string | 'all'
   displayState?: ArtifactDisplayState | 'all'
+  sessionId?: string | null
 }
 
 export function artifactSlotKey(artifact: PlannerArtifact): string {
@@ -113,6 +119,30 @@ export function classifyArtifactGroup(artifact: PlannerArtifact): ArtifactTypeGr
   return 'other'
 }
 
+export function buildCandidateArtifactIndex(candidates: SessionArtifactCandidate[]): ArtifactIndexItem[] {
+  return candidates.map((candidate) => {
+    const artifact = candidateToArtifact(candidate)
+    const canvas = candidateCanvas(candidate)
+    const item: ArtifactIndexItem = {
+      key: `candidate:${candidate.id}`,
+      sourceKind: 'candidate',
+      groupId: classifyArtifactGroup(artifact),
+      canvas,
+      node: undefined,
+      sessionId: candidate.sessionId,
+      candidate,
+      latest: artifact,
+      artifacts: [artifact],
+      reviewStatus: 'pending',
+      displayState: 'candidate',
+      typeLabel: candidate.kind || artifact.kind,
+      haystack: '',
+    }
+    item.haystack = buildHaystack(item)
+    return item
+  }).sort((a, b) => sortArtifactsNewestFirst(a.latest, b.latest))
+}
+
 export function buildArtifactIndex(sources: CanvasArtifactsSource[]): ArtifactIndexItem[] {
   const slots = new Map<string, ArtifactIndexItem>()
   for (const source of sources) {
@@ -133,9 +163,12 @@ export function buildArtifactIndex(sources: CanvasArtifactsSource[]): ArtifactIn
       } else {
         const item: ArtifactIndexItem = {
           key,
+          sourceKind: 'artifact',
           groupId: classifyArtifactGroup(artifact),
           canvas: source.canvas,
           node,
+          sessionId: node?.sessionId ?? null,
+          candidate: undefined,
           latest: artifact,
           artifacts: [artifact],
           reviewStatus: artifactReviewStatus(artifact),
@@ -161,6 +194,7 @@ export function filterArtifactIndex(
     if (filters.scope && filters.scope !== 'all' && item.canvas.scope !== filters.scope) return false
     if (filters.canvasId && filters.canvasId !== 'all' && item.canvas.id !== filters.canvasId) return false
     if (filters.displayState && filters.displayState !== 'all' && item.displayState !== filters.displayState) return false
+    if (filters.sessionId && item.sessionId !== filters.sessionId) return false
     return !query || item.haystack.includes(query)
   })
 }
@@ -180,6 +214,7 @@ export function sortArtifactsNewestFirst(a: PlannerArtifact, b: PlannerArtifact)
 
 function buildHaystack(item: ArtifactIndexItem): string {
   return [
+    item.sourceKind,
     item.latest.title,
     item.latest.reference,
     item.latest.kind,
@@ -193,5 +228,59 @@ function buildHaystack(item: ArtifactIndexItem): string {
     item.canvas.workspacePath,
     item.node?.title,
     item.node?.id,
+    item.sessionId,
+    item.candidate?.summary,
+    item.candidate?.provider,
+    item.candidate?.toolName,
+    ...(item.candidate?.references.map((reference) => `${reference.kind} ${reference.label ?? ''} ${reference.value}`) ?? []),
   ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function candidateToArtifact(candidate: SessionArtifactCandidate): PlannerArtifact {
+  const reference = candidate.references[0]?.value ?? candidate.id
+  return {
+    id: candidate.id,
+    canvasId: `session:${candidate.sessionId}`,
+    nodeId: candidate.sessionId,
+    kind: candidateKindToArtifactKind(candidate.kind),
+    title: candidate.title,
+    reference,
+    status: candidate.status,
+    createdAt: candidate.createdAt,
+    positionTag: 'candidate',
+    reviewStatus: 'pending',
+    payload: {
+      type: 'text',
+      text: candidate.summary,
+      references: candidate.references,
+    },
+  }
+}
+
+function candidateCanvas(candidate: SessionArtifactCandidate): CanvasInfo {
+  return {
+    id: `session:${candidate.sessionId}`,
+    name: 'Session',
+    scope: 'personal',
+    kind: 'monitor',
+    isDefault: false,
+    workspacePath: candidate.cwd ?? '',
+    ownerUserId: null,
+    teamId: null,
+  }
+}
+
+function candidateKindToArtifactKind(kind: string): PlannerArtifact['kind'] {
+  switch (kind) {
+    case 'impl-pr':
+      return 'impl-pr'
+    case 'check-result':
+      return 'check-result'
+    case 'prd':
+      return 'prd'
+    case 'kanban':
+      return 'kanban'
+    default:
+      return 'generic'
+  }
 }

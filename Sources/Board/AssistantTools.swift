@@ -633,7 +633,7 @@ enum AssistantTools {
     private static func readGraphStateDef() -> ToolDef {
         ToolDef(
             name: "read_graph_state",
-            description: "Read the current meee2 AI graph: nodes, edges, layout, proposals, artifacts, and events.",
+            description: "Read the current Meee2 AI graph: nodes, edges, layout, proposals, artifacts, and events.",
             inputSchema: ["type": "object", "properties": ["canvasId": ["type": "string"]]]
         )
     }
@@ -655,7 +655,7 @@ enum AssistantTools {
     private static func proposeGraphChangeDef() -> ToolDef {
         ToolDef(
             name: "propose_graph_change",
-            description: "Create a pending meee2 AI graph proposal. This never applies topology changes.",
+            description: "Create a pending Meee2 AI graph proposal. This never applies topology changes.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -673,7 +673,7 @@ enum AssistantTools {
             let canvasId = try plannerCanvasId(args: args, settings: settings)
             let changes = try decodePlanChanges(args["changes"])
             let proposal = try PlannerBoardBridge.graphChangeProposal(
-                summary: stringValue(args["summary"]) ?? "Update meee2 AI graph",
+                summary: stringValue(args["summary"]) ?? "Update Meee2 AI graph",
                 changes: changes,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
@@ -1321,17 +1321,15 @@ enum AssistantTools {
 
         let surface: TerminalSessionSnapshot
         do {
-            let handle = try TerminalSessionBackendRegistry.shared.createSession(
-                request: TerminalSessionRequest(
-                    provider: provider,
-                    cwd: cwd,
-                    command: command,
-                    canvasId: context?.canvas.id,
-                    nodeId: nil,
-                    initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
-                )
+            surface = try SessionSurfaceLauncher.createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: context?.canvas.id,
+                nodeId: nil,
+                initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
             )
-            surface = handle.snapshot
             BoardServer.shared.broadcastStateChanged()
         } catch {
             return .failure("failed to create internal terminal session: \(error.localizedDescription)")
@@ -1801,7 +1799,7 @@ enum AssistantTools {
 
     private static func coordinatorPrompt(title: String, goal: String, sessions: [PluginSession]) -> String {
         var lines: [String] = [
-            "You are \(title), a coordinator session created from meee2 Board.",
+            "You are \(title), a coordinator session created from Meee2 Board.",
             "Goal: \(goal)",
             "",
             "You run in hybrid on-demand mode. meee2 maintains compact member digests locally and wakes you only when a decision, blocker, handoff, or manual Ask requires reasoning.",

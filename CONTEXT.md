@@ -40,6 +40,34 @@ _Avoid_: All local files, artifact storage
 The product surface where users inspect Readiness Checks and run Recovery Actions. M0 uses the Web Board and Settings as Readiness Surfaces; the Island is not a Readiness Surface.
 _Avoid_: Island setup flow, menu bar checklist
 
+**Web Board**:
+The React-based main workspace surface inside the meee2 app, covering Canvas, Monitor, Settings, Artifacts, Templates, Team, and Integrations. Web Board notification design is separate from native macOS attention surfaces.
+_Avoid_: Native overlay, Dynamic Island, system notification
+
+**Web Board Theme Profile**:
+A local appearance preference that changes how the Web Board presents color and contrast on one Mac, including the Board sidebar surface color. A Web Board Theme Profile does not define Canvas rendering semantics, plugin identity colors, team-shared settings, or Native Attention Surface styling.
+_Avoid_: Canvas Render Profile, plugin theme, team design system, Dynamic Island theme
+
+**Native Attention Surface**:
+A macOS-level meee2 surface such as Dynamic Island, menu bar overlay, NSAlert, or system notification. Native Attention Surfaces are reserved for cross-window or urgent attention and are not the default home for Web Board UI feedback.
+_Avoid_: Web toast, canvas banner, inline form error
+
+**Toast**:
+A temporary Web Board message for non-blocking operation feedback that can disappear without changing the user's next action. Toast must not carry setup work, recovery tasks, or state that the user needs later.
+_Avoid_: Persistent warning, setup task, inline error, action backlog
+
+**Notice**:
+A persistent, non-blocking Web Board message anchored to the surface where the user can understand or act on it. Banners, inline errors, auth prompts, and local warning panels are Notice layouts rather than separate notification concepts.
+_Avoid_: Toast, modal, floating alert taxonomy
+
+**Dialog**:
+A blocking Web Board interaction used when the user must explicitly confirm, repair, or choose before the action continues.
+_Avoid_: Banner, toast, passive warning
+
+**Web Board Layer Order**:
+The fixed stacking relationship for Web Board feedback and overlays: Dialog appears above Toast, Toast appears above protected Inspector overlays, Inspector overlays appear above Notice, and Notice appears above ordinary content only when its surface requires an overlay layout.
+_Avoid_: Component-local z-index ladders, toast above dialog
+
 **Doctor**:
 The command-line view of the same Readiness Checks shown in the Web Board and Settings. Doctor is an auxiliary diagnostics path, not the primary M0 onboarding path.
 _Avoid_: Separate health-check logic, shell-only setup
@@ -87,6 +115,26 @@ _Avoid_: History list as monitor, delete-to-hide
 **Session Terminal Overlay**:
 A Canvas-scoped modal that opens one meee2-managed local session terminal in place. A Session Terminal Overlay is not a global session list, not a separate workspace mode, and not the home for session search or bulk session controls.
 _Avoid_: Sessions page, terminal workspace, session list modal
+
+**Session Project**:
+A user-selected local folder used as the working directory and grouping context for starting or reopening local AI sessions. A Session Project is not a Canvas Workspace; it names where the agent runs, not where meee2 organizes visual workflow state.
+_Avoid_: Canvas, generated workspace folder, project card as session identity
+
+**Session Project Display Name**:
+A user-editable launcher label for a Session Project. Changing the Session Project Display Name does not rename, move, or reassign the underlying local folder path.
+_Avoid_: Folder rename, project path migration, session identity rename
+
+**Session Project Launcher**:
+The default Web Board surface for choosing a Session Project, selecting a Supported Provider, and starting or reopening a meee2-managed local session. It creates sessions in native terminal surfaces without automatically binding them to a Canvas Workspace.
+_Avoid_: Progress page, Canvas launcher, Session Terminal Overlay
+
+**Temporary Session Workspace**:
+A meee2-created local working directory for a temporary local session that is not saved as a Session Project. Temporary Session Workspaces let the user start recoverable local sessions without registering a project folder.
+_Avoid_: Inferred project, scratch Canvas, unsaved Session Project
+
+**Pinned Session**:
+A user-level launcher preference that lifts a session into the Session Project Launcher's global pinned group without changing Canonical Session Identity, session continuity, or project membership.
+_Avoid_: Project pin, backend ownership change, duplicate session
 
 **Canvas Workspace**:
 A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and Artifacts. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
@@ -167,6 +215,10 @@ _Avoid_: Manual status as truth, done-only workflow state
 **Artifact**:
 Traceable work proof attached to a Canvas Workspace or node, such as file diffs, command results, tool calls, documents, screenshots, pull requests, and node outputs.
 _Avoid_: Canvas Evidence, status without proof, hidden artifact
+
+**Artifact Candidate**:
+Session-attached traceable work proof captured from agent hooks before it is archived into a Canvas Workspace or node. Artifact Candidates are globally searchable evidence, but they are not canonical node outputs until promoted into an Artifact.
+_Avoid_: Draft Artifact, hidden hook output, automatic node output
 
 **Artifact View**:
 A named projection over an Artifact's data, owned by the Artifact and carried with it wherever the Artifact is shown. Canvas cards, Inspector detail, and the Artifacts rail choose and render Artifact Views, but do not own the view definitions.

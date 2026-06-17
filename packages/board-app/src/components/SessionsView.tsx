@@ -27,6 +27,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
+import { useTheme } from '../lib/theme'
 import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
 interface Props {
@@ -54,6 +55,7 @@ export function SessionsView({
   onOpenArtifacts,
 }: Props) {
   const { t } = useI18n()
+  const { resolvedTheme } = useTheme()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<SessionFilter>('all')
   const [controlFilter, setControlFilter] = useState<SessionControlFilter>('active')
@@ -161,10 +163,11 @@ export function SessionsView({
       type: 'prewarm',
       surfaceId: session.surfaceId,
       sessionId: session.id,
+      theme: resolvedTheme,
       webPhase: reason,
     })
     return ok
-  }, [])
+  }, [resolvedTheme])
 
   const refreshDiagnostics = useCallback(() => {
     setDiagnosticsLoading(true)
@@ -502,6 +505,7 @@ const SessionRow = memo(function SessionRow({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const attention = sessionNeedsAttention(session) || unread
+  const done = session.status === 'completed' || session.status === 'done'
   const context = session.currentTask || session.latestRecap?.content || session.recentMessages[0]?.text || ''
   return (
     <article
@@ -510,6 +514,7 @@ const SessionRow = memo(function SessionRow({
         isInternalSession(session) ? 'sessions-row--internal' : 'sessions-row--external',
         selected ? 'is-selected' : '',
         attention ? 'sessions-row--attention' : '',
+        done ? 'sessions-row--done' : '',
         unread ? 'sessions-row--unread' : '',
       ].filter(Boolean).join(' ')}
       onClick={() => onSelect(session)}
@@ -530,6 +535,7 @@ const SessionRow = memo(function SessionRow({
               <span className="sessions-row__kind">{isInternalSession(session) ? t('sessions.internal') : t('sessions.external')}</span>
               {unread && <span className="sessions-row__unread">{t('sessions.unread')}</span>}
               {attention && <span className="sessions-row__attention">{t('sessions.attention')}</span>}
+              {done && <span className="sessions-row__done">{t('common.done')}</span>}
               {session.inboxPending > 0 && <span className="sessions-row__count">{session.inboxPending}</span>}
             </div>
           </div>
@@ -700,7 +706,7 @@ function SessionDetail({
     setControlError(null)
     setControlStatus(null)
     try {
-      await respondToSessionPermission(session.id, decision, decision === 'deny' ? 'Denied from meee2 Board' : undefined)
+      await respondToSessionPermission(session.id, decision, decision === 'deny' ? 'Denied from Meee2 Board' : undefined)
       setControlStatus(t(decision === 'allow' ? 'sessions.permissionAllowed' : 'sessions.permissionDenied'))
       void refreshTimeline()
     } catch (err) {
@@ -1318,6 +1324,7 @@ function NativeTerminalPanel({
   switchTraceId?: string
 }) {
   const { t } = useI18n()
+  const { resolvedTheme } = useTheme()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
   const layoutTimerRefs = useRef<number[]>([])
@@ -1380,6 +1387,7 @@ function NativeTerminalPanel({
       type,
       surfaceId: session.surfaceId,
       sessionId: session.id,
+      theme: resolvedTheme,
       traceId,
       clickStartedAtMs: switchStartedAt,
       sentAtMs,
@@ -1389,7 +1397,7 @@ function NativeTerminalPanel({
     if (ok) lastSentRectRef.current = nativeRect
     setOpenError(!ok)
     return ok
-  }, [session.id, session.surfaceId, switchStartedAt, switchTraceId])
+  }, [resolvedTheme, session.id, session.surfaceId, switchStartedAt, switchTraceId])
 
   const scheduleLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) return
@@ -1444,9 +1452,9 @@ function NativeTerminalPanel({
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleLayout)
       window.removeEventListener('meee2:layout-native-terminal', scheduleLayout)
-      openNativeTerminalSurface({ type: 'hide', surfaceId, sessionId })
+      openNativeTerminalSurface({ type: 'hide', surfaceId, sessionId, theme: resolvedTheme })
     }
-  }, [scheduleLayout, scheduleStabilizedLayouts, session.id, session.surfaceId, syncNative])
+  }, [resolvedTheme, scheduleLayout, scheduleStabilizedLayouts, session.id, session.surfaceId, syncNative])
 
   return (
     <div

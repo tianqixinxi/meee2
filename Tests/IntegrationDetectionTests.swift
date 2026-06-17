@@ -28,6 +28,50 @@ final class IntegrationDetectionTests: XCTestCase {
         XCTAssertEqual(Set(ids).count, ids.count, "catalog ids must be unique")
     }
 
+    // MARK: localStdio install spec (connector-localstdio-install)
+
+    func testGoogleSheetsIsLocalStdioWithOAuthEnvKeys() throws {
+        let sheets = try XCTUnwrap(IntegrationCatalog.all.first { $0.id == "google-sheets" })
+        guard case let .localStdio(command, args, envKeys) = sheets.install else {
+            return XCTFail("google-sheets should be a localStdio connector now, got \(sheets.install)")
+        }
+        XCTAssertEqual(command, "uvx")
+        XCTAssertEqual(args, ["mcp-google-sheets@latest"])
+        // OAuth-via-server model: server reads the client + caches the token.
+        XCTAssertTrue(envKeys.contains("CREDENTIALS_PATH"))
+        XCTAssertTrue(envKeys.contains("TOKEN_PATH"))
+    }
+
+    func testLarkRemainsLocalStdio() throws {
+        let lark = try XCTUnwrap(IntegrationCatalog.all.first { $0.id == "lark" })
+        guard case .localStdio = lark.install else {
+            return XCTFail("lark should remain a localStdio connector, got \(lark.install)")
+        }
+    }
+
+    func testConnectorDirIsUnderMeee2Connectors() {
+        let dir = IntegrationInstaller.connectorDir("google-sheets")
+        XCTAssertTrue(dir.path.hasSuffix("/.meee2/connectors/google-sheets"), "got \(dir.path)")
+    }
+
+    /// P2 fix — google-sheets must gate `connected` on a cached OAuth token,
+    /// not flip to connected the moment the MCP config entry is written.
+    func testGoogleSheetsNotConnectedUntilTokenPresent() throws {
+        let sheets = try XCTUnwrap(IntegrationCatalog.all.first { $0.id == "google-sheets" })
+        XCTAssertFalse(sheets.credentialProbes.isEmpty, "needs a token probe so connected ⇒ authorized")
+        // Config written (mcpConfigured) but no token yet (credentialPresent=false)
+        // ⇒ partial, never connected.
+        let pending = IntegrationDetector.resolveState(
+            descriptor: sheets, mcpConfigured: true, credentialPresent: false
+        )
+        XCTAssertNotEqual(pending, .connected)
+        // Token cached ⇒ connected.
+        let authed = IntegrationDetector.resolveState(
+            descriptor: sheets, mcpConfigured: true, credentialPresent: true
+        )
+        XCTAssertEqual(authed, .connected)
+    }
+
     // MARK: side-effect inference (P2)
 
     func testRepositoryContextSourceInfersGithubRead() {

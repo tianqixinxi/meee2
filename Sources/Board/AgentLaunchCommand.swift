@@ -1,12 +1,47 @@
 import Foundation
 
+struct AgentLaunchAttachment: Codable, Equatable {
+    let path: String
+    let filename: String?
+    let contentType: String?
+}
+
 enum AgentLaunchCommand {
     static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
 
     static func fullAccessCommand(forProvider provider: String) -> String {
-        normalizedProvider(provider) == "codex"
-            ? "codex \(codexAutomationFlags)"
-            : "claude --dangerously-skip-permissions"
+        launchCommand(forProvider: provider, permissionMode: "fullAccess")
+    }
+
+    static func launchCommand(forProvider provider: String, permissionMode rawMode: String?, planMode: Bool = false) -> String {
+        let provider = normalizedProvider(provider)
+        let mode = normalizedPermissionMode(rawMode)
+        let planRequested = planMode || mode == "plan"
+        if provider == "codex" {
+            let command: String
+            switch mode == "plan" ? "fullAccess" : mode {
+            case "readOnly":
+                command = "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            case "onRequest", "default":
+                command = "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            case "acceptEdits":
+                command = "codex --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust"
+            default:
+                command = "codex \(codexAutomationFlags)"
+            }
+            return command
+        }
+        if planRequested {
+            return "claude --permission-mode plan"
+        }
+        switch mode {
+        case "default", "onRequest", "readOnly":
+            return "claude --permission-mode default"
+        case "acceptEdits":
+            return "claude --permission-mode acceptEdits"
+        default:
+            return "claude --dangerously-skip-permissions"
+        }
     }
 
     static func resumeCommand(forProvider provider: String, sessionId: String) -> String {
@@ -16,8 +51,72 @@ enum AgentLaunchCommand {
             : "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
     }
 
+    static func launcherInitialPrompt(
+        forProvider provider: String,
+        planMode: Bool,
+        initialPrompt rawPrompt: String?,
+        attachments: [AgentLaunchAttachment] = []
+    ) -> String? {
+        let prompt = rawPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let attachmentLines = attachments
+            .map { $0.path.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { "@\($0)" }
+        let content = (attachmentLines + (prompt.isEmpty ? [] : [prompt])).joined(separator: "\n")
+        if planMode && normalizedProvider(provider) == "codex" {
+            return content.isEmpty ? "/plan" : "/plan \(content)"
+        }
+        return content.isEmpty ? nil : content
+    }
+
+    static func launcherDisplayPrompt(forDeliveredInitialPrompt rawPrompt: String?) -> String? {
+        let prompt = rawPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !prompt.isEmpty else { return nil }
+        let lower = prompt.lowercased()
+        guard lower == "/plan" || lower.hasPrefix("/plan ") else {
+            return displayPromptWithoutLeadingAttachments(prompt)
+        }
+        let withoutPlan = prompt.dropFirst("/plan".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return displayPromptWithoutLeadingAttachments(withoutPlan)
+    }
+
     static func normalizedProvider(_ raw: String) -> String {
         raw.lowercased().contains("codex") ? "codex" : "claude"
+    }
+
+    private static func displayPromptWithoutLeadingAttachments(_ raw: String) -> String? {
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        let firstPromptIndex = lines.firstIndex { line in
+            !isAttachmentReferenceLine(String(line))
+        }
+        guard let firstPromptIndex else { return nil }
+        let prompt = lines[firstPromptIndex...]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    private static func isAttachmentReferenceLine(_ raw: String) -> Bool {
+        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.hasPrefix("@/") || line.hasPrefix("@~")
+    }
+
+    static func normalizedPermissionMode(_ raw: String?) -> String {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "readonly", "read_only", "read-only":
+            return "readOnly"
+        case "onrequest", "on_request", "on-request", "confirm", "ask", "default":
+            return "onRequest"
+        case "acceptedits", "accept_edits", "accept-edits", "autoedit", "auto":
+            return "acceptEdits"
+        case "plan", "planning":
+            return "plan"
+        case "fullaccess", "full_access", "full-access", "bypasspermissions", "bypass", "danger":
+            return "fullAccess"
+        default:
+            return "fullAccess"
+        }
     }
 
     static func provider(forCommand command: String) -> String {
@@ -98,4 +197,5 @@ enum AgentLaunchCommand {
         }
         return parts.joined(separator: " ")
     }
+
 }

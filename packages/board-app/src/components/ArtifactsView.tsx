@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   fetchPlannerGraphState,
+  fetchArtifactCandidates,
   getArtifactVersion,
   getPlannerArtifactContent,
   listArtifactVersions,
@@ -22,6 +23,7 @@ import { requestBoardTarget } from '../lib/boardTarget'
 import {
   ARTIFACT_TYPE_GROUPS,
   artifactGroupCounts,
+  buildCandidateArtifactIndex,
   buildArtifactIndex,
   filterArtifactIndex,
   type ArtifactDisplayState,
@@ -32,6 +34,7 @@ import {
 import { resolvedArtifactPayload } from '../lib/artifactPayload'
 import { useI18n } from '../lib/i18n'
 import type {
+  ArtifactPayload,
   ArtifactReviewStatus,
   CanvasInfo,
   CanvasScope,
@@ -46,7 +49,17 @@ type StateFilter = ArtifactDisplayState | 'all'
 type CanvasFilter = string | 'all'
 type ScopeFilter = CanvasScope | 'all'
 
+export interface ArtifactSessionFilter {
+  sessionId: string
+  title: string
+  providerResumeSessionId?: string | null
+  surfaceId?: string | null
+  project?: string | null
+  projectName?: string | null
+}
+
 const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
+  'candidate',
   'needs-review',
   'ready',
   'working',
@@ -59,6 +72,8 @@ const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
   activeCanvasId: string
+  sessionFilter?: ArtifactSessionFilter | null
+  onClearSessionFilter?: () => void
   onOpenCanvas: (canvasId: string) => void
   onProposalCreated?: (proposal: PlanProposal) => void
 }
@@ -66,6 +81,8 @@ interface ArtifactsViewProps {
 export function ArtifactsView({
   canvases,
   activeCanvasId,
+  sessionFilter,
+  onClearSessionFilter,
   onOpenCanvas,
   onProposalCreated,
 }: ArtifactsViewProps) {
@@ -77,6 +94,7 @@ export function ArtifactsView({
   const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
   const [stateFilter, setStateFilter] = useState<StateFilter>('all')
   const [sources, setSources] = useState<CanvasArtifactsSource[]>([])
+  const [candidateItems, setCandidateItems] = useState<ArtifactIndexItem[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -98,7 +116,8 @@ export function ArtifactsView({
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all(canvases.map(async (canvas) => {
+    Promise.all([
+      Promise.all(canvases.map(async (canvas) => {
       try {
         const state = await fetchPlannerGraphState(canvas.id)
         return {
@@ -114,10 +133,13 @@ export function ArtifactsView({
           error: (err as Error).message || t('artifacts.loadFailed'),
         } satisfies CanvasArtifactsSource
       }
-    }))
-      .then((items) => {
+    })),
+      fetchArtifactCandidates(sessionFilter?.sessionId).catch(() => ({ candidates: [] })),
+    ])
+      .then(([items, candidateEnvelope]) => {
         if (cancelled) return
         setSources(items)
+        setCandidateItems(buildCandidateArtifactIndex(candidateEnvelope.candidates))
         const failures = items.filter((item) => item.error)
         setError(failures.length ? t('artifacts.groupLoadFailed', { count: failures.length }) : null)
       })
@@ -130,19 +152,28 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature, t])
+  }, [canvasSignature, sessionFilter?.sessionId, t])
 
-  const allItems = useMemo(() => buildArtifactIndex(sources), [sources])
-  const counts = useMemo(() => artifactGroupCounts(allItems), [allItems])
+  const allItems = useMemo(() => [
+    ...buildArtifactIndex(sources),
+    ...candidateItems,
+  ].sort((a, b) => new Date(b.latest.createdAt).getTime() - new Date(a.latest.createdAt).getTime()), [candidateItems, sources])
+  const sessionScopedItems = useMemo(
+    () => sessionFilter?.sessionId
+      ? allItems.filter((item) => artifactMatchesSessionFilter(item, sessionFilter))
+      : allItems,
+    [allItems, sessionFilter],
+  )
+  const counts = useMemo(() => artifactGroupCounts(sessionScopedItems), [sessionScopedItems])
   const filteredItems = useMemo(
-    () => filterArtifactIndex(allItems, {
+    () => filterArtifactIndex(sessionScopedItems, {
       query,
       groupId: activeGroup,
       scope: scopeFilter,
       canvasId: canvasFilter,
       displayState: stateFilter,
     }),
-    [activeGroup, allItems, canvasFilter, query, scopeFilter, stateFilter],
+    [activeGroup, canvasFilter, query, scopeFilter, sessionScopedItems, stateFilter],
   )
   const selectedItem = useMemo(
     () => filteredItems.find((item) => item.key === selectedKey) ?? filteredItems[0] ?? null,
@@ -151,13 +182,13 @@ export function ArtifactsView({
   const canvasOptions = useMemo(
     () => canvases.filter((canvas) => (
       (scopeFilter === 'all' || canvas.scope === scopeFilter)
-      && allItems.some((item) => item.canvas.id === canvas.id)
+      && sessionScopedItems.some((item) => item.canvas.id === canvas.id)
     )),
-    [allItems, canvases, scopeFilter],
+    [canvases, scopeFilter, sessionScopedItems],
   )
   const stateOptions = useMemo(
-    () => ARTIFACT_STATE_ORDER.filter((state) => allItems.some((item) => item.displayState === state)),
-    [allItems],
+    () => ARTIFACT_STATE_ORDER.filter((state) => sessionScopedItems.some((item) => item.displayState === state)),
+    [sessionScopedItems],
   )
 
   useEffect(() => {
@@ -206,6 +237,12 @@ export function ArtifactsView({
   )
 
   const openExternalArtifact = useCallback((item: ArtifactIndexItem): boolean => {
+    if (item.sourceKind === 'candidate') {
+      const ref = item.candidate?.references.find((reference) => reference.kind === 'url')
+      if (!ref) return false
+      window.open(ref.value, '_blank', 'noopener,noreferrer')
+      return true
+    }
     const url = artifactExternalUrl(item.latest)
     if (!url) return false
     window.open(url, '_blank', 'noopener,noreferrer')
@@ -213,6 +250,7 @@ export function ArtifactsView({
   }, [])
 
   const loadVersions = useCallback((item: ArtifactIndexItem) => {
+    if (item.sourceKind === 'candidate') return
     if (versionsBySlot[item.key] || versionsLoading.has(item.key)) return
     setVersionsLoading((current) => new Set(current).add(item.key))
     listArtifactVersions(item.canvas.id, item.latest.nodeId, item.latest.reference)
@@ -238,6 +276,7 @@ export function ArtifactsView({
 
   useEffect(() => {
     if (!selectedItem) return
+    if (selectedItem.sourceKind === 'candidate') return
     loadContent(selectedItem.latest)
     loadVersions(selectedItem)
   }, [loadContent, loadVersions, selectedItem])
@@ -251,6 +290,10 @@ export function ArtifactsView({
   }
 
   const openSourceArtifact = useCallback((item: ArtifactIndexItem) => {
+    if (item.sourceKind === 'candidate') {
+      openExternalArtifact(item)
+      return
+    }
     requestBoardTarget({
       kind: 'planner-artifact',
       canvasId: item.canvas.id,
@@ -263,9 +306,13 @@ export function ArtifactsView({
         body: item.latest.reference,
       },
     })
-  }, [])
+  }, [openExternalArtifact])
 
   const openContentPreview = useCallback((item: ArtifactIndexItem) => {
+    if (item.sourceKind === 'candidate') {
+      setContentModalKey(item.key)
+      return
+    }
     if (resolvedArtifactPayload(item.latest)) {
       setContentModalKey(item.key)
       return
@@ -338,6 +385,17 @@ export function ArtifactsView({
                 ? t('artifacts.loadingSlots')
                 : t('artifacts.summary', { slots: filteredItems.length, canvases: sources.length })}
             </p>
+            {sessionFilter && (
+              <button
+                type="button"
+                className="artifacts-session-filter"
+                onClick={onClearSessionFilter}
+                title={t('artifacts.clearSessionFilter')}
+              >
+                <span>{t('artifacts.sessionFilter', { title: sessionFilter.title })}</span>
+                {onClearSessionFilter && <X size={13} aria-hidden />}
+              </button>
+            )}
           </div>
           <div className="artifacts-workspace__tools">
             <label className="artifacts-search">
@@ -401,7 +459,7 @@ export function ArtifactsView({
                 onClick={() => setActiveGroup('all')}
               >
                 <span>{t('artifacts.typeAll')}</span>
-                <strong>{allItems.length}</strong>
+                <strong>{sessionScopedItems.length}</strong>
               </button>
               {ARTIFACT_TYPE_GROUPS.map((group) => (
                 <button
@@ -527,6 +585,44 @@ function SelectFilter({
   )
 }
 
+function artifactMatchesSessionFilter(item: ArtifactIndexItem, filter: ArtifactSessionFilter): boolean {
+  const ids = [
+    filter.sessionId,
+    filter.providerResumeSessionId,
+    filter.surfaceId,
+  ].map(normalizeToken).filter(Boolean)
+  const itemSessionId = normalizeToken(item.sessionId)
+  if (itemSessionId && ids.includes(itemSessionId)) return true
+
+  const projectTokens = [
+    filter.project,
+    filter.projectName,
+  ].flatMap(projectMatchTokens)
+  if (projectTokens.length === 0) return false
+
+  const canvasTokens = [
+    item.canvas.workspacePath,
+    item.canvas.name,
+    item.canvas.id,
+  ].flatMap(projectMatchTokens)
+  return canvasTokens.some((token) => projectTokens.includes(token))
+}
+
+function projectMatchTokens(value: string | null | undefined): string[] {
+  const normalized = normalizePathToken(value)
+  if (!normalized) return []
+  const base = normalized.split('/').filter(Boolean).pop()
+  return [normalized, base].filter((token): token is string => Boolean(token))
+}
+
+function normalizeToken(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function normalizePathToken(value: string | null | undefined): string {
+  return normalizeToken(value).replace(/\/+$/, '')
+}
+
 function ArtifactBadges({
   item,
   t,
@@ -592,6 +688,7 @@ function ArtifactDetailPanel({
       </aside>
     )
   }
+  const isCandidate = item.sourceKind === 'candidate'
 
   return (
     <aside className="artifacts-detail" aria-label={t('artifacts.detailPanel')}>
@@ -611,7 +708,7 @@ function ArtifactDetailPanel({
         </div>
         <div>
           <dt>{t('artifacts.node')}</dt>
-          <dd>{item.node?.title ?? item.latest.nodeId}</dd>
+          <dd>{isCandidate ? item.latest.nodeId.slice(0, 8) : (item.node?.title ?? item.latest.nodeId)}</dd>
         </div>
         <div>
           <dt>{t('artifacts.latest')}</dt>
@@ -619,7 +716,7 @@ function ArtifactDetailPanel({
         </div>
         <div>
           <dt>{t('artifacts.versionCount')}</dt>
-          <dd>{item.artifacts.length}</dd>
+          <dd>{isCandidate ? t('artifacts.candidate') : item.artifacts.length}</dd>
         </div>
       </dl>
 
@@ -630,13 +727,17 @@ function ArtifactDetailPanel({
             <Loader2 size={14} className="spin" aria-hidden />
             <span>{t('artifacts.loadingLatest')}</span>
           </div>
-        ) : resolvedArtifactPayload(item.latest, content) || content || item.latest.payload != null ? (
-          <ArtifactViewTabs artifact={item.latest} content={content} />
         ) : (
-          <ArtifactContentPreview content={content} t={t} />
+          <ArtifactDetailPreview artifact={item.latest} content={content} t={t} />
         )}
       </section>
 
+      {isCandidate ? (
+        <section className="artifacts-detail__section">
+          <h3>{t('artifacts.references')}</h3>
+          <CandidateReferences item={item} />
+        </section>
+      ) : (
       <section className="artifacts-detail__section">
         <div className="artifacts-detail__section-head">
           <h3>{t('artifacts.versions')}</h3>
@@ -675,9 +776,10 @@ function ArtifactDetailPanel({
           <div className="artifacts-preview">{t('artifacts.noVersions')}</div>
         )}
       </section>
+      )}
 
       <footer className="artifacts-detail__actions">
-        {item.displayState === 'needs-review' && (
+        {item.displayState === 'needs-review' && !isCandidate && (
           <>
             <button
               type="button"
@@ -705,19 +807,21 @@ function ArtifactDetailPanel({
           onClick={() => onOpenSource(item)}
         >
           <ExternalLink size={14} aria-hidden />
-          <span>{t('artifacts.openInCanvas')}</span>
+          <span>{t('artifacts.revealSource')}</span>
         </button>
+        {!isCandidate && (
+          <button
+            type="button"
+            className="artifacts-link-button"
+            onClick={() => onOpenCanvas(item.canvas.id)}
+          >
+            <FileText size={13} aria-hidden />
+            <span>{item.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
+          </button>
+        )}
         <button
           type="button"
-          className="artifacts-link-button"
-          onClick={() => onOpenCanvas(item.canvas.id)}
-        >
-          <FileText size={13} aria-hidden />
-          <span>{item.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
-        </button>
-        <button
-          type="button"
-          className="artifacts-link-button"
+          className="artifacts-load-button"
           onClick={() => onOpenContent(item)}
         >
           <GitCompare size={13} aria-hidden />
@@ -790,7 +894,7 @@ function ArtifactContentModal({
                   </button>
                   <button type="button" className="artifacts-link-button" onClick={onOpenSource}>
                     <FileText size={13} aria-hidden />
-                    <span>{t('artifacts.openInCanvas')}</span>
+                    <span>{t('artifacts.revealSource')}</span>
                   </button>
                 </div>
               </div>
@@ -801,6 +905,38 @@ function ArtifactContentModal({
       </section>
     </div>
   )
+}
+
+function CandidateReferences({ item }: { item: ArtifactIndexItem }) {
+  const refs = item.candidate?.references ?? []
+  if (refs.length === 0) {
+    return <TextSummary text={item.candidate?.summary ?? ''} fallback={item.latest.reference} />
+  }
+  return (
+    <div className="artifacts-candidate-refs">
+      {refs.map((reference, index) => (
+        <button
+          type="button"
+          key={`${reference.kind}:${reference.value}:${index}`}
+          onClick={() => openCandidateReference(reference.value)}
+          title={reference.value}
+        >
+          <span>{reference.kind}</span>
+          <strong>{reference.label ?? reference.value}</strong>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function openCandidateReference(value: string) {
+  if (/^https?:\/\//i.test(value) || /^file:\/\//i.test(value)) {
+    window.open(value, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (value.startsWith('/')) {
+    window.open(`file://${value}`, '_blank', 'noopener,noreferrer')
+  }
 }
 
 function ArtifactRenderedContent({
@@ -891,6 +1027,146 @@ function ArtifactContentPreview({ content, t }: { content?: PlannerArtifactConte
   )
 }
 
+function ArtifactDetailPreview({
+  artifact,
+  content,
+  t,
+}: {
+  artifact: PlannerArtifact
+  content?: PlannerArtifactContent
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  const payload = resolvedArtifactPayload(artifact, content)
+  if (payload) return <TypedArtifactSummary payload={payload} t={t} />
+  if (content) return <ContentSummary content={content} t={t} />
+  if (artifact.payload != null) {
+    return <TextSummary text={stringifyPreview(artifact.payload)} fallback={t('artifacts.noPreview')} />
+  }
+  return <ArtifactContentPreview content={content} t={t} />
+}
+
+function TypedArtifactSummary({ payload, t }: { payload: ArtifactPayload; t: ReturnType<typeof useI18n>['t'] }) {
+  switch (payload.type) {
+    case 'prd':
+      return (
+        <div className="artifacts-summary-preview">
+          <TextSummary text={payload.tldr} fallback={t('artifacts.noPreview')} />
+          {payload.sections.length > 0 && (
+            <SummaryRows rows={payload.sections.slice(0, 4).map((section) => ({
+              label: section.heading,
+              value: `${section.lines} line${section.lines === 1 ? '' : 's'}`,
+            }))} />
+          )}
+        </div>
+      )
+    case 'kanban': {
+      const itemCount = payload.columns.reduce((sum, column) => sum + column.items.length, 0)
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'Columns', value: String(payload.columns.length) },
+            { label: 'Items', value: String(itemCount) },
+            ...payload.columns.slice(0, 4).map((column) => ({
+              label: column.name,
+              value: `${column.items.length} item${column.items.length === 1 ? '' : 's'}`,
+            })),
+          ]} />
+        </div>
+      )
+    }
+    case 'impl-pr':
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'PR', value: payload.number ? `#${payload.number}` : 'not recorded' },
+            { label: 'Branch', value: payload.branch || 'not recorded' },
+            { label: 'Base', value: payload.baseBranch || 'not recorded' },
+            { label: 'Changed', value: `${payload.filesChanged} files, +${payload.insertions} / -${payload.deletions}` },
+            { label: 'CI', value: payload.ciStatus },
+          ]} />
+        </div>
+      )
+    case 'check-result':
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'Passed', value: String(payload.pass) },
+            { label: 'Failed', value: String(payload.fail) },
+            { label: 'Skipped', value: String(payload.skip) },
+          ]} />
+          {payload.failing.length > 0 && <TextSummary text={payload.failing.slice(0, 4).join('\n')} fallback="" />}
+        </div>
+      )
+    case 'file':
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: t('artifacts.filename'), value: payload.filename },
+            { label: t('artifacts.mimeType'), value: payload.mime },
+            { label: t('artifacts.size'), value: formatBytes(payload.sizeBytes, t) },
+            ...(payload.lines != null ? [{ label: 'Lines', value: String(payload.lines) }] : []),
+          ]} />
+        </div>
+      )
+    case 'json':
+      return (
+        <div className="artifacts-summary-preview">
+          <TextSummary text={payload.preview} fallback={t('artifacts.noPreview')} />
+          <SummaryRows rows={payload.entries.slice(0, 5)} />
+        </div>
+      )
+    case 'markdown':
+      return <TextSummary text={payload.preview} fallback={t('artifacts.noPreview')} />
+    case 'integration': {
+      const fieldCount = payload.fields ? Object.keys(payload.fields).length : 0
+      return (
+        <div className="artifacts-summary-preview">
+          <SummaryRows rows={[
+            { label: 'Connector', value: payload.connector },
+            { label: 'External ID', value: payload.externalId || 'not recorded' },
+            ...(fieldCount > 0 ? [{ label: 'Fields', value: String(fieldCount) }] : []),
+          ]} />
+          {payload.summary && <TextSummary text={payload.summary} fallback="" />}
+        </div>
+      )
+    }
+  }
+}
+
+function ContentSummary({ content, t }: { content: PlannerArtifactContent; t: ReturnType<typeof useI18n>['t'] }) {
+  if (content.type === 'file') return <ArtifactContentPreview content={content} t={t} />
+  if (content.type === 'json' || content.type === 'kanban') {
+    return <TextSummary text={summarizeStructuredContent(content)} fallback={t('artifacts.noPreview')} />
+  }
+  if (content.type === 'html') {
+    return <TextSummary text={stripHtml(content.content ?? '')} fallback={t('artifacts.noPreview')} />
+  }
+  return <TextSummary text={content.content ?? stringifyPreview(content.payload)} fallback={t('artifacts.noPreview')} />
+}
+
+function SummaryRows({ rows }: { rows: Array<{ label?: string; key?: string; value: string }> }) {
+  if (rows.length === 0) return null
+  return (
+    <dl className="artifacts-summary-rows">
+      {rows.map((row, index) => (
+        <div key={`${row.label ?? row.key ?? index}:${index}`}>
+          <dt>{row.label ?? row.key}</dt>
+          <dd>{row.value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function TextSummary({ text, fallback }: { text: string; fallback: string }) {
+  const preview = truncatePreview(cleanPreviewText(text), 420)
+  return (
+    <pre className="artifacts-preview artifacts-preview--summary">
+      {preview || fallback}
+    </pre>
+  )
+}
+
 function VersionSummary({ version, t }: { version?: PlannerArtifactVersion; t: ReturnType<typeof useI18n>['t'] }) {
   if (!version) return null
   return (
@@ -949,6 +1225,8 @@ function formatBytes(value: number | null | undefined, t: ReturnType<typeof useI
 
 function artifactStateLabel(state: ArtifactDisplayState, t: ReturnType<typeof useI18n>['t']): string {
   switch (state) {
+    case 'candidate':
+      return t('artifacts.candidate')
     case 'ready':
       return t('artifacts.stateReady')
     case 'needs-review':
@@ -991,14 +1269,64 @@ function isHttpUrl(value: string | null | undefined): value is string {
   }
 }
 
-function formatJsonPreview(content: PlannerArtifactContent): string {
+function summarizeStructuredContent(content: PlannerArtifactContent): string {
   const raw = content.content ?? stringifyPreview(content.payload)
   if (!raw) return ''
   try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return `JSON array · ${parsed.length} item${parsed.length === 1 ? '' : 's'}`
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>
+      if (Array.isArray(obj.columns)) {
+        const columns = obj.columns
+          .map((column) => column && typeof column === 'object' ? column as Record<string, unknown> : null)
+          .filter((column): column is Record<string, unknown> => Boolean(column))
+        const itemCount = columns.reduce((sum, column) => {
+          const inline = Array.isArray(column.items) ? column.items.length : 0
+          const cards = Array.isArray(column.cards) ? column.cards.length : 0
+          return sum + inline + cards
+        }, Array.isArray(obj.items) ? obj.items.length : 0)
+        const names = columns
+          .map((column) => String(column.title ?? column.name ?? column.id ?? 'Column'))
+          .slice(0, 4)
+          .join(', ')
+        return `Kanban · ${columns.length} column${columns.length === 1 ? '' : 's'} · ${itemCount} item${itemCount === 1 ? '' : 's'}${names ? `\n${names}` : ''}`
+      }
+      const entries = Object.entries(obj).slice(0, 6).map(([key, value]) => `${key}: ${compactValue(value)}`)
+      return `JSON object · ${Object.keys(obj).length} field${Object.keys(obj).length === 1 ? '' : 's'}\n${entries.join('\n')}`
+    }
+    return compactValue(parsed)
   } catch {
     return raw
   }
+}
+
+function compactValue(value: unknown): string {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return truncatePreview(cleanPreviewText(value), 80)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return `Array(${value.length})`
+  if (typeof value === 'object') return `Object(${Object.keys(value as Record<string, unknown>).length})`
+  return String(value)
+}
+
+function cleanPreviewText(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function stripHtml(value: string): string {
+  return cleanPreviewText(value.replace(/<[^>]+>/g, ' '))
+}
+
+function truncatePreview(value: string, max: number): string {
+  if (value.length <= max) return value
+  return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}...`
 }
 
 function stringifyPreview(value: unknown): string {

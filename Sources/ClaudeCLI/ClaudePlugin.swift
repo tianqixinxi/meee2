@@ -636,6 +636,14 @@ class ClaudePlugin: SessionPlugin {
         // 更新 SessionStore (实时性保障)
         updateSessionInStore(sessionId: sessionId)
 
+        if event.event == .postToolUse || event.event == .postToolUseFailure || event.event == .stop {
+            let inserted = SessionArtifactCandidateStore.shared.ingestClaudeHook(event)
+            if !inserted.isEmpty {
+                MInfo("[ArtifactCandidate] captured \(inserted.count) candidate(s) sid=\(sessionId.prefix(8))")
+                BoardServer.shared.broadcastStateChanged()
+            }
+        }
+
         // 通知更新 (在更新 SessionStore 之后)
         notifySessionsUpdated()
 
@@ -1093,6 +1101,7 @@ class ClaudePlugin: SessionPlugin {
                 pid: aiSession.pid,
                 ghosttyTerminalId: resolvedGhosttyTerminalId,
                 transcriptPath: transcriptPath,
+                providerResumeSessionId: AgentLaunchCommand.isLikelyProviderResumeSessionId(realSessionId) ? realSessionId : nil,
                 startedAt: aiSession.startedAt,
                 lastActivity: aiSession.lastUpdated,
                 status: hookDrivenStatus,

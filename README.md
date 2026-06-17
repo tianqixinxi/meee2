@@ -31,7 +31,7 @@ meee2 is a single macOS process that:
 3. **Publishes** a unified session model to four surfaces — Dynamic Island, TUI, CLI, Web Board — that all read from the same `SessionStore`.
 4. **Routes** A2A (agent-to-agent) messages between sessions through named channels, and handles permission-request round-trips back to the CLI.
 
-The whole app runs with `.accessory` activation policy — no Dock icon, just the menu bar item and the Island overlay.
+The app runs as a standard macOS app (`.regular` activation policy) — Dock icon, App Switcher entry, and the **Board window as the primary surface** that opens on launch. The menu bar item and Dynamic Island overlay are secondary, always-on accessories.
 
 ---
 

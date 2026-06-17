@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../lib/i18n'
 import { WorkspaceMonitor } from './WorkspaceMonitor'
@@ -26,7 +26,7 @@ const canvas = {
   teamId: null,
 }
 
-describe('WorkspaceMonitor density modes', () => {
+describe('WorkspaceMonitor comfortable view', () => {
   beforeEach(() => {
     apiMocks.fetchPlannerWorkspaceMonitor.mockResolvedValue({
       generatedAt: '2026-05-31T05:00:00.000Z',
@@ -51,11 +51,32 @@ describe('WorkspaceMonitor density modes', () => {
         updatedAt: '2026-05-31T04:45:00.000Z',
         nextAction: '2/4 nodes',
         awaitingInputSince: '2026-05-31T03:45:00.000Z',
+      }, {
+        id: 'monitor-node-placeholder',
+        kind: 'node',
+        canvasId: 'canvas-1',
+        canvasTitle: 'Launch Monitor',
+        nodeId: 'node-placeholder',
+        nodeTitle: 'Placeholder blocker node',
+        sessionId: null,
+        deliveryId: null,
+        proposalId: null,
+        proposalStatus: null,
+        summary: 'Blocked without a useful reason.',
+        runState: 'blocked',
+        blockers: ['Blocked: no reason was provided by the session.'],
+        needsOwnerReview: false,
+        doerId: null,
+        riskRank: 0,
+        evidenceCount: 0,
+        updatedAt: '2026-05-31T04:30:00.000Z',
+        nextAction: '1/2 nodes',
+        awaitingInputSince: null,
       }],
     })
   })
 
-  it('uses compact for scan-only fields and comfortable for diagnostic context', async () => {
+  it('renders comfortable diagnostic fields without a density switcher', async () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
@@ -70,26 +91,23 @@ describe('WorkspaceMonitor density modes', () => {
 
     expect(await screen.findByText('Research launch sentiment')).toBeInTheDocument()
     expect(screen.getAllByText('Launch Monitor').length).toBeGreaterThan(0)
-    expect(screen.getByText('blocked')).toBeInTheDocument()
+    expect(screen.getAllByText('blocked').length).toBeGreaterThan(0)
     expect(screen.getByText('3 evidence')).toBeInTheDocument()
     expect(screen.getByText('2/4 nodes')).toBeInTheDocument()
-    expect(screen.queryByText('member-a')).not.toBeInTheDocument()
-    expect(screen.queryByText('AI recap says owner needs updated evidence before publishing.')).not.toBeInTheDocument()
-    expect(screen.queryByText('Missing source links')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Comfortable' }))
-
-    await waitFor(() => {
-      expect(screen.getByText('member-a')).toBeInTheDocument()
-    })
-    expect(screen.getByText('Recap')).toBeInTheDocument()
+    expect(screen.getByText('member-a')).toBeInTheDocument()
+    expect(screen.getAllByText('Recap').length).toBeGreaterThan(0)
     expect(screen.getByText('AI recap says owner needs updated evidence before publishing.')).toBeInTheDocument()
     expect(screen.getByText('Attention')).toBeInTheDocument()
     expect(screen.getByText('Missing source links')).toBeInTheDocument()
-    expect(screen.getByText('Open item')).toBeInTheDocument()
+    expect(screen.getAllByText('Open item').length).toBeGreaterThan(0)
+    expect(screen.getByText('Placeholder blocker node')).toBeInTheDocument()
+    expect(screen.queryByText('Blocked: no reason was provided by the session.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Density' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Compact' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Comfortable' })).not.toBeInTheDocument()
   })
 
-  it('keeps meee2 AI controls outside the monitor table toolbar', async () => {
+  it('keeps Meee2 AI controls outside the monitor table toolbar', async () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
@@ -103,6 +121,6 @@ describe('WorkspaceMonitor density modes', () => {
     )
 
     await screen.findByText('Research launch sentiment')
-    expect(screen.queryByRole('button', { name: /meee2 AI/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Meee2 AI/ })).not.toBeInTheDocument()
   })
 })
