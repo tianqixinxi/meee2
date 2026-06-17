@@ -27,6 +27,7 @@ import type {
   CSSProperties,
   ClipboardEvent as ReactClipboardEvent,
   Dispatch,
+  DragEvent as ReactDragEvent,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -146,6 +147,11 @@ function removeLaunchAttachment(
 
 function truncateAttachmentName(name: string, max = 28): string {
   return name.length <= max ? name : `${name.slice(0, max - 3)}...`
+}
+
+// 仅当拖拽载荷里有文件(而非选中文本/链接)时才接管,避免拦掉普通文本拖动。
+function dragEventHasFiles(event: ReactDragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
 }
 
 function readStoredSelection(): Selection | null {
@@ -1734,6 +1740,7 @@ function SessionComposer({
   const [enterSubmitArmed, setEnterSubmitArmed] = useState(false)
   const [attachmentBusy, setAttachmentBusy] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [dragActive, setDragActive] = useState(false)
   const permissionMenuRef = useRef<HTMLDivElement | null>(null)
   const enterSubmitTimerRef = useRef<number | null>(null)
   const permissionOptions = PERMISSION_OPTIONS[provider]
@@ -1784,19 +1791,8 @@ function SessionComposer({
     }
   }, [attachmentBusy, clearEnterSubmitArm, onPickAttachments, starting, t])
 
-  const handlePromptPaste = useCallback(async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
-    const items = event.clipboardData?.items
-    if (!items?.length) return
-    const files: File[] = []
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index]
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const file = item.getAsFile()
-        if (file) files.push(file)
-      }
-    }
+  const uploadAttachmentFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return
-    event.preventDefault()
     clearEnterSubmitArm()
     setAttachmentBusy(true)
     setAttachmentError(null)
@@ -1810,6 +1806,67 @@ function SessionComposer({
       setAttachmentBusy(false)
     }
   }, [clearEnterSubmitArm, onUploadPastedImage, t])
+
+  const handlePromptPaste = useCallback(async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items?.length) return
+    const files: File[] = []
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+    if (files.length === 0) return
+    event.preventDefault()
+    await uploadAttachmentFiles(files)
+  }, [uploadAttachmentFiles])
+
+  // 拖拽进入输入框:与粘贴同一条上传管线,接收任意类型文件。dragDepth 计数抵消
+  // 子元素冒泡的 enter/leave,避免 hover 在 chips/textarea 之间穿梭时高亮闪烁。
+  const dragDepthRef = useRef(0)
+  const handlePromptDragEnter = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) return
+    event.preventDefault()
+    dragDepthRef.current += 1
+    setDragActive(true)
+  }, [])
+
+  const handlePromptDragOver = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handlePromptDragLeave = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) return
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDragActive(false)
+  }, [])
+
+  const handlePromptDrop = useCallback(async (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) return
+    event.preventDefault()
+    dragDepthRef.current = 0
+    setDragActive(false)
+    const files: File[] = []
+    const items = event.dataTransfer?.items
+    if (items?.length) {
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index]
+        if (item.kind === 'file') {
+          const file = item.getAsFile()
+          if (file) files.push(file)
+        }
+      }
+    } else {
+      for (const file of Array.from(event.dataTransfer?.files ?? [])) {
+        files.push(file)
+      }
+    }
+    await uploadAttachmentFiles(files)
+  }, [uploadAttachmentFiles])
 
   const handlePromptKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
@@ -1851,7 +1908,13 @@ function SessionComposer({
       <div className="session-launcher__composer">
         <h2>{title}</h2>
         <div className="session-launcher__prompt-tray">
-          <div className="session-launcher__prompt-card">
+          <div
+            className={`session-launcher__prompt-card${dragActive ? ' is-drag-active' : ''}`}
+            onDragEnter={handlePromptDragEnter}
+            onDragOver={handlePromptDragOver}
+            onDragLeave={handlePromptDragLeave}
+            onDrop={(event) => void handlePromptDrop(event)}
+          >
             {attachments.length > 0 && (
               <div className="session-launcher__attachments" aria-label={t('sessions.launcher.attachments')}>
                 {attachments.map((attachment) => (
