@@ -248,7 +248,7 @@ Before committing, **every PR**:
 
 For non-trivial behavior changes, also smoke these by hand:
 
-1. Launch the GUI — menubar icon appears, Island window renders
+1. Launch the GUI — the Board window opens automatically; Dock icon + menubar icon appear; Island overlay renders
 2. In a test Claude session, send a prompt — the card transitions `idle → thinking → tooling → idle` (not stuck)
 3. Open Terminal from two different session cards — each focuses its own Ghostty tab (not all the same)
 4. `meee2 msg send --channel __ops-<sid> --from operator --to session --human "ping"` — target session receives it within ~2s
@@ -258,7 +258,7 @@ For UI changes, **hard-refresh** `localhost:5002` before evaluating (Vite HMR so
 
 ## Common Pitfalls
 
-- `.accessory` activation policy — no Dock icon, menubar + Island only.
+- `.regular` activation policy — Dock icon + App Switcher; the Board window is the **primary surface** and opens automatically on launch. The menu bar item + Island are secondary accessories. Closing the Board window keeps the app alive (Dock icon stays); `applicationShouldHandleReopen` re-opens it via `openBoardMenu()`.
 - `HookSocketServer` holds the permission socket open until user responds or `permissionTimeoutSeconds` (default 300s) expires. Don't close early.
 - `meee2Kit` is imported by CLI/TUI/GUI — code in `Sources/` must not assume `NSApplication` is running.
 - `DynamicIslandWindow`'s `NSHostingView` must have `sizingOptions = []` (prevents infinite constraint update loops).

@@ -100,10 +100,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
-        NSApp.setActivationPolicy(.accessory)
+        // 主界面为主体:启动即 regular 应用 —— 有 Dock 图标、出现在 Cmd+Tab 切换器。
+        // 灵动岛 + 菜单栏图标作为附属常驻入口。
+        NSApp.setActivationPolicy(.regular)
 
-        // 先建好主菜单栏——.accessory 时不显示，Board 窗口切 .regular 后自动出现
+        // 主菜单栏(regular 下立即可见)
         setupMainMenu()
         SessionPaletteManager.shared.registerHotKey()
 
@@ -156,14 +157,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             self?.startSessionRuntime()
             self?.startBoardServer()
 
-            // 新用户首次启动:自动打开 Board,让 FirstRunOnboarding 引导接住他们。
-            // 否则菜单栏 app 双击后只有图标,引导窗口要靠用户自己点菜单 "Open Board"
-            // 才出现 —— 新用户根本不知道有这步。flag 先消费,保证只弹一次。
-            let isFirstLaunch = Self.consumeFirstLaunchOnboardingFlag()
-            if BoardCommand.shouldShowOnLaunch || isFirstLaunch {
-                DispatchQueue.main.async { [weak self] in
-                    self?.openBoardMenu()
-                }
+            // 主界面为主体:每次启动都打开主看板窗口(不再只首次/带 `board` 参数)。
+            // 仍消费首次标记,让 Board 内 FirstRunOnboarding 能区分新老用户。
+            _ = Self.consumeFirstLaunchOnboardingFlag()
+            DispatchQueue.main.async { [weak self] in
+                self?.openBoardMenu()
             }
 
             // 发送使用统计（异步，不阻塞启动）
@@ -352,11 +350,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if let boardWindowController {
-            boardWindowController.show()
-            return false
-        }
-        return true
+        // 点 Dock 图标 / Cmd+Tab 重新激活时,确保主看板窗口回到前台。
+        // openBoardMenu 幂等 —— 窗口已存在则复用 show(),被关掉后(controller=nil)则重建。
+        openBoardMenu()
+        return false
     }
 
     // MARK: - Status Bar
@@ -606,7 +603,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             boardWindowController?.onClose = { [weak self] in
                 MInfo("[AppDelegate] Board window closed")
                 self?.boardWindowController = nil
-                NSApp.setActivationPolicy(.accessory)
+                // 主界面为主体:关掉看板窗口不退回菜单栏形态、保持 .regular + Dock 图标常驻;
+                // 重新点 Dock / Open Board 会经 openBoardMenu 重建窗口。
             }
         } else {
             MInfo("[AppDelegate] Reusing existing BoardWebWindowController")
