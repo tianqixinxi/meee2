@@ -45,7 +45,9 @@ public final class MCPConfigManager {
         "mcp__meee2__attach_artifact_to_node",
         "mcp__meee2__get_artifact",
         "mcp__meee2__update_artifact",
-        "mcp__meee2__update_artifact_views"
+        "mcp__meee2__update_artifact_views",
+        "mcp__meee2__add_node_contribution",
+        "mcp__meee2__suggest_contribution_completion"
     ]
 
     private var configPath: URL {

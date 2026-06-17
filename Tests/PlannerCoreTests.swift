@@ -6578,4 +6578,85 @@ final class PlannerCoreTests: XCTestCase {
             return XCTFail("expected unified .dataSource source after applying mirrored")
         }
     }
+
+    // MARK: - Teams · 多人增量贡献 (NodeContributionConfig)
+
+    /// Legacy node JSON without the `contribution` key must decode to nil, and
+    /// a configured node must round-trip through Codable unchanged — the field
+    /// rides the team canvas state sync, so the on-wire shape is load-bearing.
+    func testNodeContributionConfigCodableRoundTripAndLegacyDefault() throws {
+        var node = service.nodeMock(canvasId: "canvas-a")[0]
+        node.contribution = NodeContributionConfig(policy: "team", itemLabel: "startup")
+
+        let data = try JSONEncoder().encode(node)
+        let decoded = try JSONDecoder().decode(PlanningNode.self, from: data)
+        XCTAssertEqual(decoded.contribution?.policy, "team")
+        XCTAssertEqual(decoded.contribution?.itemLabel, "startup")
+        XCTAssertTrue(decoded.contribution?.acceptsTeamContributions == true)
+
+        // Legacy shape: strip the key entirely, decode must default to nil.
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        object.removeValue(forKey: "contribution")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let legacy = try JSONDecoder().decode(PlanningNode.self, from: legacyData)
+        XCTAssertNil(legacy.contribution)
+
+        // Partial config: `{}` decodes tolerant with policy defaulting closed.
+        let partial = try JSONDecoder().decode(
+            NodeContributionConfig.self,
+            from: Data("{}".utf8)
+        )
+        XCTAssertEqual(partial.policy, "closed")
+        XCTAssertFalse(partial.acceptsTeamContributions)
+    }
+
+    /// Opening a node to team-wide writes is owner-only — stricter than the
+    /// usual owner-or-doer node update gate.
+    func testUpdateNodeContributionIsOwnerOnly() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let before = try PlannerBoardBridge.canvasState(
+            for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        let step = try XCTUnwrap(before.nodes.first { ($0.nodeKind ?? .step) == .step })
+
+        // Owner flips it on.
+        let opened = try PlannerBoardBridge.updateNodeContribution(
+            nodeId: step.id,
+            contribution: NodeContributionConfig(policy: "team", itemLabel: "startup"),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let openedNode = try XCTUnwrap(opened.nodes.first { $0.id == step.id })
+        XCTAssertEqual(openedNode.contribution?.policy, "team")
+
+        // The node's doer may NOT change the policy.
+        XCTAssertThrowsError(
+            try PlannerBoardBridge.updateNodeContribution(
+                nodeId: step.id,
+                contribution: nil,
+                for: "canvas-a",
+                snapshot: snapshot,
+                actorUserId: step.doerId
+            )
+        ) { error in
+            guard case PlannerCoreError.permissionDenied = error else {
+                return XCTFail("expected permissionDenied, got \(error)")
+            }
+        }
+
+        // Owner clears it back to closed (nil).
+        let closed = try PlannerBoardBridge.updateNodeContribution(
+            nodeId: step.id,
+            contribution: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let closedNode = try XCTUnwrap(closed.nodes.first { $0.id == step.id })
+        XCTAssertNil(closedNode.contribution)
+    }
 }

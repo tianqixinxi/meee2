@@ -4202,6 +4202,662 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Teams · 多人增量贡献 (collect-list step)
+
+    /// PATCH /api/planner/canvases/:id/nodes/:nodeId/contribution
+    /// Body: {"policy": "team"|"closed", "itemLabel"?: String}
+    /// Owner-only. `closed` clears the config back to nil (默认不收贡献)。
+    static func updatePlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateContributionRequest: Decodable {
+            let policy: String
+            let itemLabel: String?
+            let doneWhen: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateContributionRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"policy\":\"team\"|\"closed\",\"itemLabel\"?:String}", status: 400)
+        }
+        guard body.policy == "team" || body.policy == "closed" else {
+            return errorResponse("bad_request", "policy must be \"team\" or \"closed\"", status: 400)
+        }
+        let trimmedLabel = body.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDoneWhen = body.doneWhen?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let contribution: NodeContributionConfig? = body.policy == "team"
+            ? NodeContributionConfig(
+                policy: "team",
+                itemLabel: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel,
+                doneWhen: (trimmedDoneWhen?.isEmpty ?? true) ? nil : trimmedDoneWhen
+            )
+            : nil
+        do {
+            let state = try PlannerBoardBridge.updateNodeContribution(
+                nodeId: nodeId,
+                contribution: contribution,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// GET /api/planner/canvases/:id/nodes/:nodeId/contributions
+    /// Proxies the cloud contribution ledger (oldest-first) + collectors
+    /// (成员维度的收集会话列表)。本地富化:把我的 collector 行接上本机注册表
+    /// (provider 会话 id / alive),并在云端标记还没有会话 id 时补发一条带 id
+    /// 的标记让队友也能点开看;同时带上 dashboardBaseUrl 供 UI 拼接「查看
+    /// 别人的会话」网页链接。
+    static func listPlannerNodeContributions(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        switch OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions",
+            query: [
+                URLQueryItem(name: "teamId", value: settings.teamId),
+                URLQueryItem(name: "canvasId", value: remoteCanvasId)
+            ],
+            settings: settings
+        ) {
+        case .success(let data):
+            let enriched = enrichContributionsPayload(
+                data,
+                canvasId: canvasId,
+                remoteCanvasId: remoteCanvasId,
+                nodeId: nodeId,
+                settings: settings
+            )
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(enriched)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// 收集会话 collectors 的本地富化。云端标记在 spawn 时只有 surface id
+    /// (甚至没有);真正可打开的 provider 会话 id 只有跑会话的这台桌面知道。
+    /// 这里把「我的」行接上注册表,并把 id 回写云端(fire-and-forget),让
+    /// 队友的面板也能链接到我的会话页。
+    private static func enrichContributionsPayload(
+        _ data: Data,
+        canvasId: String,
+        remoteCanvasId: String,
+        nodeId: String,
+        settings: OnlineProxy.Settings
+    ) -> Data {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return data
+        }
+        root["dashboardBaseUrl"] = settings.onlineBaseUrl
+        var collectors = (root["collectors"] as? [[String: Any]]) ?? []
+        let registryKey = contributionSessionKey(canvasId: canvasId, nodeId: nodeId)
+        if let tracked = contributionSessionId(forKey: registryKey),
+           TerminalSessionBackendRegistry.shared.snapshot(id: tracked) != nil {
+            let providerSid = providerResumeSessionIdForManagedSurface(tracked)
+            let providerSession = providerSid.flatMap(resolvePluginSession)
+            let alive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+            var foundMine = false
+            for idx in collectors.indices where (collectors[idx]["userId"] as? String) == settings.userId {
+                foundMine = true
+                collectors[idx]["mine"] = true
+                collectors[idx]["alive"] = alive
+                let cloudSid = collectors[idx]["sessionId"] as? String
+                if let providerSid {
+                    collectors[idx]["sessionId"] = providerSid
+                    if cloudSid == nil || cloudSid != providerSid {
+                        postCollectorMarker(
+                            settings: settings,
+                            remoteCanvasId: remoteCanvasId,
+                            nodeId: nodeId,
+                            sessionId: providerSid
+                        )
+                    }
+                }
+            }
+            if !foundMine {
+                // spawn 时的标记没写成功(离线等)— 本地仍知道自己在收集。
+                collectors.append([
+                    "userId": settings.userId,
+                    "sessionId": providerSid as Any,
+                    "startedAt": NSNull(),
+                    "mine": true,
+                    "alive": alive
+                ])
+                postCollectorMarker(
+                    settings: settings,
+                    remoteCanvasId: remoteCanvasId,
+                    nodeId: nodeId,
+                    sessionId: providerSid
+                )
+            }
+        }
+        root["collectors"] = collectors
+        // 状态消费:只有 owner 桌面能改节点状态并随 state 推送全员。幂等。
+        //  · 有「建议收口」信号 → gateWait(需要人回应)
+        //  · 否则有人在收集 → running(收集中)
+        let ownerId = BoardLayoutStore.shared.snapshot().canvases
+            .first(where: { $0.id == canvasId })?.ownerUserId
+        if ownerId == settings.userId {
+            let hasSignal = root["completionSuggestion"] is [String: Any]
+            let hasCollectors = !collectors.isEmpty
+            if hasSignal || hasCollectors {
+                DispatchQueue.global(qos: .utility).async {
+                    if hasSignal {
+                        _ = try? PlannerBoardBridge.markContributionAwaitingCloseout(
+                            nodeId: nodeId,
+                            for: canvasId,
+                            snapshot: BoardLayoutStore.shared.snapshot(),
+                            actorUserId: settings.userId
+                        )
+                    } else {
+                        _ = try? PlannerBoardBridge.markContributionCollecting(
+                            nodeId: nodeId,
+                            for: canvasId,
+                            snapshot: BoardLayoutStore.shared.snapshot(),
+                            actorUserId: settings.userId
+                        )
+                    }
+                }
+            }
+        }
+        guard JSONSerialization.isValidJSONObject(root),
+              let out = try? JSONSerialization.data(withJSONObject: root) else {
+            return data
+        }
+        return out
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contribution-completion-suggestion
+    /// Body: {"rationale": String}
+    /// 收集会话自评 doneWhen 达成后的「建议收口」信号。授权同贡献写入
+    /// (policy=='team' 或 owner);信号落云端 contrib-signal 槽,owner 桌面
+    /// 消费后把节点翻「需要人回应」。收口永远是人做的。
+    static func submitPlannerContributionCompletionSuggestion(_ req: HttpRequest) -> HttpResponse {
+        struct SuggestRequest: Decodable { let rationale: String }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: SuggestRequest.self),
+              !body.rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"rationale\":String}", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        do {
+            let actorId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+            let state = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: actorId)
+            guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            let acceptsTeam = node.contribution?.acceptsTeamContributions == true
+            guard acceptsTeam || state.access.role == .owner else {
+                return errorResponse("forbidden", "node does not accept team contributions", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        let payload: [String: Any] = [
+            "teamId": settings.teamId,
+            "canvasId": remoteCanvasId,
+            "rationale": body.rationale.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
+            return errorResponse("bad_request", "failed to encode suggestion payload", status: 400)
+        }
+        switch OnlineProxy.callOnlineAPI(
+            method: "POST",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions/suggest-completion",
+            body: bodyData,
+            settings: settings
+        ) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contribution-complete
+    /// 收口:canvas owner / 节点 doerId(收口负责人)把共建账本物化为节点
+    /// 输出 artifact(全量快照,带各条归属),节点翻 done → 触发下游。
+    /// 收口后云端按 node.status==done 冻结账本写入;owner 重开节点即恢复。
+    static func completePlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        let actorId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+        let node: PlanningNode
+        do {
+            let state = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: actorId)
+            guard let found = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            node = found
+            guard node.contribution != nil else {
+                return errorResponse("bad_request", "node is not a contribution node", status: 400)
+            }
+            // 收口权:canvas owner + 节点收口负责人(doerId)。职责≡权限。
+            guard state.access.role == .owner || node.doerId == state.access.actorId else {
+                return errorResponse("forbidden", "only the canvas owner or the node owner can complete collection", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+
+        // 拉云端账本全量(物化的数据源是云端真相,不是本机缓存)。
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        let ledgerResult = OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions",
+            query: [
+                URLQueryItem(name: "teamId", value: settings.teamId),
+                URLQueryItem(name: "canvasId", value: remoteCanvasId)
+            ],
+            settings: settings
+        )
+        guard case .success(let ledgerData) = ledgerResult,
+              let ledger = (try? JSONSerialization.jsonObject(with: ledgerData)) as? [String: Any],
+              let items = ledger["contributions"] as? [[String: Any]] else {
+            return errorResponse("bad_gateway", "failed to load the contribution ledger from meee2-online", status: 502)
+        }
+        guard !items.isEmpty else {
+            return errorResponse("bad_request", "ledger is empty — nothing to complete", status: 400)
+        }
+
+        // 物化:账本全量快照 → 节点输出 artifact(json items,含归属)。
+        // 合同铁律「output is always a full snapshot」在这里天然成立。
+        let itemLabel = node.contribution?.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemWord = (itemLabel?.isEmpty ?? true) ? "条目" : itemLabel!
+        let outputReference = node.schema.outputs.first ?? "contributions"
+        let payloadObject: [String: Any] = [
+            "kind": "contribution-ledger",
+            "itemLabel": itemWord,
+            "count": items.count,
+            "items": items
+        ]
+        guard let payloadJSONData = try? JSONSerialization.data(withJSONObject: payloadObject),
+              let payloadJSONString = String(data: payloadJSONData, encoding: .utf8) else {
+            return errorResponse("planner_error", "failed to encode ledger payload", status: 500)
+        }
+        let output = PlannerNodeOutput(
+            nodeId: nodeId,
+            status: .done,
+            message: PlannerNodeOutputMessage(
+                summary: "共建收口:\(items.count) 条\(itemWord)(账本物化为输出快照)",
+                routeTo: []
+            ),
+            artifacts: [
+                PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "\(node.title) · 共建账本 \(items.count) 条",
+                    reference: outputReference,
+                    payload: .object([
+                        "type": .string("json"),
+                        "json": .string(payloadJSONString)
+                    ]),
+                    routeTo: []
+                )
+            ],
+            next: .complete
+        )
+        do {
+            _ = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: nodeId,
+                output: output,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorId,
+                submittedByKind: .human,
+                submittedBy: actorId
+            )
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: actorId
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// 异步补发收集会话标记(带 provider 会话 id)。失败无害 — 下一次列表
+    /// 刷新会再试;标记是 append-only,云端按成员取最新且合并 sessionId。
+    private static func postCollectorMarker(
+        settings: OnlineProxy.Settings,
+        remoteCanvasId: String,
+        nodeId: String,
+        sessionId: String?
+    ) {
+        var payload: [String: Any] = [
+            "teamId": settings.teamId,
+            "canvasId": remoteCanvasId
+        ]
+        if let sessionId, !sessionId.isEmpty {
+            payload["sessionId"] = sessionId
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            _ = OnlineProxy.callOnlineAPI(
+                method: "POST",
+                path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions/collectors",
+                body: body,
+                settings: settings
+            )
+        }
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contributions
+    /// Body: {"title": String, "note"?: String, "url"?: String, "via"?: "agent"}
+    /// 轻量贡献写入 — 不开工作 session、不动节点状态机。本地先按已同步的
+    /// 节点 policy 预检(owner 豁免),云端按 state 再硬校验一次。
+    /// `via:"agent"` 是收集会话经 MCP add_node_contribution 的写入,账本
+    /// submitted_by_kind 记 agent;人工表单不带 via,记 human。
+    static func submitPlannerNodeContribution(_ req: HttpRequest) -> HttpResponse {
+        struct SubmitContributionRequest: Decodable {
+            let title: String
+            let note: String?
+            let url: String?
+            let via: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: SubmitContributionRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"title\":String,\"note\"?:String,\"url\"?:String}", status: 400)
+        }
+        let title = body.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            return errorResponse("bad_request", "title is required", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        do {
+            let actorId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorId
+            )
+            guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            let acceptsTeam = node.contribution?.acceptsTeamContributions == true
+            guard acceptsTeam || state.access.role == .owner else {
+                return errorResponse("forbidden", "node does not accept team contributions", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        var payload: [String: Any] = [
+            "teamId": settings.teamId,
+            "canvasId": remoteCanvasId,
+            "title": title
+        ]
+        if let note = body.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            payload["note"] = note
+        }
+        if let url = body.url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
+            payload["url"] = url
+        }
+        if body.via == "agent" {
+            payload["kind"] = "agent"
+        }
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
+            return errorResponse("bad_request", "failed to encode contribution payload", status: 400)
+        }
+        switch OnlineProxy.callOnlineAPI(
+            method: "POST",
+            path: "/api/v1/planner/nodes/\(urlPath(nodeId))/contributions",
+            body: bodyData,
+            settings: settings
+        ) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// POST /api/planner/canvases/:id/nodes/:nodeId/contribution-session
+    /// Body: {"hint"?: String}
+    /// 团队共建的主路径:成员在共建节点上启动自己的 AI 收集会话。镜像 #148
+    /// artifact-sync 专属会话模式 — per (canvas,node) 至多一条、活着复用、
+    /// 不绑 node.sessionId、不动节点状态机;产出经 MCP add_node_contribution
+    /// 逐条进共享账本,归属=本机登录成员。授权即 contribution.policy=='team'
+    /// (owner 恒可),viewer 成员也放行 — 共建开放本身就是授权。
+    static func startPlannerContributionSession(_ req: HttpRequest) -> HttpResponse {
+        struct StartRequest: Decodable {
+            let hint: String?
+        }
+        struct StartResponse: Encodable {
+            let ok: Bool
+            let sessionId: String
+            let nodeId: String
+            /// created = 新派发;reused = 指令打进已有会话;pending = 启动中去重。
+            let action: String
+            let detail: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: StartRequest.self) ?? StartRequest(hint: nil)
+        let node: PlanningNode
+        do {
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let found = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            node = found
+            guard (node.nodeKind ?? .step) == .step else {
+                return errorResponse("bad_request", "only step nodes collect contributions", status: 400)
+            }
+            let acceptsTeam = node.contribution?.acceptsTeamContributions == true
+            guard acceptsTeam || state.access.role == .owner else {
+                return errorResponse("forbidden", "node does not accept team contributions", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+
+        let itemLabel = node.contribution?.itemLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemWord = (itemLabel?.isEmpty ?? true) ? "条目" : itemLabel!
+        let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // 单行指令(同 sync 会话:fresh spawn 作 initialPrompt、复用走 deliverPrompt)。
+        let doneWhen = node.contribution?.doneWhen?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let doneWhenClause = doneWhen.isEmpty
+            ? "本节点未设收齐判据,收口由负责人人工定夺,你不用做完成评估"
+            : "本节点的收齐判据:「\(doneWhen)」。每轮收集结束时对照账本现状自评;确实达成时调用 suggest_contribution_completion(rationale 写清依据:条数/覆盖面/质量),它只是给负责人的收口建议,不会也不应改变节点状态"
+        let instruction = "[团队共建收集会话] 你是节点「\(node.title)」(canvasId \(canvasId), nodeId \(nodeId))的专属收集会话,代表本机登录成员往该节点的共享账本贡献\(itemWord)。任务:1) 用 read_node_contract 读节点契约理解要收集什么;2) 按契约做真实的调研/收集(可联网搜索、读文件),每确认一条就立刻用 add_node_contribution 提交(title=\(itemWord)本体,note=一句话依据,url=http(s) 来源链接)\(hint.isEmpty ? "" : ";本次重点:\(hint)");3) \(doneWhenClause);4) 收集若干条后用一段话总结本轮产出并结束回合。边界:这是增量贡献不是节点交付 — 不要 submit_node_output / attach_artifact_to_node / update_artifact / update_artifact_views(工具面已禁用),不要改节点状态或画布其它对象;同一\(itemWord)不要重复提交 — 账本已有同名条目时 add_node_contribution 会返回 duplicate:true,跳过换下一条即可。"
+
+        let registryKey = contributionSessionKey(canvasId: canvasId, nodeId: nodeId)
+        let trackedSessionId = contributionSessionId(forKey: registryKey)
+        let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
+        let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
+        let providerSession = providerSessionId.flatMap(resolvePluginSession)
+        let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+        let bootTimeout: TimeInterval = 120
+        let stillBooting = providerSessionId == nil
+            && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
+        let response: StartResponse
+        do {
+            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
+                switch TerminalSessionBackendRegistry.shared.deliverPrompt(
+                    id: trackedSessionId,
+                    text: instruction
+                ) {
+                case .delivered:
+                    response = StartResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        nodeId: nodeId,
+                        action: "reused",
+                        detail: "收集指令已下达给该节点的专属收集会话,产出会陆续进入账本。"
+                    )
+                case .busy:
+                    response = StartResponse(
+                        ok: true,
+                        sessionId: trackedSessionId,
+                        nodeId: nodeId,
+                        action: "pending",
+                        detail: "上一条收集指令正在提交,本次点击已去重。"
+                    )
+                case .sessionNotFound:
+                    return errorResponse("contribution_session_failed", "专属收集会话的终端拒绝输入,请重试。", status: 500)
+                }
+            } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
+                response = StartResponse(
+                    ok: true,
+                    sessionId: trackedSessionId,
+                    nodeId: nodeId,
+                    action: "pending",
+                    detail: "专属收集会话正在启动并执行收集指令,无需重复触发。"
+                )
+            } else {
+                if let trackedSessionId, liveSurface != nil {
+                    _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+                }
+                let surface = try createInternalSessionSurface(
+                    provider: "claude",
+                    cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
+                    command: contributionSessionLaunchCommand(),
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    // 收集会话不绑节点:不抢 node.sessionId、不进节点三态,
+                    // 多成员可在各自桌面对同一节点并发收集。
+                    nodeId: nil,
+                    initialPrompt: instruction
+                )
+                recordContributionSession(surface.sessionId, forKey: registryKey)
+                // 立刻给云端投一条 presence 标记(此刻还没有 provider 会话 id;
+                // 链接后由列表代理的富化路径补发带 id 的标记)。
+                let snapshot = BoardLayoutStore.shared.snapshot()
+                let remoteCanvasId = snapshot.canvases
+                    .first(where: { $0.id == canvasId })?.remoteId ?? canvasId
+                let settings = OnlineProxy.loadSettings()
+                if !settings.teamId.isEmpty {
+                    postCollectorMarker(
+                        settings: settings,
+                        remoteCanvasId: remoteCanvasId,
+                        nodeId: nodeId,
+                        sessionId: nil
+                    )
+                }
+                response = StartResponse(
+                    ok: true,
+                    sessionId: surface.sessionId,
+                    nodeId: nodeId,
+                    action: "created",
+                    detail: "已派发专属收集会话,产出会陆续进入账本。"
+                )
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+        NSLog("[Contribution] node=\(nodeId.prefix(24)) -> session=\(response.sessionId.prefix(12)) action=\(response.action)")
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(response)
+    }
+
+    // MARK: - 共建收集专属会话注册表(进程内存,同 artifact-sync 模式)
+
+    private static let contributionSessionsLock = NSLock()
+    private static var contributionSessions: [String: String] = [:]
+
+    private static func contributionSessionKey(canvasId: String, nodeId: String) -> String {
+        "\(canvasId)|\(nodeId)"
+    }
+
+    private static func contributionSessionId(forKey key: String) -> String? {
+        contributionSessionsLock.lock()
+        defer { contributionSessionsLock.unlock() }
+        return contributionSessions[key]
+    }
+
+    private static func recordContributionSession(_ sessionId: String, forKey key: String) {
+        contributionSessionsLock.lock()
+        defer { contributionSessionsLock.unlock() }
+        contributionSessions[key] = sessionId
+    }
+
+    /// 收集会话的启动命令:full-access 基础上禁用节点交付/账本改写工具 —
+    /// 收集会话只允许逐条 add_node_contribution。两套同名 MCP 注册都要覆盖。
+    private static func contributionSessionLaunchCommand() -> String {
+        let banned = ["submit_node_output", "attach_artifact_to_node", "update_artifact", "update_artifact_views"]
+        let rules = banned
+            .flatMap { ["mcp__meee2__\($0)", "mcp__plugin_meee2_meee2__\($0)"] }
+            .map { "\"\($0)\"" }
+            .joined(separator: " ")
+        return AgentLaunchCommand.fullAccessCommand(forProvider: "claude") + " --disallowedTools \(rules)"
+    }
+
     /// UI-2 · proxy `fetchOwnedCanvases` to the meee2-online team API.
     static func proxyListOwnedCanvases(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()

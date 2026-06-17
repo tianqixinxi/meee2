@@ -270,6 +270,49 @@ const TOOLS = [
       required: ['canvasId'],
     },
   },
+  {
+    name: 'add_node_contribution',
+    description:
+      'Append ONE item to a team-contribution node\'s shared ledger ' +
+      '(团队共建,e.g. collect-startup-list). Call once per item as you find ' +
+      'them — items accumulate incrementally with attribution to the member ' +
+      'who started this session. Does NOT finish the node or touch node ' +
+      'state; keep collecting and end your turn with a summary. Requires the ' +
+      'node to have contribution.policy="team" (or you are the canvas owner).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        nodeId: { type: 'string', description: 'Contribution-enabled step node id.' },
+        title: { type: 'string', description: 'The item itself (e.g. company name). Required.' },
+        note: { type: 'string', description: 'Optional one-line note / evidence.' },
+        url: { type: 'string', description: 'Optional http(s) source link.' },
+      },
+      required: ['canvasId', 'nodeId', 'title'],
+    },
+  },
+  {
+    name: 'suggest_contribution_completion',
+    description:
+      'Signal that a team-contribution node\'s done-when criteria appear to ' +
+      'be MET, based on your evaluation of the current ledger. The node owner ' +
+      'gets prompted to close collection — completion is ALWAYS a human ' +
+      'decision; this is only the recommendation + your evidence. Call at most ' +
+      'once per round, only when the criteria in the node contract are truly ' +
+      'satisfied. rationale is required and shown to the owner.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string', description: 'Planner canvas id.' },
+        nodeId: { type: 'string', description: 'Contribution-enabled step node id.' },
+        rationale: {
+          type: 'string',
+          description: 'Why the criteria are met (counts, coverage, quality) — the owner reads this before closing.',
+        },
+      },
+      required: ['canvasId', 'nodeId', 'rationale'],
+    },
+  },
 ]
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
@@ -525,6 +568,38 @@ async function handleSubmitNodeOutput(args) {
   )
 }
 
+// 团队共建:逐条追加贡献。不走 assertPlannerToolScope —— 共建会话不绑节点
+// (nodeId=nil 的专属轻量会话),授权由本地路由按节点 contribution.policy 判,
+// 云端再按同步 state 硬校验一次。via:'agent' 让账本归属记成 agent 产出。
+async function handleAddNodeContribution(args) {
+  const { canvasId, nodeId, title } = args
+  if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
+  if (!title || !String(title).trim()) throw new Error('title is required')
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+    {
+      title: String(title).trim(),
+      note: args.note || null,
+      url: args.url || null,
+      via: 'agent',
+    },
+  )
+}
+
+// 建议收口:收集会话自评 doneWhen 达成后的信号。授权同 add_node_contribution
+// (本地路由按节点 policy 把门,云端按团队成员校验)。
+async function handleSuggestContributionCompletion(args) {
+  const { canvasId, nodeId, rationale } = args
+  if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
+  if (!rationale || !String(rationale).trim()) throw new Error('rationale is required')
+  return await callApi(
+    'POST',
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution-completion-suggestion`,
+    { rationale: String(rationale).trim() },
+  )
+}
+
 async function handleAttachArtifactToNode(args) {
   const { canvasId, nodeId } = args
   if (!canvasId || !nodeId) throw new Error('canvasId and nodeId are required')
@@ -759,6 +834,12 @@ async function dispatchToolCall(name, args = {}) {
         break
       case 'update_artifact_views':
         result = await handleUpdateArtifactViews(args)
+        break
+      case 'add_node_contribution':
+        result = await handleAddNodeContribution(args)
+        break
+      case 'suggest_contribution_completion':
+        result = await handleSuggestContributionCompletion(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)

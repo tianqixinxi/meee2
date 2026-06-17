@@ -38,6 +38,7 @@ import type {
   PlannerCanvasState,
   PlannerGraphEdge,
   PlannerGraphState,
+  NodeContribution,
   WorkflowRun,
   PlannerMonitorState,
   PlannerNodeContract,
@@ -1784,6 +1785,101 @@ export function updatePlannerNodeGate(
     {
       method: 'PATCH',
       body: JSON.stringify({ executionMode }),
+    },
+  )
+}
+
+// Teams · 多人增量贡献 — collect-list step 的共享账本。policy 是本地节点
+// 字段(graph envelope 返回);贡献条目走云端,带 submittedBy 归属。
+export function updatePlannerNodeContribution(
+  canvasId: string,
+  nodeId: string,
+  input: { policy: 'team' | 'closed'; itemLabel?: string | null; doneWhen?: string | null },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        policy: input.policy,
+        itemLabel: input.itemLabel ?? undefined,
+        doneWhen: input.doneWhen ?? undefined,
+      }),
+    },
+  )
+}
+
+/** 节点收集会话(成员维度):谁在这个节点上跑收集会话。`mine`/`alive` 由
+ *  本机代理富化;`sessionId` 链接后才有(自己的可本地打开,别人的开 dashboard)。 */
+export interface NodeCollector {
+  userId: string
+  sessionId?: string | null
+  startedAt?: string | null
+  mine?: boolean
+  alive?: boolean
+}
+
+/** AI 自评达标后的「建议收口」信号(最新一条)。收口永远是人点的。 */
+export interface ContributionCompletionSuggestion {
+  by?: string | null
+  rationale: string
+  at?: string | null
+}
+
+export interface NodeContributionsResponse {
+  contributions: NodeContribution[]
+  collectors?: NodeCollector[]
+  dashboardBaseUrl?: string
+  completionSuggestion?: ContributionCompletionSuggestion | null
+}
+
+export function fetchPlannerNodeContributions(
+  canvasId: string,
+  nodeId: string,
+): Promise<NodeContributionsResponse> {
+  return jsonRequest<NodeContributionsResponse>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+  )
+}
+
+/** 收口:把共建账本物化为节点输出(全量快照),节点完成、触发下游。
+ *  仅 canvas owner / 节点 doerId。 */
+export function completePlannerNodeContribution(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution-complete`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function submitPlannerNodeContribution(
+  canvasId: string,
+  nodeId: string,
+  input: { title: string; note?: string; url?: string },
+): Promise<{ ok: boolean; contribution: NodeContribution }> {
+  return jsonRequest<{ ok: boolean; contribution: NodeContribution }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contributions`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+/** 共建主路径:成员在共建节点上启动自己的 AI 收集会话(专属轻量会话,
+ *  不绑 node.sessionId;产出经 MCP add_node_contribution 逐条进账本)。 */
+export function startPlannerContributionSession(
+  canvasId: string,
+  nodeId: string,
+  input?: { hint?: string },
+): Promise<{ ok: boolean; sessionId: string; nodeId: string; action: string; detail: string }> {
+  return jsonRequest<{ ok: boolean; sessionId: string; nodeId: string; action: string; detail: string }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contribution-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ hint: input?.hint ?? undefined }),
     },
   )
 }

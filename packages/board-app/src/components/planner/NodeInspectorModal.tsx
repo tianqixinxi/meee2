@@ -41,6 +41,7 @@ import type {
 } from '../../types'
 import { InputCardSections } from './InputCardSections'
 import { InspectorArtifactBody } from './InspectorArtifactBody'
+import { NodeContributionsSection } from './NodeContributionsSection'
 import { deriveDisplayStatus } from './labels'
 import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGraphAdapter'
 
@@ -540,6 +541,21 @@ export function NodeInspectorModal({
             <p className="planner-node-modal__empty">这个节点暂时没有产出</p>
           )}
         </div>
+
+        {/* Teams · 多人增量贡献 — collect-list step 的共享账本。owner 开关 +
+         *  成员轻量添加 + 逐条归属。条目在云端,不进 canvas state。 */}
+        {nodeKind === 'step' && !isTemplate && (
+          <NodeContributionsSection
+            canvasId={canvasId}
+            node={node}
+            isOwner={role === 'owner'}
+            teamMembers={teamMembers}
+            currentUserId={access?.actorId ?? null}
+            canCloseout={role === 'owner' || (access?.actorId != null && node.doerId === access.actorId)}
+            onOpenSession={onOpenSession}
+            onGraphStateChanged={onGraphStateChanged}
+          />
+        )}
 
         {/* canvas-spec §11 — advanced cluster (指派 / 定时 / 展开子画板 /
          *  换一次进展) collapsed behind a single 「更多」 so the assign /

@@ -673,6 +673,18 @@ public final class BoardServer {
         // with force_new_version: true. Body: { reference?: string } (optional;
         // defaults to the node's latest version slot).
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/rerun"] = BoardServer.cors(BoardAPI.rerunPlannerNode)
+        // Teams · 多人增量贡献 — collect-list step 的共享账本。policy 是本地
+        // 节点字段(随 team canvas state 同步给成员);贡献读写代理到云端
+        // meee2_artifact_versions 的 contrib slot,每条带 submitted_by 归属。
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/contribution"] = BoardServer.cors(BoardAPI.updatePlannerNodeContribution)
+        server.GET["/api/planner/canvases/:id/nodes/:nodeId/contributions"] = BoardServer.cors(BoardAPI.listPlannerNodeContributions)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/contributions"] = BoardServer.cors(BoardAPI.submitPlannerNodeContribution)
+        // 共建主路径:成员启动自己的 AI 收集会话(专属轻量会话,产出经 MCP
+        // add_node_contribution 逐条进账本)。
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/contribution-session"] = BoardServer.cors(BoardAPI.startPlannerContributionSession)
+        // 收集会话自评达标 → 建议收口信号;收口人物化账本 → 节点完成触发下游。
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/contribution-completion-suggestion"] = BoardServer.cors(BoardAPI.submitPlannerContributionCompletionSuggestion)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/contribution-complete"] = BoardServer.cors(BoardAPI.completePlannerNodeContribution)
         // Wave 1-3 integration — OnlineProxy routes.
         // UI-2: assign a node to a teammate through meee2-online.
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/assign"] = BoardServer.cors(BoardAPI.proxyAssignPlannerNode)
