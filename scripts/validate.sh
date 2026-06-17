@@ -9,8 +9,6 @@ cd "$(dirname "$0")/.."
 FAILED=0
 
 echo "=== 1/5 Build ==="
-# App/BuildInfo.swift is gitignored & generated; create it before the bare build.
-bash scripts/gen-build-info.sh >/dev/null
 if swift build 2>&1 | tail -3; then
     echo "✓ Build passed"
 else
