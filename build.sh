@@ -36,6 +36,8 @@ if [ "${UNIVERSAL:-0}" = "1" ]; then
     echo "Building universal arm64 + x86_64 (UNIVERSAL=1)…"
     SWIFT_BUILD_ARGS+=(--arch arm64 --arch x86_64)
 fi
+# Bake git commit/branch into App/BuildInfo.swift for the About panel.
+bash scripts/gen-build-info.sh
 swift build "${SWIFT_BUILD_ARGS[@]}"
 
 # Resolve the SwiftPM output directory. Single-arch goes to

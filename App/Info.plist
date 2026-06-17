@@ -39,8 +39,6 @@
         <key>NSAllowsArbitraryLoadsInWebContent</key>
         <true/>
     </dict>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <!-- Apple Events automation usage description. Triggered the first time
