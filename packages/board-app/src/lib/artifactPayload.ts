@@ -109,6 +109,7 @@ export function normalizeArtifactPayload(
       const connector = stringField(obj, 'connector') ?? stringField(obj, 'source') ?? 'external'
       const externalId = stringField(obj, 'externalId') ?? stringField(obj, 'id') ?? ''
       const fields = flatRecordField(obj, 'fields')
+      const values = tableValuesField(obj)
       return withReview({
         type: 'integration',
         connector,
@@ -116,6 +117,7 @@ export function normalizeArtifactPayload(
         externalUrl: stringField(obj, 'externalUrl') ?? stringField(obj, 'url'),
         summary: stringField(obj, 'summary') ?? stringField(obj, 'preview'),
         ...(fields ? { fields } : {}),
+        ...(values ? { values } : {}),
       }, status)
     }
     default:
@@ -284,6 +286,34 @@ function flatRecordField(
 
 function stringArrayField(obj: Record<string, unknown>, key: string): string[] {
   return arrayField(obj, key).filter((value): value is string => typeof value === 'string')
+}
+
+/** 行值快照硬上限 — 防坏 payload 把内存/渲染拖垮;预览层另有自己的展示截断。 */
+const TABLE_VALUES_MAX_ROWS = 200
+const TABLE_VALUES_MAX_COLS = 50
+const TABLE_VALUES_MAX_CELL = 1000
+
+/**
+ * 表格类 integration 的真实行值(`values` 或 wire 形态 `fields.values`)。
+ * fields 本身保持扁平标量(flatRecordField 会丢掉数组),行值在 normalize
+ * 时提升为 typed payload 的一等 `values`。防御式:非数组行丢弃、非标量格子
+ * 置空、行/列/格长全部封顶。
+ */
+function tableValuesField(obj: Record<string, unknown>): string[][] | undefined {
+  const fieldsObj = objectField(obj.fields)
+  const raw = Array.isArray(obj.values) ? obj.values : fieldsObj?.values
+  if (!Array.isArray(raw)) return undefined
+  const rows: string[][] = []
+  for (const row of raw) {
+    if (!Array.isArray(row)) continue
+    rows.push(row.slice(0, TABLE_VALUES_MAX_COLS).map((cell) =>
+      typeof cell === 'string'
+        ? cell.slice(0, TABLE_VALUES_MAX_CELL)
+        : typeof cell === 'number' && Number.isFinite(cell) ? String(cell) : '',
+    ))
+    if (rows.length >= TABLE_VALUES_MAX_ROWS) break
+  }
+  return rows.length > 0 ? rows : undefined
 }
 
 function reviewStatusField(obj: Record<string, unknown>): ArtifactReviewStatus | undefined {

@@ -3126,7 +3126,7 @@ enum BoardAPI {
     ) throws -> (sessionId: String, action: String, detail: String) {
         // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
         // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
-        let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
+        let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等);表格类对象(google-sheets tab / 多维表格等)还必须把真实行内容写进 fields.values — 二维字符串数组、列序与 fields.header 对齐、最多前 50 行、单格截断 200 字符(快照不带行值的话画布预览只能画空表)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
 
         // 投递矩阵 — 专属会话每 reference 至多一条:
         //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY

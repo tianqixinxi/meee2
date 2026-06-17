@@ -138,10 +138,34 @@ export function IntegrationArtifactView({
   )
 }
 
+/** 预览最多渲染的真实行数;其余进 footer 事实(「显示前 N 行」)。 */
+const SHEET_PREVIEW_MAX_ROWS = 8
+/** 单格展示截断(防超长格子把卡片撑爆;完整内容在 Google Sheets)。 */
+const SHEET_PREVIEW_MAX_CELL = 120
+
 /**
- * Google Sheets tracker tab 的 sheet 样式 view:绿表头格子 + 列名 + 占位行。
- * integration 层只有 schema+view(无 fetch)— 格子是 tab 的「形状」,事实
- * (行数/更新时间)在 footer 文案里,行格子只是占位纹理,不伪造数据。
+ * `fields.values` — 同步会话写回的真实行值(二维数组,行 × 列,与 header 列序
+ * 对齐)。防御式解析:不是数组的行 / 非标量的格子全部丢弃,绝不让坏 payload
+ * 炸掉整个 view。
+ */
+function sheetValueRows(payload: Record<string, unknown> | null): string[][] {
+  const raw = payload?.values
+  if (!Array.isArray(raw)) return []
+  const rows: string[][] = []
+  for (const row of raw) {
+    if (!Array.isArray(row)) continue
+    rows.push(row.map((cell) =>
+      typeof cell === 'string' || typeof cell === 'number' ? String(cell) : '',
+    ))
+  }
+  return rows
+}
+
+/**
+ * Google Sheets tracker tab 的 sheet 样式 view:绿表头格子 + 列名 + 行内容。
+ * integration 层只有 schema+view(无 fetch)— 行值不是这里拉的:同步会话
+ * (get_artifact → 核对 → update_artifact)把真实行写进 `fields.values`,这里
+ * 只渲染快照。老快照没有 values 时退回占位纹理,并在 footer 提示走「同步快照」。
  */
 function GoogleSheetsTabPreview({
   entity,
@@ -161,6 +185,8 @@ function GoogleSheetsTabPreview({
     .filter(Boolean)
   const rowCount = Number(scalarField(payload, 'rows') || '0')
   const updated = scalarField(payload, 'updated')
+  const valueRows = sheetValueRows(payload)
+  const shownRows = valueRows.slice(0, SHEET_PREVIEW_MAX_ROWS)
   // 列数:header 给了列名就数列名;老 payload 只有数值 fields.columns
   // (无列名,画不出表头格子)时也要保留列数事实,不能比旧通用渲染知道得更少。
   const columnCount = columns.length > 0 ? columns.length : Number(scalarField(payload, 'columns') || '0')
@@ -169,6 +195,9 @@ function GoogleSheetsTabPreview({
     columnCount > 0 ? `${columnCount} 列` : '',
     updated ? `更新 ${updated}` : '',
     rowCount === 0 ? '待写入' : '',
+    valueRows.length > shownRows.length ? `显示前 ${shownRows.length} 行` : '',
+    // 快照声称有行但没带行值(老版本快照)— 指条明路而不是装作没事。
+    rowCount > 0 && valueRows.length === 0 ? '快照未含行值,点「同步快照」拉取' : '',
   ].filter(Boolean)
   return (
     <div className="planner-node__integration-preview planner-node__sheet">
@@ -187,13 +216,23 @@ function GoogleSheetsTabPreview({
                 </tr>
               </thead>
               <tbody>
-                {Array.from({ length: 3 }, (_, rowIndex) => (
-                  <tr key={rowIndex}>
-                    {columns.map((column) => (
-                      <td key={column}>&nbsp;</td>
-                    ))}
-                  </tr>
-                ))}
+                {shownRows.length > 0
+                  ? shownRows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {columns.map((column, colIndex) => (
+                        <td key={column} title={row[colIndex]}>
+                          {(row[colIndex] ?? '').slice(0, SHEET_PREVIEW_MAX_CELL) || ' '}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                  : Array.from({ length: 3 }, (_, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {columns.map((column) => (
+                        <td key={column}>&nbsp;</td>
+                      ))}
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>

@@ -894,9 +894,13 @@ export type ArtifactPayload =
                                                      externalId: string; externalUrl?: string | null;
                                                      summary?: string | null;
                                                      /** 扁平明细(如 sheet 的 tab/rows/columns)。view-schema preview
-                                                      *  的 detail 行按 label 从这里取值 — integration 层只带 schema+view
-                                                      *  需要的元数据,不带行级真实数据。 */
-                                                     fields?: Record<string, string | number> | null })
+                                                      *  的 detail 行按 label 从这里取值 — fields 本身保持扁平标量。 */
+                                                     fields?: Record<string, string | number> | null
+                                                     /** 表格类对象的真实行值快照(行 × 列,列序对齐 fields.header)。
+                                                      *  由同步会话经 update_artifact 写回(wire 形态在 fields.values),
+                                                      *  normalize 时提升到这里 — integration 层依旧不 fetch,这只是
+                                                      *  session 已经核对过的快照事实。 */
+                                                     values?: string[][] | null })
 
 export type ArtifactPayloadType = ArtifactPayload['type']
 
