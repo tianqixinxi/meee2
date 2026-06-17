@@ -100,7 +100,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertThrowsError(try service.applyNodeChange(nodes: nodes, proposal: proposal)) { error in
             XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
         }
-        XCTAssertEqual(nodes[0].title, "meee2 AI LLM Spike")
+        XCTAssertEqual(nodes[0].title, "Meee2 AI LLM Spike")
     }
 
     func testApplyNodeChangeAddsAndUpdatesApprovedProposal() throws {
@@ -1443,6 +1443,138 @@ final class PlannerCoreTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? PlannerCoreError, .monitorClearNotAllowed("monitor-a"))
         }
+    }
+
+    // MARK: - propose_add_node(proposal 子功能:节点会话提议新增 step)
+
+    func testProposeAddNodeCreatesPendingProposalWithOriginAndAppliesAfterApproval() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let origin = record.nodes[0]
+
+        let proposal = try PlannerBoardBridge.proposeAddNode(
+            originNodeId: origin.id,
+            originSessionId: "session-xyz",
+            title: "bugfix: sheet snapshot rendering",
+            goal: "bug fixed and verified",
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(proposal.status, .pending)
+        XCTAssertEqual(proposal.originNodeId, origin.id)
+        XCTAssertEqual(proposal.originSessionId, "session-xyz")
+        XCTAssertEqual(proposal.changes.count, 1)
+        let change = try XCTUnwrap(proposal.changes.first)
+        XCTAssertEqual(change.kind, .addNode)
+        let newNode = try XCTUnwrap(change.node)
+        XCTAssertEqual(newNode.title, "bugfix: sheet snapshot rendering")
+        // 缺省依赖发起节点 —— 画布上呈现 主→子 边。
+        XCTAssertEqual(newNode.dependsOnNodeIds, [origin.id])
+        XCTAssertEqual(newNode.schema.goal, "bug fixed and verified")
+        XCTAssertEqual(newNode.source, .session)
+
+        // pending 提案不落图。
+        let before = try PlannerBoardBridge.canvasState(
+            for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        XCTAssertFalse(before.nodes.contains { $0.id == newNode.id })
+
+        // owner approve + apply 后才落图(复用既有提案管线)。
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id, for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id, for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        let after = try PlannerBoardBridge.canvasState(
+            for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        XCTAssertTrue(after.nodes.contains { $0.id == newNode.id })
+    }
+
+    func testProposeAddNodeIsDoerScopedToOwnNode() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        // doer "A" 可以从自己的节点(node-1)发起提案。
+        _ = try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[0].id,
+            originSessionId: nil,
+            title: "follow-up step",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "A"
+        )
+
+        // 从别人的节点(node-2, doer B)发起 → 拒绝。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[1].id,
+            originSessionId: nil,
+            title: "should fail",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "A"
+        )) { error in
+            guard case PlannerCoreError.permissionDenied = error else {
+                return XCTFail("expected permissionDenied, got \(error)")
+            }
+        }
+    }
+
+    func testProposeAddNodeValidationErrorsSurfaceToCaller() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        // 空标题 → 报错(透传给 agent 自纠)。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[0].id,
+            originSessionId: nil,
+            title: "   ",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        ))
+
+        // 发起节点不存在 → nodeNotFound。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: "missing-node",
+            originSessionId: nil,
+            title: "x",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: nil,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .nodeNotFound("missing-node"))
+        }
+
+        // 显式依赖不存在的上游 → 校验拒绝,提案不落库。
+        XCTAssertThrowsError(try PlannerBoardBridge.proposeAddNode(
+            originNodeId: record.nodes[0].id,
+            originSessionId: nil,
+            title: "dep check",
+            goal: nil,
+            summary: nil,
+            dependsOnNodeIds: ["nope"],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        ))
     }
 
     func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
@@ -3810,6 +3942,133 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(v2.output.cardinality, .list)
     }
 
+    // MARK: - external-first writeback (external_write_target)
+
+    private func makeNode(id: String = "node-ext-write", outputs: [String]) -> PlanningNode {
+        PlanningNode(
+            id: id,
+            canvasId: "canvas-a",
+            title: "Writer",
+            schema: NodeSchema(inputs: ["upstream"], outputs: outputs, goal: "write to tracker"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step
+        )
+    }
+
+    func testDeriveFillsExternalWriteTargetFromConnectorOutputSlot() {
+        let node = makeNode(outputs: ["gsheet://venture-tracker/Pipeline"])
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.output.externalWriteTarget?.connector, "google-sheets")
+        XCTAssertEqual(v2.output.externalWriteTarget?.ref, "gsheet://venture-tracker/Pipeline")
+    }
+
+    func testDeriveLeavesExternalWriteTargetNilForProseOutputSlot() {
+        // venture-tracker as-built: a prose slot name must NOT be mistaken for an
+        // external write target (back-compat — only opted-in connector refs trip it).
+        let node = makeNode(outputs: ["1. Sourcing：按行业找 startups output"])
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertNil(v2.output.externalWriteTarget)
+    }
+
+    func testDeriveDoesNotTreatGenericOrInternalRefsAsExternalWrite() {
+        // http(s) fallback, local file, and the internal mirror scheme are plain
+        // references, not external-connector write targets.
+        for ref in ["https://example.com/report", "file://local/out.json", "meee2-artifact://canvas-a/slot"] {
+            let node = makeNode(outputs: [ref])
+            XCTAssertNil(NodeContractV2.derive(from: node).contract.output.externalWriteTarget, "\(ref) should not be an external write target")
+        }
+    }
+
+    func testDeriveKeepsFirstExternalOutputAndWarnsOnExtras() {
+        let node = makeNode(outputs: ["gsheet://tracker/Pipeline", "notion://db/scoring"])
+        let (v2, warnings) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.output.externalWriteTarget?.connector, "google-sheets")
+        XCTAssertEqual(v2.output.externalWriteTarget?.ref, "gsheet://tracker/Pipeline")
+        XCTAssertTrue(warnings.contains { $0.contains("2 external output slots") })
+    }
+
+    func testSubmitNodeOutputReconcilesExternalReferenceOnGatingDone() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "C", plannerContext: "canvas:canvas-a")
+        let node = makeNode(id: "canvas-a-writer", outputs: ["gsheet://venture-tracker/Pipeline"])
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let done = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "wrote 4 rows", routeTo: ["owner"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "Pipeline",
+                    reference: "gsheet://venture-tracker/Pipeline",
+                    payload: .object(["type": .string("integration"), "connector": .string("google-sheets")]),
+                    routeTo: ["owner"]
+                )],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(done.reconcileReferences, ["gsheet://venture-tracker/Pipeline"])
+    }
+
+    func testSubmitNodeOutputDoesNotReconcileOnBlocked() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "C", plannerContext: "canvas:canvas-a")
+        let node = makeNode(id: "canvas-a-writer", outputs: ["gsheet://venture-tracker/Pipeline"])
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let blocked = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .blocked,
+                message: PlannerNodeOutputMessage(summary: "sheets connector not connected", routeTo: ["owner"]),
+                artifacts: [],
+                next: .blocked
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertNil(blocked.reconcileReferences)
+    }
+
+    func testSubmitNodeOutputDoesNotReconcileNonExternalArtifact() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "C", plannerContext: "canvas:canvas-a")
+        let node = makeNode(id: "canvas-a-plain", outputs: ["plain-output"])
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let done = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "done", routeTo: ["owner"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "Result",
+                    reference: "plain-output",
+                    payload: .object(["type": .string("json"), "json": .string("{}")]),
+                    routeTo: ["owner"]
+                )],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertNil(done.reconcileReferences)
+    }
+
     func testNodeContractValidatorRejectsReplaceStrategy() {
         let raw: BoardJSONValue = .object([
             "replace_strategy": .string("overwrite")
@@ -4966,6 +5225,7 @@ final class PlannerCoreTests: XCTestCase {
             nativeWorkspaceAvailable: false,
             openTarget: "external",
             controlState: "active",
+            sessionScope: terminalKind == "internal" ? "meee2" : "external",
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "cli",
@@ -6129,6 +6389,7 @@ final class PlannerCoreTests: XCTestCase {
             nativeWorkspaceAvailable: terminalKind == "internal",
             openTarget: terminalKind == "internal" ? "native-workspace" : "external",
             controlState: "active",
+            sessionScope: terminalKind == "internal" ? "meee2" : "external",
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "cli",

@@ -16,8 +16,8 @@ import {
 
 const LABELS: Record<NotificationTriggerKind, { title: string; help: string }> = {
   'permission-request': {
-    title: 'Permission requests',
-    help: 'Notify when a session needs you to approve a tool call.',
+    title: 'Needs input',
+    help: 'Notify when a session needs permission, a reply, or pending inbox input.',
   },
   'session-blocked': {
     title: 'Session blocked',
@@ -25,7 +25,7 @@ const LABELS: Record<NotificationTriggerKind, { title: string; help: string }> =
   },
   'session-done': {
     title: 'Session finished',
-    help: 'Notify when a session reaches a terminal done state. Noisy — off by default.',
+    help: 'Notify when a session reaches a terminal done state.',
   },
   'approval-needed': {
     title: 'Planner approvals',

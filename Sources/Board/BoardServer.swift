@@ -467,6 +467,17 @@ public final class BoardServer {
         "/api/system/delete-local-data/token"
     ]
 
+    /// True for paths that must not be reachable cross-origin (no wildcard CORS).
+    /// Exact members of `localUIOnlyPaths`, plus the parameterized connector
+    /// credential/preauth routes — `POST /api/integrations/:id/credentials`
+    /// writes a secret to disk and `/preauth` spawns a process + opens a browser,
+    /// so a foreign origin must fail at preflight (same posture as delete-local-data).
+    static func isLocalUIOnlyPath(_ path: String) -> Bool {
+        if localUIOnlyPaths.contains(path) { return true }
+        return path.hasPrefix("/api/integrations/")
+            && (path.hasSuffix("/credentials") || path.hasSuffix("/preauth"))
+    }
+
     private func registerRoutes(on server: HttpServer) {
         // CORS preflight (OPTIONS) — meee2 browser sends a preflight before
         // POSTs with custom Content-Type / Authorization. Middleware short-
@@ -479,7 +490,7 @@ public final class BoardServer {
             // already. Echo the request Origin only when it's on the local-UI
             // allow list; otherwise reply with empty Allow-Origin so the
             // browser refuses to send the real request.
-            if BoardServer.localUIOnlyPaths.contains(request.path) {
+            if BoardServer.isLocalUIOnlyPath(request.path) {
                 let headers = BoardServer.localUICORSHeaders(for: request)
                 return .raw(204, "No Content", headers) { _ in }
             }
@@ -528,6 +539,17 @@ public final class BoardServer {
         server.POST["/api/system/delete-local-data/token"] = BoardServer.requireLocalUIOrigin(BoardAPI.issueDeleteLocalDataToken)
         server.POST["/api/system/delete-local-data"] = BoardServer.requireLocalUIOrigin(BoardAPI.deleteLocalData)
         server.GET["/api/sessions/intake-diagnostics"] = BoardServer.cors(BoardAPI.getSessionIntakeDiagnostics)
+        server.GET["/api/session-projects"] = BoardServer.cors(BoardAPI.listSessionProjects)
+        server.POST["/api/session-projects"] = BoardServer.cors(BoardAPI.createSessionProject)
+        server.POST["/api/session-projects/pick-directory"] = BoardServer.cors(BoardAPI.pickSessionProjectDirectory)
+        server.POST["/api/session-launcher/pick-attachments"] = BoardServer.requireLocalUIOrigin(BoardAPI.pickSessionLaunchAttachments)
+        server.POST["/api/session-launcher/attachments"] = BoardServer.requireLocalUIOrigin(BoardAPI.uploadSessionLaunchAttachment)
+        server.PATCH["/api/session-projects/:id"] = BoardServer.cors(BoardAPI.updateSessionProject)
+        server.POST["/api/session-projects/:id/reveal"] = BoardServer.cors(BoardAPI.revealSessionProject)
+        server.DELETE["/api/session-projects/:id"] = BoardServer.cors(BoardAPI.forgetSessionProject)
+        server.POST["/api/session-projects/:id/sessions"] = BoardServer.cors(BoardAPI.createSessionProjectSession)
+        server.POST["/api/session-launcher/temporary-sessions"] = BoardServer.cors(BoardAPI.createTemporarySession)
+        server.POST["/api/session-launcher/sessions/:id/reopen"] = BoardServer.cors(BoardAPI.reopenLauncherSession)
         server.GET["/api/app-settings"] = BoardServer.cors(BoardAPI.getAppSettings)
         server.PATCH["/api/app-settings"] = BoardServer.cors(BoardAPI.updateAppSettings)
         server.GET["/api/user-profile"] = BoardServer.cors(BoardAPI.getUserProfile)
@@ -546,7 +568,12 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.POST["/api/sessions/:id/control"] = BoardServer.cors(BoardAPI.updateSessionControl)
         server.POST["/api/sessions/:id/permission"] = BoardServer.cors(BoardAPI.respondToSessionPermission)
+        server.GET["/api/sessions/:id/artifacts"] = BoardServer.cors(BoardAPI.getSessionArtifacts)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
+        server.GET["/api/artifact-candidates"] = BoardServer.cors(BoardAPI.listArtifactCandidates)
+        server.POST["/api/artifact-candidates/hook"] = BoardServer.cors(BoardAPI.ingestArtifactCandidateHook)
+        server.POST["/api/artifact-candidates/:id/promote"] = BoardServer.cors(BoardAPI.promoteArtifactCandidate)
+        server.POST["/api/artifact-candidates/:id/discard"] = BoardServer.cors(BoardAPI.discardArtifactCandidate)
         server.GET["/api/memory"] = BoardServer.cors(BoardAPI.listMemoryRecords)
         server.POST["/api/memory"] = BoardServer.cors(BoardAPI.createMemoryRecord)
         server.PATCH["/api/memory/:id"] = BoardServer.cors(BoardAPI.updateMemoryRecord)
@@ -625,6 +652,9 @@ public final class BoardServer {
         server.DELETE["/api/planner/canvases/:id/nodes/:nodeId"] = BoardServer.cors(BoardAPI.deletePlannerNode)
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)
+        // proposal 子功能 · propose_add_node:节点会话提议新增 step(产物 pending,
+        // 走既有 approve/apply/reject 管线;MCP propose_add_node 调这里)。
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/propose-add-node"] = BoardServer.cors(BoardAPI.proposePlannerAddNode)
         server.POST["/api/planner/canvases/:id/scene/actions"] = BoardServer.cors(BoardAPI.runCanvasSceneAction)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
         server.GET["/api/planner/canvases/:id/artifacts/:artifactId/content"] = BoardServer.cors(BoardAPI.getPlannerArtifactContent)
@@ -673,6 +703,8 @@ public final class BoardServer {
         server.GET["/api/integrations/agent-scan"] = BoardServer.cors(IntegrationsAPI.getAgentScan)
         server.GET["/api/integrations/side-effects"] = BoardServer.cors(IntegrationsAPI.getCanvasSideEffects)
         server.POST["/api/integrations/:id/install"] = BoardServer.cors(IntegrationsAPI.installIntegration)
+        server.POST["/api/integrations/:id/credentials"] = BoardServer.cors(IntegrationsAPI.uploadIntegrationCredentials)
+        server.POST["/api/integrations/:id/preauth"] = BoardServer.cors(IntegrationsAPI.preauthIntegration)
         server.POST["/api/integrations/:id/complete-auth"] = BoardServer.cors(IntegrationsAPI.completeAuth)
         server.POST["/api/integrations/:id/recommend-workflow"] = BoardServer.cors(IntegrationsAPI.recommendWorkflow)
         server.POST["/api/integrations/:id/runbook"] = BoardServer.cors(IntegrationsAPI.generateRunbook)

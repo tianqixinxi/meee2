@@ -210,8 +210,8 @@ enum IntegrationsAPI {
     /// POST /api/integrations/:id/install
     /// Pattern A 一键 —— 对 `.remoteHttp` 类的 integration,直接调
     /// `claude mcp add --transport http` + 写 Codex 的 toml mcp-remote 桥。
-    /// 其它类型(stdio / unsupported)抛错;前端按 install.kind 决定走这条还是
-    /// fallback 到 runbook。
+    /// 对 `.localStdio` 类(google-sheets / lark),注册 stdio server + 注入凭证 env。
+    /// 前端按 install.kind 决定走这条还是 fallback 到 runbook。
     static func installIntegration(_ req: HttpRequest) -> HttpResponse {
         guard let id = req.params[":id"], !id.isEmpty else {
             return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
@@ -222,6 +222,57 @@ enum IntegrationsAPI {
         } catch {
             return BoardAPI.errorResponse("integration_error", error.localizedDescription, status: 400)
         }
+    }
+
+    /// POST /api/integrations/:id/credentials
+    /// 接收用户上传的 OAuth client `credentials.json` 内容,校验是 GCP OAuth client
+    /// (含 `installed` 或 `web` 顶级键),落到 ~/.meee2/connectors/<id>/credentials.json
+    /// (0600)。localStdio connector(google-sheets)的「Connect」前置步骤 —— 之后
+    /// install 时把它的路径作 CREDENTIALS_PATH 注入。Body: 原始 credentials.json 文本。
+    static func uploadIntegrationCredentials(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
+        }
+        let raw = Data(req.body)
+        guard !raw.isEmpty,
+              let obj = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else {
+            return BoardAPI.errorResponse("invalid_credentials", "body must be the credentials.json file content (valid JSON).", status: 400)
+        }
+        // GCP OAuth client JSON 顶层是 `installed`(desktop app)或 `web`,内含 client_id。
+        let clientBlock = (obj["installed"] as? [String: Any]) ?? (obj["web"] as? [String: Any])
+        guard let client = clientBlock, client["client_id"] is String else {
+            return BoardAPI.errorResponse(
+                "invalid_credentials",
+                "doesn't look like a GCP OAuth client credentials.json (expected top-level `installed` or `web` with a client_id). Create an OAuth client (Desktop app) in GCP, enable the Sheets API, and download its JSON.",
+                status: 400
+            )
+        }
+        do {
+            let dir = IntegrationInstaller.connectorDir(id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let path = dir.appendingPathComponent("credentials.json")
+            try raw.write(to: path, options: [.atomic])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+            struct Response: Encodable { let ok: Bool; let path: String; let message: String }
+            return BoardAPI.jsonResponse(Response(
+                ok: true, path: path.path,
+                message: "credentials.json saved. Run Connect to register the server, then authorize in the browser."
+            ))
+        } catch {
+            return BoardAPI.errorResponse("integration_error", "failed to save credentials.json — \(error.localizedDescription)", status: 500)
+        }
+    }
+
+    /// POST /api/integrations/:id/preauth
+    /// 在任何无头 dispatched 会话之前,主动触发 stdio connector 的 server 自带 OAuth
+    /// 浏览器授权,把 token 缓存好(localStdio OAuth 模型,见 IntegrationInstaller)。
+    /// best-effort:server 无 bootstrap 子命令,经一次 MCP 握手 + benign 工具调用 provoke。
+    static func preauthIntegration(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
+        }
+        let result = IntegrationInstaller.triggerStdioPreAuth(integrationId: id)
+        return BoardAPI.jsonResponse(result)
     }
 
     /// POST /api/integrations/:id/complete-auth

@@ -310,7 +310,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         //   - DragRegionWebView.hitTest 对顶 28pt 返 nil → titlebar 拿事件，
         //     macOS 原生处理拖窗口 / 双击放大。
         // 不设 backgroundColor / appearance —— 让系统按 webview 实际像素显示。
-        window.title = "meee2 Board"
+        window.title = "Meee2 Board"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.miniwindowImage = AppIconProvider.loadIcon() ?? NSApp.applicationIconImage
@@ -462,40 +462,85 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     }
 
     func handleNativeWorkspaceMessage(_ payload: [String: Any]) {
+        let messageStartedAt = Self.timestampMillis()
+        var tracePayload = payload
+        let existingTraceId = (tracePayload["traceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existingTraceId?.isEmpty ?? true {
+            let target = (payload["surfaceId"] as? String) ?? (payload["sessionId"] as? String) ?? "missing"
+            tracePayload["traceId"] = "native-\(target.prefix(8))-\(Int(messageStartedAt))"
+            tracePayload["clickStartedAtMs"] = messageStartedAt
+            tracePayload["sentAtMs"] = messageStartedAt
+            tracePayload["webPhase"] = payload["webPhase"] as? String ?? "sessionLauncher.nativeTraceFallback"
+        }
         let type = payload["type"] as? String ?? ""
         guard type == "sessionsWorkspace" else { return }
         let phase = payload["phase"] as? String ?? "layout"
         let mode = payload["mode"] as? String ?? "full"
         let terminalOnly = mode == "terminal"
+        let theme = Self.terminalTheme(from: payload)
         let sessionId = (payload["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let surfaceId = (payload["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch phase {
+        case "obscure":
+            logWorkspaceTrace(tracePayload, phase: "native.workspace.received", extra: "phase=obscure mode=\(mode)")
+            let obscureStartedAt = Self.timestampMillis()
+            obscureNativeSessionsWorkspace()
+            logWorkspaceTrace(
+                tracePayload,
+                phase: "native.workspace.obscure.done",
+                startedAt: obscureStartedAt,
+                extra: "mode=\(mode)"
+            )
+            MInfo("[BoardWebWindow] native sessions workspace obscured")
         case "hide":
-            logWorkspaceTrace(payload, phase: "native.workspace.received", extra: "phase=hide mode=\(mode)")
+            logWorkspaceTrace(tracePayload, phase: "native.workspace.received", extra: "phase=hide mode=\(mode)")
+            let hideStartedAt = Self.timestampMillis()
             hideNativeSessionsWorkspace()
+            logWorkspaceTrace(
+                tracePayload,
+                phase: "native.workspace.hide.done",
+                startedAt: hideStartedAt,
+                extra: "mode=\(mode)"
+            )
             MInfo("[BoardWebWindow] native sessions workspace hidden")
         case "show", "layout", "focus":
-            logWorkspaceTrace(payload, phase: "native.workspace.received", extra: "phase=\(phase) mode=\(mode)")
+            logWorkspaceTrace(tracePayload, phase: "native.workspace.received", extra: "phase=\(phase) mode=\(mode)")
             nativeSessionsController.setTerminalOnlyMode(terminalOnly)
+            nativeSessionsController.applyTerminalTheme(theme)
             if let rectPayload = payload["rect"] as? [String: Any],
                let layout = embeddedTerminalLayout(from: rectPayload) {
+                let layoutStartedAt = Self.timestampMillis()
                 layoutNativeSessionsWorkspace(frame: layout.frame, hidden: layout.hidden)
                 logWorkspaceTrace(
-                    payload,
+                    tracePayload,
                     phase: "native.workspace.layout.done",
+                    startedAt: layoutStartedAt,
                     extra: "frame=\(Int(layout.frame.width))x\(Int(layout.frame.height)) hidden=\(layout.hidden)"
                 )
             }
             if phase == "show" || phase == "focus" {
+                let activateStartedAt = Self.timestampMillis()
                 nativeSessionsController.activate(
                     sessionId: sessionId,
                     surfaceId: surfaceId,
                     terminalOnly: terminalOnly,
-                    tracePayload: payload
+                    tracePayload: tracePayload
+                )
+                logWorkspaceTrace(
+                    tracePayload,
+                    phase: "native.workspace.activate.returned",
+                    startedAt: activateStartedAt,
+                    extra: "session=\(sessionId?.prefix(8) ?? "-") surface=\(surfaceId?.prefix(8) ?? "-")"
                 )
                 MInfo("[BoardWebWindow] native sessions workspace \(phase) mode=\(mode) session=\(sessionId ?? "-") surface=\(surfaceId ?? "-")")
             }
+            logWorkspaceTrace(
+                tracePayload,
+                phase: "native.workspace.message.done",
+                startedAt: messageStartedAt,
+                extra: "phase=\(phase) mode=\(mode)"
+            )
         default:
             break
         }
@@ -510,6 +555,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
     }
 
+    private func obscureNativeSessionsWorkspace() {
+        nativeSessionsController.view.isHidden = true
+    }
+
     private func hideNativeSessionsWorkspace() {
         nativeSessionsController.suspend()
         nativeSessionsController.view.isHidden = true
@@ -517,17 +566,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func handleNativeTerminalMessage(_ payload: [String: Any]) {
         let type = payload["type"] as? String ?? "attach"
+        let theme = Self.terminalTheme(from: payload)
         logTerminalTrace(payload, phase: "native.received", extra: "type=\(type)")
         switch type {
         case "prewarm":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
-            prewarmEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId, tracePayload: payload)
+            prewarmEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId, theme: theme, tracePayload: payload)
         case "attach", "embed", "open":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
             let rectPayload = payload["rect"] as? [String: Any]
-            _ = embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload, tracePayload: payload)
+            _ = embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload, theme: theme, tracePayload: payload)
         case "layout":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
@@ -536,6 +586,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                     rectPayload,
                     surfaceId: surfaceId,
                     sessionId: sessionId,
+                    theme: theme,
                     tracePayload: payload
                 )
             } else {
@@ -545,6 +596,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
             if activeEmbeddedTerminalMatches(surfaceId: surfaceId, sessionId: sessionId) {
+                embeddedTerminal?.applyTheme(theme)
                 embeddedTerminal?.focus()
                 logTerminalTrace(payload, phase: "native.focus.done", extra: "hasTerminal=\(embeddedTerminal != nil)")
                 dispatchNativeTerminalSyncAck(type: "focus", surfaceId: surfaceId, sessionId: sessionId, ok: true, tracePayload: payload)
@@ -563,7 +615,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
     }
 
-    private func prewarmEmbeddedTerminal(surfaceId: String, sessionId: String?, tracePayload: [String: Any]? = nil) {
+    private func prewarmEmbeddedTerminal(surfaceId: String, sessionId: String?, theme: String, tracePayload: [String: Any]? = nil) {
         guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
         let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
         if embeddedTerminals[key] != nil {
@@ -584,13 +636,14 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             return
         }
         hostEmbeddedTerminalView(created, frame: defaultHiddenTerminalFrame(), hidden: true)
+        created.applyTheme(theme)
         embeddedTerminals[key] = created
         rememberEmbeddedTerminal(key)
         dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: false)
         logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false hosted=true cacheCount=\(embeddedTerminals.count)")
     }
 
-    private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?, tracePayload: [String: Any]? = nil) -> Bool {
+    private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?, theme: String, tracePayload: [String: Any]? = nil) -> Bool {
         guard !surfaceId.isEmpty || sessionId?.isEmpty == false else {
             dispatchNativeTerminalSyncAck(type: "attach", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "missingTarget", tracePayload: tracePayload)
             return false
@@ -622,6 +675,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 frame: initialLayout?.frame ?? .zero,
                 hidden: initialLayout?.hidden ?? true
             )
+            controller.applyTheme(theme)
             hostedDuringAttach = true
         } else if embeddedTerminal == nil {
             activeEmbeddedTerminalKey = nil
@@ -639,6 +693,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 frame: initialLayout?.frame ?? .zero,
                 hidden: initialLayout?.hidden ?? true
             )
+            controller.applyTheme(theme)
             hostedDuringAttach = true
         }
         if let rectPayload {
@@ -653,10 +708,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                     rectPayload,
                     surfaceId: surfaceId,
                     sessionId: sessionId,
+                    theme: theme,
                     tracePayload: tracePayload
                 )
             }
         }
+        embeddedTerminal?.applyTheme(theme)
         embeddedTerminal?.focus()
         logTerminalTrace(
             tracePayload,
@@ -776,6 +833,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         _ rectPayload: [String: Any],
         surfaceId: String = "",
         sessionId: String? = nil,
+        theme: String,
         tracePayload: [String: Any]? = nil
     ) -> Bool {
         guard let embeddedTerminal else {
@@ -793,6 +851,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "badRect", tracePayload: tracePayload)
             return false
         }
+        embeddedTerminal.applyTheme(theme)
         embeddedTerminal.layout(in: layout.frame, hidden: layout.hidden)
         logTerminalLayoutDone(layout, tracePayload: tracePayload)
         dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: true, tracePayload: tracePayload)
@@ -908,7 +967,11 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         return nil
     }
 
-    private func logTerminalTrace(_ payload: [String: Any]?, phase: String, extra: String = "") {
+    private static func terminalTheme(from payload: [String: Any]) -> String {
+        (payload["theme"] as? String) == "light" ? "light" : "dark"
+    }
+
+    private func logTerminalTrace(_ payload: [String: Any]?, phase: String, startedAt: Double? = nil, extra: String = "") {
         guard
             let payload,
             let traceId = payload["traceId"] as? String,
@@ -921,15 +984,16 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let clickStartedAt = Self.doubleValue(payload["clickStartedAtMs"])
         let sendToNative = sentAt.map { Self.formatMillis(now - $0) } ?? "-"
         let clickToNative = clickStartedAt.map { Self.formatMillis(now - $0) } ?? "-"
+        let duration = startedAt.map { Self.formatMillis(now - $0) } ?? "-"
         let webPhase = payload["webPhase"] as? String ?? "-"
         let suffix = extra.isEmpty ? "" : " \(extra)"
         NSLog(
-            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative)\(suffix)"
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
         )
     }
 
-    private func logWorkspaceTrace(_ payload: [String: Any]?, phase: String, extra: String = "") {
-        logTerminalTrace(payload, phase: phase, extra: extra)
+    private func logWorkspaceTrace(_ payload: [String: Any]?, phase: String, startedAt: Double? = nil, extra: String = "") {
+        logTerminalTrace(payload, phase: phase, startedAt: startedAt, extra: extra)
     }
 
     private static func timestampMillis() -> Double {

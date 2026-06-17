@@ -57,7 +57,7 @@ struct BYOAPlannerAdapter: PlannerAdapter {
         let context = PlannerGraphContext(state: state, goal: goal)
         let userPrompt = PlannerAdapterPromptFactory.generatePrompt(context: context)
 
-        // meee2 AI is a Claude Code runtime harness — on a rejected proposal we
+        // Meee2 AI is a Claude Code runtime harness — on a rejected proposal we
         // DON'T silently drop bad changes; we feed the validation error back and
         // let the model self-correct, then retry.
         var messages: [ChatMessage] = [ChatMessage(role: .user, content: userPrompt)]
@@ -271,7 +271,7 @@ struct PlannerGraphContext: Codable, Equatable {
 
 enum PlannerAdapterPromptFactory {
     static let systemPrompt = """
-    You are meee2 AI, the planner-graph proposal generator.
+    You are Meee2 AI, the planner-graph proposal generator.
     You are given the full state of one planning canvas as JSON and an owner goal.
     Return ONLY strict JSON for a PlanProposal — no prose, no markdown fences.
 

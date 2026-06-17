@@ -1,11 +1,13 @@
 import { RefreshCw, Sparkles, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   completeIntegrationAuth,
   fetchAgentScan,
   fetchCanvases,
   generateIntegrationRunbook,
   installIntegration,
+  preauthIntegration,
+  uploadIntegrationCredentials,
 } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import type {
@@ -19,6 +21,7 @@ import type {
 } from '../types'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
 import { ALL_INTEGRATION_VIEW_SCHEMAS } from '../integrations/viewSchemas'
+import { Notice } from './feedback/Notice'
 
 /** Integrations whose backend exposes a browse endpoint (PRs / docs / …). */
 const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
@@ -84,10 +87,10 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
-  /** Transient toast for the one-click "Complete auth" flow — shows
+  /** Persistent Notice for the one-click "Complete auth" flow — shows
    *  "Browser opening…" + fallback link, auto-clears once a re-scan flips
    *  the row to `connected`. */
-  const [authToast, setAuthToast] = useState<
+  const [authNotice, setAuthNotice] = useState<
     { id: string; message: string; authUrl?: string | null } | null
   >(null)
   /** PRD §1 Featured/Other 分组:Other 默认折叠(514 个 connector 视觉太重)。 */
@@ -190,10 +193,10 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const handleCompleteAuth = (id: string) => {
     setBusyId(id)
     setError(null)
-    setAuthToast(null)
+    setAuthNotice(null)
     completeIntegrationAuth(id)
       .then((result) => {
-        setAuthToast({ id, message: result.message, authUrl: result.authUrl })
+        setAuthNotice({ id, message: result.message, authUrl: result.authUrl })
         if (!result.spawned) return // bail polling — nothing to wait for
         // Poll re-scan a few times — OAuth usually completes within ~15s of
         // browser auth-click; we don't want the user staring at a stale row.
@@ -209,8 +212,8 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               if (stillNeedsAuth && attempts < 10) {
                 setTimeout(poll, 3000)
               } else if (!stillNeedsAuth) {
-                setAuthToast({ id, message: `${id} ${t('integrations.connected').toLowerCase()}.` })
-                setTimeout(() => setAuthToast(null), 4000)
+                setAuthNotice({ id, message: `${id} ${t('integrations.connected').toLowerCase()}.` })
+                setTimeout(() => setAuthNotice(null), 4000)
               }
             })
             .catch(() => { /* best-effort — manual Re-scan still works */ })
@@ -232,6 +235,56 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : t('integrations.installFailed')))
       .finally(() => setBusyId(null))
+  }
+
+  // localStdio Connect — credentials.json file picker + install + pre-auth.
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const connectPendingId = useRef<string | null>(null)
+
+  /** localStdio connector Connect entry. OAuth-via-server connectors (envKeys
+   *  include CREDENTIALS_PATH, e.g. google-sheets) need the user's OAuth client
+   *  credentials.json first → file picker. Others (e.g. lark, creds via ccops)
+   *  install directly. */
+  const handleConnectLocalStdio = (id: string, install: IntegrationInstall) => {
+    if (install.kind !== 'localStdio') return
+    if (install.envKeys.includes('CREDENTIALS_PATH')) {
+      connectPendingId.current = id
+      fileInputRef.current?.click()
+      return
+    }
+    handleInstall(id)
+  }
+
+  /** credentials.json chosen → upload, install (registers + injects env), then
+   *  pre-auth (provoke the server's browser OAuth). Aggregate the step messages
+   *  into the install-result modal. */
+  const onCredentialsFileChosen = async (file: File) => {
+    const id = connectPendingId.current
+    connectPendingId.current = null
+    if (!id) return
+    setBusyId(id)
+    setError(null)
+    try {
+      const content = await file.text()
+      const messages: string[] = []
+      const cred = await uploadIntegrationCredentials(id, content)
+      messages.push(cred.message)
+      const installed = await installIntegration(id)
+      messages.push(...installed.messages)
+      const preauth = await preauthIntegration(id)
+      messages.push(preauth.message)
+      setInstallResult({
+        integrationId: id,
+        claudeOK: installed.claudeOK,
+        codexOK: installed.codexOK,
+        messages,
+      })
+      load()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t('integrations.installFailed'))
+    } finally {
+      setBusyId(null)
+    }
   }
 
   const rowFullyConnected = (row: IntegrationRow) =>
@@ -327,6 +380,20 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                   </button>
                 )
               }
+              if (install?.kind === 'localStdio') {
+                const needsCredentials = install.envKeys.includes('CREDENTIALS_PATH')
+                return (
+                  <button
+                    type="button"
+                    className="agent-matrix__install"
+                    disabled={busyId === row.id}
+                    onClick={() => handleConnectLocalStdio(row.id, install)}
+                    title={needsCredentials ? t('integrations.connectOAuthHint') : t('integrations.oneClickInstall')}
+                  >
+                    {busyId === row.id ? '...' : t('integrations.connect')}
+                  </button>
+                )
+              }
               return (
                 <button
                   type="button"
@@ -356,6 +423,18 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
 
   return (
     <section className="agent-matrix" aria-label={t('integrations.agentMatrix')}>
+      {/* localStdio Connect: hidden picker for the OAuth client credentials.json. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = '' // allow re-picking the same file
+          if (file) void onCredentialsFileChosen(file)
+        }}
+      />
       <header className="agent-matrix__header">
         <div>
           <span>{t('integrations.agentKicker')}</span>
@@ -464,13 +543,18 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
         </>
       )}
 
-      {authToast && (
-        <div className="agent-matrix__auth-toast" role="status">
-          <Sparkles size={13} aria-hidden />
-          <span>{authToast.message}</span>
-          {authToast.authUrl && (
+      {authNotice && (
+        <Notice
+          tone="warning"
+          placement="panel"
+          icon={<Sparkles size={13} />}
+          onDismiss={() => setAuthNotice(null)}
+          className="agent-matrix__auth-notice"
+        >
+          <span>{authNotice.message}</span>
+          {authNotice.authUrl && (
             <a
-              href={authToast.authUrl}
+              href={authNotice.authUrl}
               target="_blank"
               rel="noreferrer noopener"
               className="agent-matrix__auth-link"
@@ -478,15 +562,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               {t('integrations.openAuthPage')}
             </a>
           )}
-          <button
-            type="button"
-            className="agent-matrix__auth-dismiss"
-            onClick={() => setAuthToast(null)}
-            aria-label={t('integrations.dismiss')}
-          >
-            <X size={11} aria-hidden />
-          </button>
-        </div>
+        </Notice>
       )}
 
       {browsingId && (

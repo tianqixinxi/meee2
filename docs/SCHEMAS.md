@@ -215,7 +215,7 @@ Lookups: `memberByAlias(_:)`, `memberBySessionId(_:)`.
 
 **Purpose** The primary in-memory + on-disk session model. This is what the UI binds to (via `SessionStore.sessions`), what gets serialized to `~/.meee2/sessions/<id>.json`, and what `BoardDTOBuilder.sessionDTO` starts from. Supersedes `AISession` for anything that touches the UI.
 
-**Schema version** `SessionData.currentSchemaVersion = 1`. On-disk files written before this existed decode as `schemaVersion = 0` and get lazily migrated by `SessionDataMigrations.apply(to:from:)` at load time. See [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-schema-versioning).
+**Schema version** `SessionData.currentSchemaVersion = 2`. On-disk files written before this existed decode as `schemaVersion = 0` and get lazily migrated by `SessionDataMigrations.apply(to:from:)` at load time. See [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-schema-versioning).
 
 | Field | Type | JSON key | Notes |
 |---|---|---|---|
@@ -225,6 +225,7 @@ Lookups: `memberByAlias(_:)`, `memberBySessionId(_:)`.
 | `pid` | `Int?` | `pid` | |
 | `ghosttyTerminalId` | `String?` | `ghostty_terminal_id` | Sticky across upserts (see §7.1) |
 | `transcriptPath` | `String?` | `transcript_path` | Where `TranscriptStatusResolver` reads from |
+| `providerResumeSessionId` | `String?` | `provider_resume_session_id` | Provider-native resume id; sticky, long-lived recovery anchor for managed terminal surfaces |
 | `startedAt` | `Date` | `started_at` | ISO8601 on disk |
 | `lastActivity` | `Date` | `last_activity` | ISO8601 on disk; bumped on every `update` |
 | `status` | `SessionStatus` | `status` (+ legacy `detailed_status`) | `SessionStatus.from(rawString:)` handles old case names |
@@ -249,11 +250,12 @@ Lookups: `memberByAlias(_:)`, `memberBySessionId(_:)`.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "session_id": "3f4a1c2e-...",
   "project": "/Users/me/code/meee2",
   "pid": 52031,
   "transcript_path": "/Users/me/.claude/projects/...jsonl",
+  "provider_resume_session_id": "8db44e39-685d-47ab-bd0e-5e97386ded80",
   "started_at": "2026-04-22T15:20:13Z",
   "last_activity": "2026-04-22T15:44:02Z",
   "status": "tooling",
@@ -663,6 +665,34 @@ Migration warnings surface via `MLog("[NodeContractV2][migrate] ...")` for every
 - Runtime input merging that actually consumes the three sources → ENG-2 E2.5.
 - Version chain that snapshots all three sources per submit → ENG-3.
 - Sub-canvas atomic assign that flips a node to `item_scoped` in-place → ENG-4.
+
+### Session Artifact Candidates
+
+**File** `Sources/Board/SessionArtifactCandidateStore.swift`
+
+**Purpose** Persistent session-scoped evidence captured from Claude/Codex hooks before the evidence is archived into a planner node as a canonical `PlannerArtifact`. Stored separately under `~/.meee2/artifact-candidates/<sessionId>.json`; does not change `SessionData`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | Stable local candidate id |
+| `sessionId` | `String` | Owning live or historical session |
+| `provider` | `String` | `claude`, `codex`, or future hook producer |
+| `cwd` | `String?` | Session cwd when captured |
+| `title`, `kind`, `summary` | `String` | Human-facing index fields |
+| `status` | `candidate/promoted/discarded` | Promotion records the target artifact; discard hides it from default lists |
+| `sourceEvent`, `toolName`, `toolUseId` | `String?` | Hook provenance and dedupe anchors |
+| `references[]` | `{kind,value,label?}` | Paths, URLs, or command references; full content is not snapshotted |
+| `promotedCanvasId`, `promotedNodeId`, `promotedArtifactId` | `String?` | Filled after promotion |
+
+**Board API**
+
+| Route | Purpose |
+|---|---|
+| `GET /api/sessions/:sessionId/artifacts` | Returns `{candidates, artifacts, totalCount, attachTargets}` for the session modal and `Artifacts[count]` |
+| `GET /api/artifact-candidates?sessionId=` | Lists visible candidates for the global Artifacts rail |
+| `POST /api/artifact-candidates/hook` | Codex plugin hook ingress; accepts hook JSON and never requires global user hook config |
+| `POST /api/artifact-candidates/:id/promote` | Attaches the candidate to the unique bound node, or requires `{canvasId,nodeId}` when ambiguous |
+| `POST /api/artifact-candidates/:id/discard` | Marks a candidate discarded |
 
 ---
 

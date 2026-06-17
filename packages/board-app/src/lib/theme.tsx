@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { fetchAppSettings } from '../api'
+import {
+  DEFAULT_THEME_PROFILE,
+  applyThemeProfile,
+  cloneThemeProfile,
+  normalizeThemeProfile,
+  type ThemeProfile,
+} from './themeProfile'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
@@ -6,7 +14,9 @@ export type ResolvedTheme = 'light' | 'dark'
 interface ThemeContextValue {
   mode: ThemeMode
   resolvedTheme: ResolvedTheme
+  themeProfile: ThemeProfile
   setMode: (mode: ThemeMode) => void
+  setThemeProfile: (profile: ThemeProfile) => void
 }
 
 const STORAGE_KEY = 'meee2.theme'
@@ -40,17 +50,45 @@ function applyTheme(theme: ResolvedTheme) {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(() => readStoredMode())
   const [systemThemeValue, setSystemThemeValue] = useState<ResolvedTheme>(() => systemTheme())
+  const [themeProfile, setThemeProfileState] = useState<ThemeProfile>(() => cloneThemeProfile(DEFAULT_THEME_PROFILE))
+  const themeProfileDirtyRef = useRef(false)
   const resolvedTheme = mode === 'system' ? systemThemeValue : mode
 
   useEffect(() => {
     applyTheme(resolvedTheme)
-  }, [resolvedTheme])
+    applyThemeProfile(themeProfile, resolvedTheme)
+  }, [resolvedTheme, themeProfile])
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-color-scheme: light)')
     const update = () => setSystemThemeValue(query.matches ? 'light' : 'dark')
     query.addEventListener('change', update)
     return () => query.removeEventListener('change', update)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchAppSettings()
+      .then((settings) => {
+        if (cancelled) return
+        if (isThemeMode(settings.theme)) {
+          try {
+            window.localStorage.setItem(STORAGE_KEY, settings.theme)
+          } catch {
+            // Storage is an optimization; backend settings remain authoritative.
+          }
+          setModeState(settings.theme)
+        }
+        if (!themeProfileDirtyRef.current) {
+          setThemeProfileState(normalizeThemeProfile(settings.themeProfile))
+        }
+      })
+      .catch(() => {
+        if (!cancelled && !themeProfileDirtyRef.current) setThemeProfileState(cloneThemeProfile(DEFAULT_THEME_PROFILE))
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const setMode = useCallback((nextMode: ThemeMode) => {
@@ -62,9 +100,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setModeState(nextMode)
   }, [])
 
+  const setThemeProfile = useCallback((profile: ThemeProfile) => {
+    themeProfileDirtyRef.current = true
+    setThemeProfileState(normalizeThemeProfile(profile))
+  }, [])
+
   const value = useMemo(
-    () => ({ mode, resolvedTheme, setMode }),
-    [mode, resolvedTheme, setMode],
+    () => ({ mode, resolvedTheme, themeProfile, setMode, setThemeProfile }),
+    [mode, resolvedTheme, themeProfile, setMode, setThemeProfile],
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>

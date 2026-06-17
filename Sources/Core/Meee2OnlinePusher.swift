@@ -88,7 +88,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     public func activate() {
         _ = settingsSnapshot(force: true)
         guard shouldStayActive else {
-            MLog("[Meee2OnlinePusher] Not connected to meee2 Online, skipping activation")
+            MLog("[Meee2OnlinePusher] Not connected to Meee2 Online, skipping activation")
             return
         }
         guard subscription == nil,
@@ -302,28 +302,24 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         }
 
         let defaults = UserDefaults.standard
+        // 连接配置统一走 OnlineProxy.loadSettings()（env > settings.json >
+        // 偏好域 legacy fallback；token 绝不读偏好域）。这里不再各自拼一套
+        // defaults 优先的读取，避免两种二进制形态读到分裂的凭证。
         let onlineSettings = OnlineProxy.loadSettings()
-        let rawSupabaseUrl = defaults.string(forKey: "meee2SupabaseUrl") ?? ""
-        let decodedSupabaseUrl = rawSupabaseUrl.removingPercentEncoding ?? rawSupabaseUrl
-        let preferOnlineSettings = OnlineProxy.hasEnvironmentOverride
-        let defaultsTeamId = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2TeamId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultsUserId = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2UserId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultsSupabaseKey = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2SupabaseKey") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultsOnlineBaseUrl = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2OnlineBaseUrl") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultsAccessToken = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2OnlineAccessToken") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let decodedSupabaseUrl = onlineSettings.supabaseUrl.removingPercentEncoding ?? onlineSettings.supabaseUrl
         let snapshot = SettingsSnapshot(
-            isConnected: defaults.bool(forKey: "meee2Connected") || (!onlineSettings.teamId.isEmpty && !onlineSettings.onlineBaseUrl.isEmpty),
+            isConnected: (defaults.bool(forKey: "meee2Connected")
+                || (!onlineSettings.teamId.isEmpty && !onlineSettings.onlineBaseUrl.isEmpty))
+                && !onlineSettings.authExpired,
             sessionTeamIds: Self.sessionIdMap(forKey: "meee2SessionTeamIds"),
-            teamId: defaultsTeamId.isEmpty ? onlineSettings.teamId : defaultsTeamId,
-            userId: defaultsUserId.isEmpty ? onlineSettings.userId : defaultsUserId,
-            normalizedSupabaseUrl: (decodedSupabaseUrl.isEmpty ? onlineSettings.supabaseUrl : decodedSupabaseUrl)
+            teamId: onlineSettings.teamId,
+            userId: onlineSettings.userId,
+            normalizedSupabaseUrl: decodedSupabaseUrl
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-            supabaseKey: defaultsSupabaseKey.isEmpty ? onlineSettings.supabaseKey : defaultsSupabaseKey,
-            onlineBaseUrl: (defaultsOnlineBaseUrl.isEmpty ? onlineSettings.onlineBaseUrl : defaultsOnlineBaseUrl)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-            accessToken: defaultsAccessToken.isEmpty ? onlineSettings.accessToken : defaultsAccessToken,
+            supabaseKey: onlineSettings.supabaseKey,
+            onlineBaseUrl: onlineSettings.onlineBaseUrl,
+            accessToken: onlineSettings.accessToken,
             machineId: Meee2Identity.machineId
         )
         cachedSettings = snapshot
@@ -571,7 +567,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         defer {
             perfLog("session-upsert-build", started: started, extra: "sid=\(session.sessionId.prefix(8)),force=\(force),hydrate=\(hydrateTranscriptFields)")
         }
-        // Build payload with full summary data for meee2 dashboard
+        // Build payload with full summary data for Meee2 dashboard
         let status = mapStatus(session.status)
 
         var payload: [String: Any] = [

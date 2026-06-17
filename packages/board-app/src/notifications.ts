@@ -7,9 +7,9 @@
 //    OS-level notifications; kept here for historical reasons.
 //
 // 2) OS-level notifications (the rest of the file). Five trigger kinds:
-//      - permission-request  session 进入 permissionRequired
+//      - permission-request  session 需要人处理(permissionRequired / waitingForUser / inbox)
 //      - session-blocked     session 进入 failed / dead / 长时间 stuck
-//      - session-done        session 进入 completed/done 终态 (默认 off)
+//      - session-done        session 进入 completed/done 终态
 //      - approval-needed     planner node workflowRunState=gate-wait 且有 approver
 //      - recap-updated       session.latestRecap.timestamp 变化 (默认 off)
 //
@@ -51,7 +51,7 @@ export type NotificationToggles = Record<NotificationTriggerKind, boolean>
 export const DEFAULT_NOTIFICATION_TOGGLES: NotificationToggles = {
   'permission-request': true,
   'session-blocked': true,
-  'session-done': false,
+  'session-done': true,
   'approval-needed': true,
   'recap-updated': false,
 }
@@ -138,9 +138,39 @@ interface FireOpts {
   body?: string
 }
 
+let audioCtx: AudioContext | null = null
+
+function playCue(kind: NotificationTriggerKind): void {
+  if (kind === 'recap-updated') return
+  try {
+    const AudioCtor = globalThis.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AudioCtor) return
+    if (!audioCtx) audioCtx = new AudioCtor()
+    const ctx = audioCtx
+    if (ctx.state === 'suspended') void ctx.resume()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    const now = ctx.currentTime
+    const frequency = kind === 'session-done' ? 660 : kind === 'session-blocked' ? 220 : 520
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(frequency, now)
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(0.14, now + 0.015)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(now)
+    osc.stop(now + 0.2)
+  } catch {
+    // Audio is best-effort; OS notification still carries the event.
+  }
+}
+
 function fire(opts: FireOpts): void {
   const { kind, toggles, scopeId, transitionTag, title, body } = opts
   if (!toggles[kind]) return
+  if (shouldSkipDedup(dedupKey(kind, scopeId, transitionTag))) return
+  playCue(kind)
   const support = detectPermission()
   if (support === 'unsupported') {
     if (!permissionWarned) {
@@ -161,7 +191,6 @@ function fire(opts: FireOpts): void {
     void ensureNotificationPermission()
     return
   }
-  if (shouldSkipDedup(dedupKey(kind, scopeId, transitionTag))) return
   try {
     const n = new Notification(title, {
       body: body ?? '',
@@ -181,6 +210,22 @@ function fire(opts: FireOpts): void {
 
 const BLOCKED_STATUSES = new Set(['failed', 'dead'])
 const DONE_STATUSES = new Set(['completed', 'done'])
+const INTERACTION_STATUSES = new Set(['permissionRequired', 'waitingForUser'])
+
+function sessionNotificationTitle(session: Session): string {
+  return session.currentTask
+    || session.latestRecap?.content
+    || session.recentMessages.find((entry) => entry.role.toLowerCase() === 'user')?.text
+    || session.title
+    || 'Session'
+}
+
+function interactionCount(session: Session | undefined): number {
+  if (!session) return 0
+  return (INTERACTION_STATUSES.has(session.status) ? 1 : 0)
+    + (session.pendingPermissionTool || session.pendingPermissionMessage ? 1 : 0)
+    + Math.max(0, session.inboxPending ?? 0)
+}
 
 export function runSessionTransitionNotifications(
   prev: Map<string, Session>,
@@ -191,16 +236,18 @@ export function runSessionTransitionNotifications(
     const old = prev.get(s.id)
     const oldStatus = old?.status
     const newStatus = s.status
+    const oldInteractionCount = interactionCount(old)
+    const newInteractionCount = interactionCount(s)
     if (oldStatus !== newStatus) {
-      if (newStatus === 'permissionRequired') {
+      if (INTERACTION_STATUSES.has(newStatus)) {
         fire({
           kind: 'permission-request',
           toggles,
           scopeId: s.id,
-          transitionTag: newStatus,
-          title: `${s.title || 'Session'} needs permission`,
+          transitionTag: `interaction:${newStatus}`,
+          title: `${sessionNotificationTitle(s)} needs input`,
           body: s.pendingPermissionMessage
-            ?? (s.pendingPermissionTool ? `Approve: ${s.pendingPermissionTool}` : 'Tool use approval required.'),
+            ?? (s.pendingPermissionTool ? `Approve: ${s.pendingPermissionTool}` : 'Session is waiting for your response.'),
         })
       } else if (BLOCKED_STATUSES.has(newStatus)) {
         fire({
@@ -208,7 +255,7 @@ export function runSessionTransitionNotifications(
           toggles,
           scopeId: s.id,
           transitionTag: newStatus,
-          title: `${s.title || 'Session'} is ${newStatus}`,
+          title: `${sessionNotificationTitle(s)} is ${newStatus}`,
           body: 'Session entered a blocked state.',
         })
       } else if (DONE_STATUSES.has(newStatus)) {
@@ -217,10 +264,21 @@ export function runSessionTransitionNotifications(
           toggles,
           scopeId: s.id,
           transitionTag: newStatus,
-          title: `${s.title || 'Session'} finished`,
-          body: 'Claude completed the task.',
+          title: `${sessionNotificationTitle(s)} finished`,
+          body: 'Session completed the task.',
         })
       }
+    }
+    if (newInteractionCount > 0 && oldInteractionCount === 0 && oldStatus === newStatus) {
+      fire({
+        kind: 'permission-request',
+        toggles,
+        scopeId: s.id,
+        transitionTag: `interaction:${newInteractionCount}`,
+        title: `${sessionNotificationTitle(s)} needs input`,
+        body: s.pendingPermissionMessage
+          ?? (s.pendingPermissionTool ? `Approve: ${s.pendingPermissionTool}` : 'Session has pending input.'),
+      })
     }
     // recap timestamp change
     const oldTs = old?.latestRecap?.timestamp ?? null

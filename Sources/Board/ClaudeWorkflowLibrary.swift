@@ -364,7 +364,7 @@ struct AssistantClaudeWorkflowNodeDraftGenerator: ClaudeWorkflowNodeDraftGenerat
 
     func generatePlan(workflow: ClaudeWorkflowFile, source: String) throws -> ClaudeWorkflowImportPlan {
         let systemPrompt = """
-        You convert saved Claude Code workflow JavaScript into a meee2 canvas.
+        You convert saved Claude Code workflow JavaScript into a Meee2 canvas.
         Return ONLY strict JSON. Do not use markdown fences or prose.
         Do not claim the workflow has run. Do not include runtime session ids or execution results.
         Output shape:

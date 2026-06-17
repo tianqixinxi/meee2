@@ -52,6 +52,133 @@ final class AgentLaunchCommandTests: XCTestCase {
         XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust")
     }
 
+    func testLaunchCommandUsesProviderSpecificPermissionModes() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest"),
+            "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "readOnly"),
+            "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "default"),
+            "claude --permission-mode default"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "acceptEdits"),
+            "claude --permission-mode acceptEdits"
+        )
+    }
+
+    func testLaunchCommandSupportsPlanModeForBothProviders() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "fullAccess", planMode: true),
+            "claude --permission-mode plan"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "plan"),
+            "claude --permission-mode plan"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest", planMode: true),
+            "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "plan"),
+            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+        )
+    }
+
+    func testLauncherInitialPromptUsesCodexPlanSlashCommand() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: true, initialPrompt: "ship the launcher fix"),
+            "/plan ship the launcher fix"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: true, initialPrompt: "   "),
+            "/plan"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "codex", planMode: false, initialPrompt: "  ship it  "),
+            "ship it"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(forProvider: "claude", planMode: true, initialPrompt: "  plan this  "),
+            "plan this"
+        )
+    }
+
+    func testLauncherInitialPromptPrefixesAttachmentPaths() {
+        let attachments = [
+            AgentLaunchAttachment(path: "/tmp/screenshot.png", filename: "screenshot.png", contentType: "image/png"),
+            AgentLaunchAttachment(path: "/tmp/spec.md", filename: "spec.md", contentType: "text/markdown")
+        ]
+
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: "codex",
+                planMode: false,
+                initialPrompt: "review these",
+                attachments: attachments
+            ),
+            "@/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: "codex",
+                planMode: true,
+                initialPrompt: "review these",
+                attachments: attachments
+            ),
+            "/plan @/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: "claude",
+                planMode: false,
+                initialPrompt: "   ",
+                attachments: [attachments[0]]
+            ),
+            "@/tmp/screenshot.png"
+        )
+    }
+
+    func testLauncherDisplayPromptStripsCodexPlanSlashCommand() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "/plan ship the launcher fix"),
+            "ship the launcher fix"
+        )
+        XCTAssertNil(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "/plan")
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "ship it"),
+            "ship it"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(
+                forDeliveredInitialPrompt: "@/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+            ),
+            "review these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(
+                forDeliveredInitialPrompt: "@/tmp/My Project/screenshot.png\nreview these"
+            ),
+            "review these"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launcherDisplayPrompt(
+                forDeliveredInitialPrompt: "/plan @/tmp/screenshot.png\n@/tmp/spec.md\nreview these"
+            ),
+            "review these"
+        )
+        XCTAssertNil(
+            AgentLaunchCommand.launcherDisplayPrompt(forDeliveredInitialPrompt: "@/tmp/screenshot.png")
+        )
+    }
+
     func testResumeCommandUsesProviderResumeSyntax() {
         XCTAssertEqual(
             AgentLaunchCommand.resumeCommand(forProvider: "claude", sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"),
@@ -65,6 +192,7 @@ final class AgentLaunchCommandTests: XCTestCase {
 
     func testProviderResumeIdHeuristicRequiresRealUuidAndRejectsInternalIds() {
         XCTAssertTrue(AgentLaunchCommand.isLikelyProviderResumeSessionId("8db44e39-685d-47ab-bd0e-5e97386ded80"))
+        XCTAssertTrue(AgentLaunchCommand.isLikelyProviderResumeSessionId("019ecba0-beb9-7dc3-b779-33f7f06453c0"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-8db44e39-685d-47ab-bd0e-5e97386ded80"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-ghostty-8db44e39-685d-47ab-bd0e-5e97386ded80"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-123"))

@@ -34,6 +34,10 @@ type PlannerGraphMode = 'design' | 'run'
 // update re-rendered all artifact-less nodes, which caused continuous edge
 // flicker after Push 5(成果 row referenced data.artifacts).
 const EMPTY_ARTIFACTS: PlannerArtifact[] = Object.freeze([]) as unknown as PlannerArtifact[]
+const IO_ARTIFACT_SIDE_GAP = 48
+const IO_ARTIFACT_ROW_GAP = 24
+const IO_ARTIFACT_COLLISION_PADDING = 32
+const DEFAULT_NODE_COLUMN_GAP = 560
 
 /**
  * Default node size by widget kind (P2.5).
@@ -176,6 +180,8 @@ export interface PlannerNodeData extends Record<string, unknown> {
   monitorItem?: CanvasNodeMonitorItem | null
   /** Ephemeral one-shot guidance highlight; never persisted to planner state. */
   guided?: boolean
+  /** Runtime-only spacing applied while expanded I/O artifact nodes are visible. */
+  autoSpaced?: boolean
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
@@ -385,9 +391,10 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       },
     }
   })
+  const spacedGraphNodes = applyVisibleIOArtifactSpacing(graphNodes, input.ioArtifactVisibility ?? {})
   const virtualArtifactNodes = buildVisibleIOArtifactNodes({
     previewNodes,
-    graphNodes,
+    graphNodes: spacedGraphNodes,
     visibility: input.ioArtifactVisibility ?? {},
     onOpenDetails: input.onOpenDetails,
     onOpenArtifact: input.onOpenArtifact,
@@ -396,7 +403,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
     onHideIOArtifact: input.onHideIOArtifact,
   })
 
-  const perceptionByNodeId = new Map(graphNodes.map((node) => [node.id, node.data.perception]))
+  const perceptionByNodeId = new Map(spacedGraphNodes.map((node) => [node.id, node.data.perception]))
   const edges = [
     ...buildDependencyEdges(
       previewNodes,
@@ -407,7 +414,94 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
     ),
     ...buildIOArtifactEdges(virtualArtifactNodes),
   ]
-  return { nodes: [...graphNodes, ...virtualArtifactNodes.map((item) => item.node)], edges }
+  return { nodes: [...spacedGraphNodes, ...virtualArtifactNodes.map((item) => item.node)], edges }
+}
+
+function applyVisibleIOArtifactSpacing(
+  graphNodes: PlannerGraphNode[],
+  visibility: Record<string, IOArtifactVisibility>,
+): PlannerGraphNode[] {
+  if (!Object.values(visibility).some((entry) => entry.outputs.length > 0)) return graphNodes
+
+  let spaced = graphNodes
+  const downstreamBySourceId = buildDownstreamNodeIdMap(graphNodes)
+  const sortedSources = [...graphNodes]
+    .filter((node) => (visibility[node.id]?.outputs.length ?? 0) > 0)
+    .sort((a, b) => a.position.x - b.position.x || a.id.localeCompare(b.id))
+
+  for (const source of sortedSources) {
+    const visibleOutputs = visibility[source.id]?.outputs ?? []
+    if (visibleOutputs.length === 0) continue
+
+    const sourceNode = spaced.find((node) => node.id === source.id)
+    if (!sourceNode) continue
+    const sourceRect = flowNodeRect(sourceNode)
+    const maxArtifactWidth = Math.max(
+      ...visibleOutputs.map((item) => artifactNodeWidthForKind(visibleOutputKind(sourceNode, item))),
+      artifactNodeWidthForKind('text'),
+    )
+    const reservedRight = sourceRect.x + sourceRect.width + IO_ARTIFACT_SIDE_GAP + maxArtifactWidth + IO_ARTIFACT_SIDE_GAP
+    const downstreamIds = downstreamBySourceId.get(source.id) ?? new Set<string>()
+    const downstreamNodes = spaced.filter((node) => downstreamIds.has(node.id) && node.position.x > sourceRect.x)
+    const affectedNodes = downstreamNodes.length > 0
+      ? downstreamNodes
+      : spaced.filter((node) => node.id !== source.id && node.position.x > sourceRect.x)
+    const firstAffectedX = Math.min(...affectedNodes.map((node) => node.position.x))
+    if (!Number.isFinite(firstAffectedX) || firstAffectedX >= reservedRight) continue
+
+    const delta = reservedRight - firstAffectedX
+    spaced = spaced.map((node) => {
+      if (node.id === source.id || node.position.x < firstAffectedX) return node
+      return {
+        ...node,
+        position: { ...node.position, x: node.position.x + delta },
+        data: { ...node.data, autoSpaced: true },
+      }
+    })
+  }
+
+  return spaced
+}
+
+function buildDownstreamNodeIdMap(graphNodes: PlannerGraphNode[]): Map<string, Set<string>> {
+  const childrenBySourceId = new Map<string, string[]>()
+  for (const node of graphNodes) {
+    for (const dependencyId of node.data.node.dependsOnNodeIds ?? []) {
+      const children = childrenBySourceId.get(dependencyId) ?? []
+      children.push(node.id)
+      childrenBySourceId.set(dependencyId, children)
+    }
+  }
+
+  const cache = new Map<string, Set<string>>()
+  const collect = (nodeId: string, visiting = new Set<string>()): Set<string> => {
+    const cached = cache.get(nodeId)
+    if (cached) return cached
+    if (visiting.has(nodeId)) return new Set()
+    visiting.add(nodeId)
+    const result = new Set<string>()
+    for (const childId of childrenBySourceId.get(nodeId) ?? []) {
+      result.add(childId)
+      for (const descendantId of collect(childId, visiting)) {
+        result.add(descendantId)
+      }
+    }
+    visiting.delete(nodeId)
+    cache.set(nodeId, result)
+    return result
+  }
+
+  for (const node of graphNodes) collect(node.id)
+  return cache
+}
+
+function visibleOutputKind(sourceNode: PlannerGraphNode, item: string): IOArtifactKind {
+  const artifact = sourceNode.data.artifacts.find((candidate) =>
+    candidate.reference === item ||
+    normalizeIOKey(candidate.reference) === normalizeIOKey(item) ||
+    normalizeIOKey(candidate.title) === normalizeIOKey(item),
+  )
+  return artifact ? artifactKindForArtifact(artifact, item) : artifactKindFor(item)
 }
 
 function buildVisibleIOArtifactNodes(input: {
@@ -421,6 +515,7 @@ function buildVisibleIOArtifactNodes(input: {
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
 }): Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection; downstreamNodeIds: string[] }> {
   const graphNodeById = new Map(input.graphNodes.map((node) => [node.id, node]))
+  const occupiedRects = input.graphNodes.map((node) => flowNodeRect(node))
   const result: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection; downstreamNodeIds: string[] }> = []
   for (const { node: sourceNode } of input.previewNodes) {
     // canvas-spec §7.1 — step AND session nodes can expand their I/O slot
@@ -462,22 +557,24 @@ function buildVisibleIOArtifactNodes(input: {
     for (const entry of [...inputs, ...outputs]) {
       const id = ioArtifactNodeId(sourceNode.id, entry.direction, entry.item)
       const artifactKind = entry.artifact ? artifactKindForArtifact(entry.artifact, entry.reference) : artifactKindFor(entry.reference)
-      const xOffset = entry.direction === 'input' ? -300 : 360
       const downstreamNodeIds = entry.direction === 'output'
         ? input.previewNodes
           .map(({ node }) => node)
           .filter((node) => node.id !== sourceNode.id && (node.dependsOnNodeIds ?? []).includes(sourceNode.id))
           .map((node) => node.id)
         : []
-      const height = artifactKind === 'kanban' ? 280 : 120
+      const height = artifactNodeHeightForKind(artifactKind)
       // 默认宽度 seed:kanban 420、html/json/file 360、其余 240。原来这些宽度写死
       // 在 CSS 里;改成 NodeResizer 自由调整后,默认宽度统一由外框 initialWidth 给。
-      const initialWidth = artifactKind === 'kanban'
-        ? 420
-        : artifactKind === 'html' || artifactKind === 'json' || artifactKind === 'file'
-          ? 360
-          : 240
-      const yOffset = entry.index * (artifactKind === 'kanban' ? 292 : 112)
+      const initialWidth = artifactNodeWidthForKind(artifactKind)
+      const artifactPosition = placeIOArtifactNode({
+        sourceNode: sourceGraphNode,
+        direction: entry.direction,
+        index: entry.index,
+        width: initialWidth,
+        height,
+        occupiedRects,
+      })
       const artifactNode: PlanningNode = {
         id,
         canvasId: sourceNode.canvasId,
@@ -506,10 +603,7 @@ function buildVisibleIOArtifactNodes(input: {
         node: {
           id,
           type: 'plannerNode' as const,
-          position: {
-            x: sourceGraphNode.position.x + xOffset,
-            y: sourceGraphNode.position.y + yOffset,
-          },
+          position: artifactPosition,
           // 同主节点:width 确定、height 留给内容自适应(虚拟 I/O 节点不落库,
           // 调整仅在本次会话内有效)。
           width: initialWidth,
@@ -542,9 +636,94 @@ function buildVisibleIOArtifactNodes(input: {
           },
         },
       })
+      occupiedRects.push({ ...artifactPosition, width: initialWidth, height })
     }
   }
   return result
+}
+
+interface FlowRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function flowNodeRect(node: PlannerGraphNode): FlowRect {
+  const planningNode = node.data.node
+  const fallback = widgetDefaultSize(planningNode.widget?.kind)
+  const width = typeof node.width === 'number'
+    ? node.width
+    : typeof planningNode.layout?.width === 'number'
+      ? planningNode.layout.width
+      : fallback.width
+  const height = typeof node.height === 'number'
+    ? node.height
+    : typeof planningNode.layout?.height === 'number'
+      ? planningNode.layout.height
+      : typeof (node as { initialHeight?: unknown }).initialHeight === 'number'
+        ? (node as { initialHeight: number }).initialHeight
+        : fallback.height
+  return { x: node.position.x, y: node.position.y, width, height }
+}
+
+function placeIOArtifactNode(input: {
+  sourceNode: PlannerGraphNode
+  direction: IOArtifactDirection
+  index: number
+  width: number
+  height: number
+  occupiedRects: FlowRect[]
+}): { x: number; y: number } {
+  const sourceRect = flowNodeRect(input.sourceNode)
+  const rowStep = input.height + IO_ARTIFACT_ROW_GAP
+  const baseY = sourceRect.y + input.index * rowStep
+  const primaryX = input.direction === 'output'
+    ? sourceRect.x + sourceRect.width + IO_ARTIFACT_SIDE_GAP
+    : sourceRect.x - input.width - IO_ARTIFACT_SIDE_GAP
+  const secondaryX = input.direction === 'output'
+    ? sourceRect.x - input.width - IO_ARTIFACT_SIDE_GAP
+    : sourceRect.x + sourceRect.width + IO_ARTIFACT_SIDE_GAP
+  const centeredX = sourceRect.x + (sourceRect.width - input.width) / 2
+  const belowY = sourceRect.y + sourceRect.height + IO_ARTIFACT_SIDE_GAP + input.index * rowStep
+  const aboveY = sourceRect.y - input.height - IO_ARTIFACT_SIDE_GAP - input.index * rowStep
+
+  const sideOffsets = alternatingOffsets(rowStep, 12)
+  const candidates = [
+    ...sideOffsets.map((offset) => ({ x: primaryX, y: baseY + offset })),
+    ...sideOffsets.map((offset) => ({ x: secondaryX, y: baseY + offset })),
+    ...sideOffsets.slice(0, 6).map((offset) => ({ x: centeredX + offset * 0.4, y: belowY })),
+    ...sideOffsets.slice(0, 6).map((offset) => ({ x: centeredX + offset * 0.4, y: aboveY })),
+  ]
+
+  for (const candidate of candidates) {
+    const rect = { ...candidate, width: input.width, height: input.height }
+    if (!input.occupiedRects.some((occupied) => rectsOverlap(rect, occupied, IO_ARTIFACT_COLLISION_PADDING))) {
+      return candidate
+    }
+  }
+
+  return {
+    x: primaryX,
+    y: sourceRect.y + (input.occupiedRects.length + input.index + 1) * rowStep,
+  }
+}
+
+function alternatingOffsets(step: number, count: number): number[] {
+  const offsets = [0]
+  for (let i = 1; i <= count; i += 1) {
+    offsets.push(i * step, -i * step)
+  }
+  return offsets
+}
+
+function rectsOverlap(a: FlowRect, b: FlowRect, padding = 0): boolean {
+  return (
+    a.x < b.x + b.width + padding &&
+    a.x + a.width + padding > b.x &&
+    a.y < b.y + b.height + padding &&
+    a.y + a.height + padding > b.y
+  )
 }
 
 function buildIOArtifactEdges(
@@ -763,6 +942,16 @@ function artifactKindForArtifact(artifact: PlannerArtifact, fallback: string): I
     return artifactKindFor(String(payload.filename ?? payload.mimeType ?? fallback))
   }
   return artifactKindFor(artifact.reference || fallback)
+}
+
+function artifactNodeWidthForKind(kind: IOArtifactKind): number {
+  if (kind === 'kanban') return 420
+  if (kind === 'html' || kind === 'json' || kind === 'file') return 360
+  return 240
+}
+
+function artifactNodeHeightForKind(kind: IOArtifactKind): number {
+  return kind === 'kanban' ? 280 : 120
 }
 
 function sortArtifactsForDisplay(artifacts: PlannerArtifact[]): PlannerArtifact[] {
@@ -1149,7 +1338,7 @@ function buildNodePositions(nodes: PlanningNode[]): Map<string, { x: number; y: 
     const startY = -((sorted.length - 1) * 270) / 2
     sorted.forEach((node, row) => {
       positionByNodeId.set(node.id, {
-        x: depth * 390,
+        x: depth * DEFAULT_NODE_COLUMN_GAP,
         y: startY + row * 270,
       })
     })

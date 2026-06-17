@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { ArtifactsView } from './ArtifactsView'
@@ -72,6 +73,13 @@ const node: PlanningNode = {
   subCanvasId: null,
 }
 
+const smokeNode: PlanningNode = {
+  ...node,
+  id: 'smoke-node',
+  title: 'Smoke validation',
+  sessionId: 'session-other',
+}
+
 function artifact(input: Partial<PlannerArtifact> & { id: string; kind: PlannerArtifact['kind'] }): PlannerArtifact {
   return {
     id: input.id,
@@ -119,11 +127,11 @@ const versions: PlannerArtifactVersion[] = [
   },
 ]
 
-function renderView() {
+function renderView(props: Partial<ComponentProps<typeof ArtifactsView>> = {}) {
   const onOpenCanvas = vi.fn()
   render(
     <I18nProvider>
-      <ArtifactsView canvases={canvases} activeCanvasId="monitor" onOpenCanvas={onOpenCanvas} />
+      <ArtifactsView canvases={canvases} activeCanvasId="monitor" onOpenCanvas={onOpenCanvas} {...props} />
     </I18nProvider>,
   )
   return { onOpenCanvas }
@@ -133,7 +141,21 @@ describe('ArtifactsView global index', () => {
   beforeEach(() => {
     apiMocks.fetchPlannerGraphState.mockImplementation((canvasId: string) => Promise.resolve({
       canvas: { id: canvasId, ownerId: 'kai', title: canvasId, plannerContext: '' },
-      nodes: [node],
+      nodes: canvasId === 'monitor'
+        ? [
+          {
+            ...node,
+            sessionId: 'session-a',
+          },
+          smokeNode,
+        ]
+        : [
+          {
+            ...node,
+            canvasId,
+            sessionId: 'session-other',
+          },
+        ],
       states: [],
       proposals: [],
       events: [],
@@ -165,6 +187,7 @@ describe('ArtifactsView global index', () => {
           artifact({
             id: 'smoke',
             kind: 'check-result',
+            nodeId: 'smoke-node',
             title: 'Smoke Test',
             reference: 'smoke.json',
             createdAt: '2026-06-01T10:00:00Z',
@@ -207,7 +230,11 @@ describe('ArtifactsView global index', () => {
             createdAt: '2026-06-03T08:00:00Z',
             typedPayload: {
               type: 'markdown',
-              preview: '# Team Review\nReady for review',
+              preview: `# Team Review
+Ready for review
+
+${'Detailed team review context. '.repeat(30)}
+SHOULD_NOT_APPEAR_IN_DETAIL`,
             },
           }),
           artifact({
@@ -294,7 +321,7 @@ describe('ArtifactsView global index', () => {
       expect((await screen.findAllByText('payload://release-v2')).length).toBeGreaterThan(0)
 
       const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
-      fireEvent.click(within(detail).getByRole('button', { name: /Open in Canvas/ }))
+      fireEvent.click(within(detail).getByRole('button', { name: /Reveal source/ }))
 
       expect(opened).toEqual([
         expect.objectContaining({
@@ -321,6 +348,52 @@ describe('ArtifactsView global index', () => {
     await waitFor(() => {
       expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
     })
+  })
+
+  it('filters the artifact index to one session when launched from a session', async () => {
+    const onClearSessionFilter = vi.fn()
+    renderView({
+      sessionFilter: { sessionId: 'session-a', title: '新增 Session 原生 Terminal' },
+      onClearSessionFilter,
+    })
+
+    expect(await screen.findByText('Session: 新增 Session 原生 Terminal')).toBeInTheDocument()
+    await screen.findAllByText('Release PRD')
+    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect(screen.queryByText('GitHub PR #128')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Session: 新增 Session 原生 Terminal' }))
+    expect(onClearSessionFilter).toHaveBeenCalled()
+  })
+
+  it('filters session artifacts by provider resume id when the visible session id differs', async () => {
+    renderView({
+      sessionFilter: {
+        sessionId: 'historical-session',
+        providerResumeSessionId: 'session-a',
+        title: '历史 Session',
+      },
+    })
+
+    expect(await screen.findByText('Session: 历史 Session')).toBeInTheDocument()
+    await screen.findAllByText('Release PRD')
+    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect(screen.queryByText('GitHub PR #128')).not.toBeInTheDocument()
+  })
+
+  it('falls back to project name when a session has no node-bound artifact id match', async () => {
+    renderView({
+      sessionFilter: {
+        sessionId: 'unbound-session',
+        title: 'Release project session',
+        projectName: 'release',
+      },
+    })
+
+    expect(await screen.findByText('Session: Release project session')).toBeInTheDocument()
+    await screen.findAllByText('GitHub PR #128')
+    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
   })
 
   it('creates a review proposal from the artifact detail actions', async () => {
@@ -388,7 +461,7 @@ describe('ArtifactsView global index', () => {
 
     expect((await screen.findAllByText('Legacy Kanban Payload')).length).toBeGreaterThan(0)
     expect(await screen.findByText('待处理')).toBeInTheDocument()
-    expect(screen.getByText('Scope fallback')).toBeInTheDocument()
+    expect(screen.queryByText('Scope fallback')).not.toBeInTheDocument()
 
     const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
     fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
@@ -397,5 +470,21 @@ describe('ArtifactsView global index', () => {
     expect(within(modal).getByText('已生成')).toBeInTheDocument()
     expect(within(modal).getByText('Render typed preview')).toBeInTheDocument()
     expect(within(modal).queryByText(/"columns"/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the detail preview summarized while the content modal renders the full payload', async () => {
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+
+    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    expect(await within(detail).findByRole('heading', { name: 'Team Review Notes' })).toBeInTheDocument()
+    expect(within(detail).queryByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).not.toBeInTheDocument()
+
+    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    expect(within(modal).getByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).toBeInTheDocument()
   })
 })

@@ -1935,6 +1935,11 @@ struct PlanProposal: Codable, Equatable {
     /// initialization (`PlanProposal(id:canvasId:summary:changes:status:)`)
     /// still type-checks.
     var warnings: [String]?
+    /// propose_add_node · 提案来源归属:发起方是哪个节点的工作会话。nil ⇒ owner /
+    /// planner-agent 渠道(既有提案)。权限按发起节点的 requireNodeUpdate 门控
+    /// (doer 只能从自己的节点发起),UI 据此显示「来自节点 X 的提议」。
+    var originNodeId: String?
+    var originSessionId: String?
 }
 
 enum NodeRunState: String, Codable, Equatable {
@@ -2574,10 +2579,30 @@ extension NodeContractV2 {
         )
 
         let cardinality: NodeContractCardinality = (node.nodeKind == .external) ? .list : .single
+        // external-first writeback: an OUTPUT slot whose reference carries a
+        // recognized *named* connector scheme (gsheet:// / lark:// / notion:// …)
+        // declares the node writes its result directly to that external object —
+        // mirror of the input-side `inferConnector`. The executing agent reads
+        // `output.external_write_target` + the standing MCP rule and writes
+        // external-first (not the mirror); meee2 reconciles the mirror snapshot
+        // after a gating submit. Generic http/file/internal schemes are NOT
+        // external write targets — only the named connectors below.
+        var externalWriteTarget: NodeContractExternalWriteTarget?
+        let externalOutputs = node.schema.outputs.compactMap { slot -> NodeContractExternalWriteTarget? in
+            externalWriteConnector(forOutputRef: slot).map {
+                NodeContractExternalWriteTarget(connector: $0, ref: slot)
+            }
+        }
+        if let first = externalOutputs.first {
+            externalWriteTarget = first
+            if externalOutputs.count > 1 {
+                warnings.append("Node \(node.id) declares \(externalOutputs.count) external output slots; contract external_write_target keeps only \(first.ref) — split extra external writes into separate nodes.")
+            }
+        }
         let output = NodeContractOutput(
             cardinality: cardinality,
             payloadKind: .artifactRef,
-            externalWriteTarget: nil
+            externalWriteTarget: externalWriteTarget
         )
 
         let v2 = NodeContractV2(
@@ -2585,6 +2610,20 @@ extension NodeContractV2 {
             output: output
         )
         return (v2, warnings)
+    }
+
+    /// Generic / internal schemes that `inferConnector` recognizes but which are
+    /// NOT external-connector write targets: a bare http(s) URL, a local file,
+    /// or the internal `meee2-artifact://` mirror scheme. An output slot using
+    /// these is just a plain artifact reference, not "write to an external object."
+    private static let nonExternalWriteConnectors: Set<String> = ["http", "file", "meee2-artifact"]
+
+    /// The external connector an OUTPUT slot reference writes to, or nil if the
+    /// slot is a plain name / generic / internal reference. Reuses the same
+    /// scheme table as the input side so input and output stay symmetric.
+    static func externalWriteConnector(forOutputRef ref: String) -> String? {
+        guard let connector = inferConnector(from: ref) else { return nil }
+        return nonExternalWriteConnectors.contains(connector) ? nil : connector
     }
 
     /// Best-effort connector inference from a context-source reference. This
@@ -2641,6 +2680,13 @@ struct PlannerNodeOutputResult: Codable, Equatable {
     /// creating…" without a manual click. UI surfaces the same node ids so it
     /// can render the affordance immediately on the optimistic path.
     var autoDispatchedNodeIds: [String]?
+    /// external-first writeback: external-object references (e.g.
+    /// `gsheet://venture-tracker/Pipeline`) whose mirror should be reconciled
+    /// after THIS (gating) submit. Computed engine-side; BoardAPI materializes
+    /// each into a dedicated artifact-sync session — same split as
+    /// `autoDispatchedNodeIds` (engine decides, BoardAPI spawns). Only populated
+    /// on a downstream-gating `.done` submit; nil/empty otherwise.
+    var reconcileReferences: [String]?
 }
 
 struct PlannerEvent: Codable, Equatable {
@@ -2801,7 +2847,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidPlannerProposalJSON:
-            return "meee2 AI proposal output is not valid JSON"
+            return "Meee2 AI proposal output is not valid JSON"
         case .proposalNotApproved:
             return "plan proposal must be approved before apply"
         case .proposalNotFound(let id):
@@ -2811,7 +2857,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
         case .canvasMismatch(let expected, let actual):
             return "proposal canvas mismatch: expected \(expected), got \(actual)"
         case .emptyProposalChanges:
-            return "meee2 AI proposal must contain at least one change"
+            return "Meee2 AI proposal must contain at least one change"
         case .missingNodeForAdd:
             return "addNode change is missing node"
         case .missingNodeId:
@@ -2829,15 +2875,15 @@ enum PlannerCoreError: LocalizedError, Equatable {
         case .monitorClearNotAllowed(let id):
             return "monitor canvas cannot be cleared: \(id)"
         case .permissionDenied(let action, let role):
-            return "meee2 AI \(action) is not allowed for \(role.rawValue)"
+            return "Meee2 AI \(action) is not allowed for \(role.rawValue)"
         case .crossCanvasNodeReference(let nodeId, let expectedCanvas):
-            return "meee2 AI proposal references node \(nodeId) outside canvas \(expectedCanvas)"
+            return "Meee2 AI proposal references node \(nodeId) outside canvas \(expectedCanvas)"
         case .unknownNodeKind(let kind):
-            return "meee2 AI proposal uses unknown node kind: \(kind)"
+            return "Meee2 AI proposal uses unknown node kind: \(kind)"
         case .sessionKindNoLongerCreatable(let nodeId):
             return "node \(nodeId) uses nodeKind='session', which is deprecated for new nodes; create a 'step' node with dispatch.runner='claude' instead"
         case .unknownChangeKind(let kind):
-            return "meee2 AI proposal uses unknown change kind: \(kind)"
+            return "Meee2 AI proposal uses unknown change kind: \(kind)"
         case .invalidNodeOutput(let hint):
             return hint
         case .activeSessionExists(let nodeId):
@@ -2865,6 +2911,13 @@ enum PlannerPermissionAction: String {
 }
 
 enum PlannerPermission {
+    /// 本地 planner RBAC 的行动者身份。
+    ///
+    /// 故意 **不看** `authExpired`：nil 在下游（`access(for:)` 等）的语义是
+    /// 「纯本地模式 → owner 全权」，token 过期时返回 nil 会把 team 成员在
+    /// 本地镜像画布上提权成 owner。过期窗口内保留最后已知身份反而是权限
+    /// 最小的选择 —— 人没换，重新登录拿回的还是同一个 userId；身份只在
+    /// 显式断开（disconnect 清空 settings.json）时清除。
     static func currentActorId() -> String? {
         let defaults = UserDefaults.standard
         let onlineSettings = OnlineProxy.loadSettings()
@@ -3349,10 +3402,10 @@ final class PlannerCoreService {
             PlanningNode(
                 id: "\(canvasId)-node-1",
                 canvasId: canvasId,
-                title: "meee2 AI LLM Spike",
+                title: "Meee2 AI LLM Spike",
                 schema: NodeSchema(
                     inputs: ["owner goal", "canvas context"],
-                    outputs: ["initial meee2 AI proposal"],
+                    outputs: ["initial Meee2 AI proposal"],
                     goal: "proposal created"
                 ),
                 contextSources: [
@@ -8510,14 +8563,14 @@ enum PlannerBoardBridge {
         let node = PlanningNode(
             id: "\(canvas.id)-proposal-node-\(proposalUUID)",
             canvasId: canvas.id,
-            title: title.isEmpty ? "Generated meee2 AI node" : title,
+            title: title.isEmpty ? "Generated Meee2 AI node" : title,
             schema: NodeSchema(
-                inputs: ["owner goal", "meee2 AI context"],
+                inputs: ["owner goal", "Meee2 AI context"],
                 outputs: ["executable node output"],
                 goal: "owner approves generated proposal"
             ),
             contextSources: [
-                ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
+                ContextSource(kind: .document, title: "Meee2 AI context", reference: canvas.plannerContext)
             ],
             executionMode: .human,
             executorType: .mock,
@@ -8527,7 +8580,7 @@ enum PlannerBoardBridge {
         return try PlanProposal(
             id: "proposal-\(canvas.id)-generate-\(proposalUUID)",
             canvasId: canvas.id,
-            summary: "Generate meee2 AI graph for \(canvas.title)",
+            summary: "Generate Meee2 AI graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
@@ -8552,7 +8605,7 @@ enum PlannerBoardBridge {
             id: "proposal-\(canvasId)-adapter-\(UUID().uuidString.lowercased())",
             canvasId: canvasId,
             summary: proposal.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Generate meee2 AI graph for \(state.canvas.title)"
+                ? "Generate Meee2 AI graph for \(state.canvas.title)"
                 : proposal.summary,
             changes: proposal.changes,
             status: .pending
@@ -8578,11 +8631,80 @@ enum PlannerBoardBridge {
             id: "proposal-\(canvasId)-graph-\(UUID().uuidString.lowercased())",
             canvasId: canvasId,
             summary: summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Update meee2 AI graph"
+                ? "Update Meee2 AI graph"
                 : summary,
             changes: changes,
             status: .pending
         )
+        return try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+    }
+
+    /// proposal 子功能 · propose_add_node:运行节点的工作会话提议新增一个 step。
+    ///
+    /// 与 `graphChangeProposal`(owner-only `.createProposal`)不同,这里按
+    /// **发起节点** 做 `requireNodeUpdate` 门控 —— doer 可从自己的节点发起
+    /// (职责≡权限),但产物仍是 pending 提案,必须 owner approve+apply 才落图。
+    /// 校验失败往上抛,MCP 层原样透传给 agent 自纠
+    /// (meee2-ai-is-claude-harness-self-correct)。
+    ///
+    /// 新节点默认 `dependsOnNodeIds = [originNodeId]`(画布上呈现 主→子 边,
+    /// 调用方可显式传 `[]` 表示无依赖),执行皮肤(executionMode / executorType /
+    /// doer)继承发起节点 —— triage 类主节点孵化出的子 step 默认同一执行形态。
+    static func proposeAddNode(
+        originNodeId: String,
+        originSessionId: String?,
+        title: String,
+        goal: String?,
+        summary: String?,
+        dependsOnNodeIds: [String]?,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let origin = state.nodes.first(where: { $0.id == originNodeId }) else {
+            throw PlannerCoreError.nodeNotFound(originNodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: origin, access: state.access)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            throw PlannerCoreError.invalidNodeOutput("propose_add_node requires a non-empty title for the new step")
+        }
+        let trimmedGoal = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposalUUID = UUID().uuidString.lowercased()
+        let node = PlanningNode(
+            id: "\(canvasId)-node-\(proposalUUID)",
+            canvasId: canvasId,
+            title: trimmedTitle,
+            schema: NodeSchema(
+                inputs: [origin.title],
+                outputs: ["\(trimmedTitle) output"],
+                goal: (trimmedGoal?.isEmpty == false ? trimmedGoal! : trimmedTitle)
+            ),
+            contextSources: [],
+            executionMode: origin.executionMode,
+            executorType: origin.executorType,
+            doerId: origin.doerId,
+            status: .ready,
+            source: .session,
+            dependsOnNodeIds: dependsOnNodeIds ?? [originNodeId],
+            nodeKind: .step
+        )
+        let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var proposal = PlanProposal(
+            id: "proposal-\(canvasId)-node-\(proposalUUID)",
+            canvasId: canvasId,
+            summary: (trimmedSummary?.isEmpty == false ? trimmedSummary! : "Add step \"\(trimmedTitle)\" (proposed from node \(origin.title))"),
+            changes: [.addNode(node)],
+            status: .pending
+        )
+        proposal.originNodeId = originNodeId
+        proposal.originSessionId = originSessionId
         return try proposal.saved(
             in: store,
             canvas: state.canvas,
@@ -9111,13 +9233,35 @@ enum PlannerBoardBridge {
                     artifacts: graph.artifacts.filter { $0.nodeId == nodeId }
                 )
             }
+        // external-first writeback: on a downstream-gating submit (`.done`),
+        // reconcile the mirror of every external-object reference this submit
+        // wrote — the agent wrote the real object external-first, so meee2 pulls
+        // the authoritative snapshot back. Driven by the artifacts ACTUALLY
+        // submitted (not just declared slots) so we only reconcile what changed.
+        // A custom stateSchema's gatesDownstream state is already folded to
+        // `.done` by the BoardAPI handler before decode, so `.done` covers both.
+        // blocked / needs_review never reach here — the external write likely
+        // didn't happen, and an empty list spawns no sync session.
+        var reconcileRefs: [String] = []
+        if output.status == .done {
+            var seen = Set<String>()
+            for artifact in normalizedOutput.artifacts {
+                let ref = artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !ref.isEmpty,
+                      NodeContractV2.externalWriteConnector(forOutputRef: ref) != nil,
+                      seen.insert(ref).inserted
+                else { continue }
+                reconcileRefs.append(ref)
+            }
+        }
         return PlannerNodeOutputResult(
             graph: graph,
             routes: submitted.routes,
             hint: requirementHint,
             versionId: submitted.version?.id,
             versionIndex: submitted.version?.versionIndex,
-            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
+            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds,
+            reconcileReferences: reconcileRefs.isEmpty ? nil : reconcileRefs
         )
     }
 
@@ -9338,7 +9482,7 @@ enum PlannerBoardBridge {
         return try PlanProposal(
             id: "proposal-\(node.id)-drift-\(UUID().uuidString.lowercased())",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift for \(node.title)",
+            summary: "Meee2 AI detected drift for \(node.title)",
             changes: [
                 .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .ready)
             ],
@@ -10353,14 +10497,14 @@ final class MockPlannerAgent: PlannerAgent {
         let node = PlanningNode(
             id: "\(canvas.id)-planner-generated-1",
             canvasId: canvas.id,
-            title: goal.isEmpty ? "Generated meee2 AI node" : goal,
+            title: goal.isEmpty ? "Generated Meee2 AI node" : goal,
             schema: NodeSchema(
                 inputs: ["owner goal"],
                 outputs: ["first executable output"],
                 goal: "complete the generated node"
             ),
             contextSources: [
-                ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
+                ContextSource(kind: .document, title: "Meee2 AI context", reference: canvas.plannerContext)
             ],
             executionMode: .human,
             executorType: .mock,
@@ -10370,7 +10514,7 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(canvas.id)-generate",
             canvasId: canvas.id,
-            summary: "Generate initial meee2 AI graph for \(canvas.title)",
+            summary: "Generate initial Meee2 AI graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
@@ -10405,7 +10549,7 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(node.id)-drift",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift for \(node.title)",
+            summary: "Meee2 AI detected drift for \(node.title)",
             changes: [
                 .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .ready)
             ],
@@ -10504,7 +10648,7 @@ final class LLMPlannerAgent: PlannerAgent {
 
 enum PlannerPromptFactory {
     static let systemPrompt = """
-    You are meee2 AI. Return only strict JSON for PlanProposal, or null when no proposal is needed.
+    You are Meee2 AI. Return only strict JSON for PlanProposal, or null when no proposal is needed.
     You may propose topology changes, but the owner approval API is the only path that can apply them.
     Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
     Supported PlanChange kinds are addNode and updateNode.

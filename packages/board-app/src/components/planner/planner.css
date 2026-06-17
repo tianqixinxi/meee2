@@ -911,13 +911,14 @@
 
 .planner-banner-stack {
   position: absolute;
-  top: 14px;
+  top: 8px;
   right: 14px;
-  z-index: 24;
+  z-index: var(--z-notice-overlay);
   display: flex;
-  width: min(520px, calc(100% - 28px));
+  width: min(660px, calc(100% - 28px));
   flex-direction: column;
   gap: 8px;
+  pointer-events: none;
 }
 
 .planner-mcp-banner {
@@ -932,6 +933,7 @@
   background: rgba(43, 35, 27, 0.94);
   color: var(--text);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
 }
 
 .planner-mcp-banner svg {
@@ -1070,15 +1072,14 @@
   background: var(--bg);
 }
 
-/* UI-simplification — Apply / Reject 显式悬浮在画板右上角,避免预览态卡死 */
 .planner-workspace-preview__actions {
-  position: absolute;
-  top: 14px;
-  right: 16px;
-  z-index: 23;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
+
 .planner-workspace-preview__btn {
   padding: 7px 14px;
   border-radius: 6px;
@@ -1113,23 +1114,26 @@
 }
 
 .planner-workspace-preview__notice {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 22;
   display: grid;
-  gap: 4px;
-  width: min(420px, calc(100% - 280px));
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
   padding: 10px 12px;
   border: 1px solid rgba(204, 120, 92, 0.34);
   border-radius: 8px;
   background: rgba(43, 35, 31, 0.94);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
-.planner-workspace-preview__notice span {
+.planner-workspace-preview__notice-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.planner-workspace-preview__notice-copy span {
   color: color-mix(in srgb, var(--accent-hover) 78%, var(--text));
   font-size: 10px;
   font-weight: 800;
@@ -1138,7 +1142,7 @@
   text-transform: uppercase;
 }
 
-.planner-workspace-preview__notice strong {
+.planner-workspace-preview__notice-copy strong {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
@@ -1148,7 +1152,7 @@
   white-space: nowrap;
 }
 
-.planner-workspace-preview__notice em {
+.planner-workspace-preview__notice-copy em {
   color: var(--text-dim);
   font-size: 11px;
   font-style: normal;
@@ -1157,6 +1161,17 @@
 
 .planner-workspace-preview .react-flow {
   min-height: 0;
+}
+
+@media (max-width: 760px) {
+  .planner-workspace-preview__notice {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .planner-workspace-preview__actions {
+    justify-content: flex-start;
+  }
 }
 
 /* ============================================================================
@@ -1893,7 +1908,7 @@
 .planner-node-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-inspector-overlay);
   display: flex;
   justify-content: flex-end;
   align-items: stretch;
@@ -5696,6 +5711,11 @@
   font-size: 12px;
 }
 
+/* propose_add_node · 来源归属行:节点会话发起的提案在审批模态标出来源 */
+.planner-proposal-modal__header p.planner-proposal-modal__origin {
+  color: var(--accent-hover);
+}
+
 .planner-proposal-modal__body {
   min-height: 0;
   display: grid;
@@ -6027,17 +6047,6 @@
   outline: none;
 }
 
-.planner-monitor__density {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid rgba(168, 165, 155, 0.16);
-  border-radius: var(--radius-sm);
-  background: rgba(18, 18, 16, 0.5);
-}
-
-.planner-monitor__density button,
 .planner-monitor__sessions-button {
   display: inline-flex;
   flex: none;
@@ -6049,19 +6058,6 @@
   background: rgba(44, 43, 41, 0.78);
   color: var(--text);
   font-size: 12px;
-}
-
-.planner-monitor__density button {
-  height: 28px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-dim);
-}
-
-.planner-monitor__density button.is-active {
-  border-color: rgba(236, 208, 132, 0.34);
-  background: rgba(236, 208, 132, 0.12);
-  color: var(--accent-hover);
 }
 
 .planner-monitor__filters {
@@ -6183,7 +6179,6 @@
   display: grid;
   gap: 3px;
   width: 100%;
-  min-height: 58px;
   padding: 6px 7px;
   border: 1px solid rgba(168, 165, 155, 0.16);
   border-left: 3px solid rgba(168, 165, 155, 0.28);
@@ -6194,9 +6189,8 @@
   cursor: pointer;
 }
 
-.planner-monitor__kanban[data-density="comfortable"] .planner-monitor-card {
+.planner-monitor-card--comfortable {
   gap: 7px;
-  min-height: 132px;
   padding: 10px;
 }
 
@@ -6204,8 +6198,6 @@
 .planner-monitor-card:focus-visible,
 .planner-monitor-lane__header:hover,
 .planner-monitor-lane__header:focus-visible,
-.planner-monitor__density button:hover,
-.planner-monitor__density button:focus-visible,
 .planner-monitor__sessions-button:hover,
 .planner-monitor__sessions-button:focus-visible {
   border-color: rgba(236, 208, 132, 0.38);
@@ -6262,22 +6254,17 @@
 }
 
 .planner-monitor-card h3 {
-  overflow: hidden;
   margin: 0;
   font-size: 12px;
   line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .planner-monitor-card__meta span,
 .planner-monitor-card__footer span,
 .planner-monitor-card__source {
   min-width: 0;
-  overflow: hidden;
   max-width: 100%;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .planner-monitor-card__meta span {
@@ -6286,35 +6273,11 @@
   background: rgba(245, 244, 239, 0.06);
 }
 
-.planner-monitor-card--comfortable .planner-monitor-card__meta {
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
 .planner-monitor-card p {
-  overflow: hidden;
   margin: 0;
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.planner-monitor__kanban[data-density="comfortable"] .planner-monitor-card h3 {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  font-size: 13px;
-  text-overflow: clip;
-  white-space: normal;
-}
-
-.planner-monitor__kanban[data-density="comfortable"] .planner-monitor-card p {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  text-overflow: clip;
   white-space: normal;
 }
 
@@ -6344,19 +6307,17 @@
   border-left-color: rgba(194, 106, 106, 0.72);
 }
 
-.planner-monitor-card p.is-blocker,
 .planner-monitor-card__attention.is-blocker {
   color: #edb0b0;
 }
 
 .planner-monitor-card__footer {
+  flex-wrap: wrap;
   justify-content: space-between;
 }
 
-.planner-monitor-card--comfortable .planner-monitor-card__footer {
-  justify-content: flex-start;
+.planner-monitor-card__meta {
   flex-wrap: wrap;
-  gap: 5px 8px;
 }
 
 .planner-monitor-card__footer .has-evidence {
@@ -6527,9 +6488,9 @@
   }
 
   .planner-banner-stack {
-    top: 52px;
+    top: 8px;
     right: 12px;
-    width: min(520px, calc(100% - 32px));
+    width: min(660px, calc(100% - 32px));
   }
 
   .planner-flow__controls {
@@ -9395,8 +9356,6 @@
 :root[data-theme="light"] .planner-monitor__search,
 :root[data-theme="light"] .planner-monitor__search input,
 :root[data-theme="light"] .planner-monitor__filters select,
-:root[data-theme="light"] .planner-monitor__density,
-:root[data-theme="light"] .planner-monitor__density button,
 :root[data-theme="light"] .planner-monitor__sessions-button,
 :root[data-theme="light"] .planner-role-badge,
 :root[data-theme="light"] .planner-activity-pill,
@@ -10560,7 +10519,12 @@
   padding: 4px 10px 10px;
   border-top: 1px solid var(--border-subtle, var(--border, rgba(0, 0, 0, 0.08)));
 }
-.monitor-grid__cell { min-width: 0; min-height: 0; display: flex; }
+.monitor-grid__cell {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 0;
+}
 
 .monitor-card {
   display: flex;

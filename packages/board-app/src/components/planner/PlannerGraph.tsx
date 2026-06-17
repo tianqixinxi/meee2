@@ -400,7 +400,7 @@ function PlannerGraphInner({
         setPlannerState(state)
         setProposal(state.proposals.find((item) => item.status === 'pending' || item.status === 'approved') ?? null)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to load meee2 AI state'))
+      .catch((err) => setError((err as Error).message || 'Failed to load Meee2 AI state'))
       .finally(() => setBusy(false))
   }, [canvasId])
 
@@ -1447,6 +1447,13 @@ function PlannerGraphInner({
     teamDirectory,
   ])
   const activeProposal = proposal && (proposal.status === 'pending' || proposal.status === 'approved') ? proposal : null
+  // propose_add_node · 来源归属:节点工作会话发起的提案,面板与审批模态显示
+  // 「来自节点 X 的提议」。节点已被删时回落显示原始 id。
+  const proposalOriginTitle = useMemo(() => {
+    const originId = proposal?.originNodeId
+    if (!originId) return null
+    return plannerState?.nodes.find((node) => node.id === originId)?.title ?? originId
+  }, [plannerState, proposal])
   const emptyCanvasMode = Boolean(
     plannerState
     && plannerState.canvas.id === canvasId
@@ -1903,7 +1910,7 @@ function PlannerGraphInner({
           emitPlannerEvent('planner.canvas_mutated', { canvasId, message: goal, intent: 'edit' })
         }
       })
-      .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to generate meee2 AI proposal')))
+      .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to generate Meee2 AI proposal')))
       .finally(() => setBusy(false))
   }, [canvasId, notifyError, plannerState, proposal])
 
@@ -1997,7 +2004,7 @@ function PlannerGraphInner({
           emitPlannerEvent('planner.canvas_mutated', { canvasId, message: trimmed || '(drift)', intent: 'inspect' })
           return undefined
         })
-        .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to inspect meee2 AI drift')))
+        .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to inspect Meee2 AI drift')))
         .finally(() => setBusy(false))
       return
     }
@@ -2048,9 +2055,9 @@ function PlannerGraphInner({
             markdown: [
               `Injected into the session prompt for **${selectedNode.title}** (session \`${sessionId.slice(0, 8)}\`).`,
               '',
-              'The session can use meee2 MCP to read its node contract and write back schema-aware artifacts with `submit_node_output`; file artifacts should use `payload.file.path` so meee2 can copy them into the artifact store.',
+              'The session can use meee2 MCP to read its node contract and write back schema-aware artifacts with `submit_node_output`; file artifacts should use `payload.file.path` so Meee2 can copy them into the artifact store.',
               '',
-              'If you want to change this node\'s inputs, outputs, artifact slots, gate, or task requirements, ask meee2 AI for that change here and it will create a graph proposal instead of only injecting the live session.',
+              'If you want to change this node\'s inputs, outputs, artifact slots, gate, or task requirements, ask Meee2 AI for that change here and it will create a graph proposal instead of only injecting the live session.',
             ].join('\n'),
           })
         })
@@ -2140,7 +2147,7 @@ function PlannerGraphInner({
           reactFlow.fitView({ padding: 0.14, duration: 260 })
         }, 80)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to approve and apply meee2 AI proposal'))
+      .catch((err) => setError((err as Error).message || 'Failed to approve and apply Meee2 AI proposal'))
       .finally(() => setBusy(false))
   }, [busy, canvasId, canvasName, proposal, reactFlow])
 
@@ -2160,7 +2167,7 @@ function PlannerGraphInner({
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to reject meee2 AI proposal'))
+      .catch((err) => setError((err as Error).message || 'Failed to reject Meee2 AI proposal'))
       .finally(() => setBusy(false))
   }, [canvasId, proposal])
 
@@ -2212,7 +2219,7 @@ function PlannerGraphInner({
     : 'Recreate missing'
 
   return (
-    <section className="planner-workspace" aria-label="meee2 AI graph" data-guide-target="planner-workspace">
+    <section className="planner-workspace" aria-label="Meee2 AI graph" data-guide-target="planner-workspace">
       {emptyCanvasMode ? (
         <div className="planner-empty-omni" data-guide-target="planner-proposal">
           <PlannerProposalPanel
@@ -2220,6 +2227,7 @@ function PlannerGraphInner({
             canvasName={plannerState?.canvas.title ?? canvasName}
             canvasTask={plannerState?.canvas.plannerContext ?? ''}
             proposal={proposal}
+            proposalOriginTitle={proposalOriginTitle}
             variant={variant}
             previewGraph={reviewGraph}
             busy={busy}
@@ -2251,7 +2259,7 @@ function PlannerGraphInner({
             <button
               type="button"
               className="planner-side__resize"
-              aria-label="Resize meee2 AI panel"
+              aria-label="Resize Meee2 AI panel"
               onPointerDown={handlePanelResizeStart}
             />
             <PlannerProposalPanel
@@ -2259,6 +2267,7 @@ function PlannerGraphInner({
               canvasName={plannerState?.canvas.title ?? canvasName}
               canvasTask={plannerState?.canvas.plannerContext ?? ''}
               proposal={proposal}
+              proposalOriginTitle={proposalOriginTitle}
               variant={variant}
               previewGraph={reviewGraph}
               busy={busy}
@@ -2358,8 +2367,39 @@ function PlannerGraphInner({
               dataSources={plannerState.canvas.dataSources}
             />
           )}
-          {(hasSessionActionBanner || mcpWarning) && (
+          {((showWorkspacePreview && activeProposal) || hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
+              {showWorkspacePreview && activeProposal && (
+                <div className="planner-workspace-preview__notice" role="status">
+                  <div className="planner-workspace-preview__notice-copy">
+                    <span>Preview only</span>
+                    <strong>{activeProposal.summary || 'Meee2 AI proposed canvas changes'}</strong>
+                    <em>Review and apply these changes before they become the real canvas.</em>
+                  </div>
+                  <div className="planner-workspace-preview__actions" role="group" aria-label="Preview controls">
+                    <button
+                      type="button"
+                      className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
+                      onClick={handleReject}
+                      disabled={busy}
+                      aria-busy={busy}
+                      title="Reject this proposal — revert to previous canvas"
+                    >
+                      {busy ? '…' : '✕ Reject'}
+                    </button>
+                    <button
+                      type="button"
+                      className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
+                      onClick={handleApproveAndApply}
+                      disabled={busy}
+                      aria-busy={busy}
+                      title="Approve & apply this proposal — make these changes real"
+                    >
+                      {busy ? 'Applying…' : '✓ Apply'}
+                    </button>
+                  </div>
+                </div>
+              )}
               {hasSessionActionBanner && (
                 <div
                   className={`planner-mcp-banner planner-session-action-banner${closedBoundSessions.length > 0 ? ' is-warning' : ' is-ready'}`}
@@ -2432,10 +2472,6 @@ function PlannerGraphInner({
           {showWorkspacePreview && activeProposal ? (
             <PlannerWorkspacePreview
               graph={reviewGraph}
-              proposal={activeProposal}
-              onApply={handleApproveAndApply}
-              onReject={handleReject}
-              busy={busy}
             />
           ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
@@ -2832,7 +2868,7 @@ function isMeee2InternalSessionId(sessionId: string): boolean {
 function isLikelyProviderResumeSessionId(sessionId: string): boolean {
   const trimmed = sessionId.trim()
   if (!trimmed || isMeee2InternalSessionId(trimmed)) return false
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
 }
 
 function formatSessionActionSummary(items: Array<[number, string]>): string {
@@ -2895,9 +2931,19 @@ function mergeGraphNodesPreservingPositions(
   return nextNodes.map((nextNode) => {
     const current = currentById.get(nextNode.id)
     if (!current) return nextNode
+    const shouldUseProgramPosition =
+      !current.dragging &&
+      isPlannerGraphNode(nextNode) &&
+      isPlannerGraphNode(current) &&
+      (
+        nextNode.data.virtual === true ||
+        current.data.virtual === true ||
+        nextNode.data.autoSpaced === true ||
+        current.data.autoSpaced === true
+      )
     return {
       ...nextNode,
-      position: current.position,
+      position: shouldUseProgramPosition ? nextNode.position : current.position,
       selected: current.selected,
       dragging: current.dragging,
       // 宽高自由调整 — NodeResizer 把用户调整后的尺寸记在 width/height 上。和
@@ -3426,54 +3472,11 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
 
 function PlannerWorkspacePreview({
   graph,
-  proposal,
-  onApply,
-  onReject,
-  busy,
 }: {
   graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
-  proposal: PlanProposal
-  onApply?: () => void
-  onReject?: () => void
-  busy?: boolean
 }) {
   return (
     <div className="planner-workspace-preview" aria-label="Proposal preview" data-guide-target="planner-workspace-preview">
-      <div className="planner-workspace-preview__notice" role="status">
-        <span>Preview only</span>
-        <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
-        <em>Review and apply from the modal before these nodes become the real canvas.</em>
-      </div>
-      {/* UI-simplification — user 反馈:preview 模式 canvas 是只读的(elementsSelectable=false)
-       *  会卡死 —— 没明显的退出入口。把 Apply / Reject 显式放在画板右上角。 */}
-      {(onApply || onReject) && (
-        <div className="planner-workspace-preview__actions" role="group" aria-label="Preview controls">
-          {onReject && (
-            <button
-              type="button"
-              className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
-              onClick={onReject}
-              disabled={busy}
-              aria-busy={busy}
-              title="Reject this proposal — revert to previous canvas"
-            >
-              {busy ? '…' : '✕ Reject'}
-            </button>
-          )}
-          {onApply && (
-            <button
-              type="button"
-              className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
-              onClick={onApply}
-              disabled={busy}
-              aria-busy={busy}
-              title="Approve & apply this proposal — make these changes real"
-            >
-              {busy ? 'Applying…' : '✓ Apply'}
-            </button>
-          )}
-        </div>
-      )}
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}
@@ -3664,7 +3667,7 @@ function formatPlannerProposalError(error: unknown, fallback: string): string {
     const prefix = /draft canvas/i.test(fallback)
       ? 'Draft canvas failed'
       : fallback
-    return `${prefix}: meee2 AI returned an invalid proposal format. Your canvas was not changed.`
+    return `${prefix}: Meee2 AI returned an invalid proposal format. Your canvas was not changed.`
   }
   return message || fallback
 }

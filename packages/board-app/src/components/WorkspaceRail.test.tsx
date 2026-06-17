@@ -14,7 +14,7 @@ const canvases: CanvasInfo[] = [{
 }]
 
 describe('WorkspaceRail', () => {
-  it('does not expose Sessions/Progress as a top-level workspace', () => {
+  it('exposes Session as the default top-level workspace', () => {
     render(
       <I18nProvider>
         <WorkspaceRail
@@ -27,6 +27,7 @@ describe('WorkspaceRail', () => {
       </I18nProvider>,
     )
 
+    expect(screen.getByRole('button', { name: 'Session' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Canvas' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()

@@ -205,6 +205,7 @@ export interface Session {
   nativeWorkspaceAvailable?: boolean
   openTarget?: 'native-workspace' | 'external' | 'web-fallback' | string
   controlState?: 'active' | 'hidden' | 'archived' | string
+  sessionScope?: SessionScope | null
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
@@ -229,6 +230,7 @@ export function isOlderSession(s: Pick<Session, 'lastActivity' | 'status'>): boo
 }
 
 export type ClientKind = 'cli' | 'desktop' | 'cowork'
+export type SessionScope = 'meee2' | 'canvas' | 'node' | 'external' | string
 
 export interface Member {
   alias: string
@@ -310,6 +312,46 @@ export interface BoardState {
 export type CanvasScope = 'personal' | 'team'
 export type CanvasKind = 'board' | 'monitor'
 export type SpawnProvider = 'claude' | 'codex'
+export type AgentPermissionMode = 'fullAccess' | 'default' | 'acceptEdits' | 'onRequest' | 'readOnly'
+
+export interface SessionProject {
+  id: string
+  name: string
+  path: string
+  preferredProvider: SpawnProvider
+  explicit: boolean
+  createdAt: string
+  updatedAt: string
+  lastUsedAt?: string | null
+}
+
+export interface SessionProjectList {
+  projects: SessionProject[]
+}
+
+export interface SessionProjectCreateInput {
+  path: string
+  name?: string
+  preferredProvider?: SpawnProvider
+}
+
+export interface SessionProjectUpdateInput {
+  name: string
+}
+
+export interface TemporarySessionCreateInput {
+  provider: SpawnProvider
+  permissionMode?: AgentPermissionMode
+  planMode?: boolean
+  initialPrompt?: string
+  attachments?: SessionLaunchAttachment[]
+}
+
+export interface SessionLaunchAttachment {
+  path: string
+  filename?: string | null
+  contentType?: string | null
+}
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
 
@@ -886,6 +928,59 @@ export interface PlannerArtifact {
   views?: PlannerArtifactView[] | null
 }
 
+export type SessionArtifactCandidateStatus = 'candidate' | 'promoted' | 'discarded'
+
+export interface SessionArtifactReference {
+  kind: string
+  value: string
+  label?: string | null
+}
+
+export interface SessionArtifactCandidate {
+  id: string
+  sessionId: string
+  provider: string
+  cwd?: string | null
+  title: string
+  kind: string
+  status: SessionArtifactCandidateStatus
+  createdAt: string
+  updatedAt: string
+  sourceEvent: string
+  toolName?: string | null
+  toolUseId?: string | null
+  references: SessionArtifactReference[]
+  summary: string
+  promotedCanvasId?: string | null
+  promotedNodeId?: string | null
+  promotedArtifactId?: string | null
+}
+
+export interface SessionArtifactAttachTarget {
+  canvasId: string
+  canvasName: string
+  nodeId: string
+  nodeTitle: string
+}
+
+export interface SessionArtifactsEnvelope {
+  sessionId: string
+  candidates: SessionArtifactCandidate[]
+  artifacts: PlannerArtifact[]
+  totalCount: number
+  attachTargets: SessionArtifactAttachTarget[]
+}
+
+export interface ArtifactCandidateListEnvelope {
+  candidates: SessionArtifactCandidate[]
+}
+
+export interface ArtifactCandidateMutationEnvelope {
+  candidate: SessionArtifactCandidate
+  artifact?: PlannerArtifact | null
+  attachTargets: SessionArtifactAttachTarget[]
+}
+
 /** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /
  *  badge+detail 行)。`payload`:typed payload 的结构化预览(prd tldr /
  *  check-result 统计…)。两者缺位时,这些 artifact 的派生默认 view 只能标成
@@ -1441,6 +1536,10 @@ export interface PlanProposal {
   summary: string
   changes: PlanChange[]
   status: PlanProposalStatus
+  /** propose_add_node · 提案来源归属:节点工作会话经 MCP 发起时携带,
+   *  缺省 ⇒ owner / planner-agent 渠道。UI 据此显示「来自节点 X 的提议」。 */
+  originNodeId?: string
+  originSessionId?: string
 }
 
 export type NodeRunState = 'draft' | 'ready' | 'working' | 'blocked' | 'done'

@@ -402,6 +402,7 @@ enum BoardAPI {
         let command: String
         let canvasId: String?
         let nodeId: String?
+        let sessionScope: String
         let status: String
         let pid: Int?
         let createdAt: Date
@@ -421,6 +422,7 @@ enum BoardAPI {
             self.command = surface.command
             self.canvasId = surface.canvasId
             self.nodeId = surface.nodeId
+            self.sessionScope = surface.sessionScope.rawValue
             self.status = surface.status
             self.pid = surface.pid
             self.createdAt = surface.createdAt
@@ -489,6 +491,613 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    // MARK: - Session Projects
+
+    private struct SessionProjectDTO: Encodable {
+        let id: String
+        let name: String
+        let path: String
+        let preferredProvider: String
+        let explicit: Bool
+        let createdAt: Date
+        let updatedAt: Date
+        let lastUsedAt: Date?
+
+        init(_ record: SessionProjectRecord) {
+            self.id = record.id
+            self.name = record.name
+            self.path = record.path
+            self.preferredProvider = record.preferredProvider.rawValue
+            self.explicit = record.explicit
+            self.createdAt = record.createdAt
+            self.updatedAt = record.updatedAt
+            self.lastUsedAt = record.lastUsedAt
+        }
+    }
+
+    private struct SessionProjectsEnvelope: Encodable {
+        let projects: [SessionProjectDTO]
+    }
+
+    private struct SessionLaunchAttachmentsEnvelope: Encodable {
+        let ok: Bool
+        let attachments: [AgentLaunchAttachment]
+    }
+
+    static func listSessionProjects(_ req: HttpRequest) -> HttpResponse {
+        let projects = SessionProjectStore.shared
+            .list()
+            .map(SessionProjectDTO.init)
+        return jsonResponse(SessionProjectsEnvelope(projects: projects))
+    }
+
+    static func createSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct CreateRequest: Decodable {
+            let path: String
+            let name: String?
+            let preferredProvider: String?
+        }
+        guard let body = decodeJSONBody(req, as: CreateRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"path\": String}", status: 400)
+        }
+        do {
+            let record = try SessionProjectStore.shared.upsert(
+                path: body.path,
+                name: body.name,
+                preferredProvider: body.preferredProvider
+            )
+            return jsonResponse(SessionProjectDTO(record), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("project_create_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func updateSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateRequest: Decodable {
+            let name: String?
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"name\": String}", status: 400)
+        }
+        guard let name = body.name else {
+            return errorResponse("bad_request", "project name is required", status: 400)
+        }
+        do {
+            let record = try SessionProjectStore.shared.rename(projectId: id, name: name)
+            return jsonResponse(SessionProjectDTO(record))
+        } catch let err as NSError {
+            return errorResponse(
+                err.code == 404 ? "project_not_found" : "project_update_failed",
+                err.localizedDescription,
+                status: err.code == 404 ? 404 : 400
+            )
+        } catch {
+            return errorResponse("project_update_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func revealSessionProject(_ req: HttpRequest) -> HttpResponse {
+        struct RevealResponse: Encodable {
+            let ok: Bool
+            let path: String
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        guard let project = SessionProjectStore.shared.list().first(where: { $0.id == id }) else {
+            return errorResponse("project_not_found", "project not found: \(id)", status: 404)
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDir), isDir.boolValue else {
+            return errorResponse("project_path_missing", "project path does not exist: \(project.path)", status: 400)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+        return jsonResponse(RevealResponse(ok: true, path: project.path))
+    }
+
+    static func forgetSessionProject(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        do {
+            try SessionProjectStore.shared.forget(projectId: id)
+            return jsonResponse(OkEnvelope(ok: true))
+        } catch {
+            return errorResponse("project_not_found", error.localizedDescription, status: 404)
+        }
+    }
+
+    static func pickSessionProjectDirectory(_ req: HttpRequest) -> HttpResponse {
+        struct PickResponse: Encodable {
+            let ok: Bool
+            let path: String?
+        }
+        #if os(macOS)
+        var selectedPath: String?
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = false
+            panel.resolvesAliases = true
+            panel.message = "Select a project folder"
+            let finish: (NSApplication.ModalResponse) -> Void = { response in
+                if response == .OK {
+                    selectedPath = panel.url?.path
+                }
+                semaphore.signal()
+            }
+            if let window = NSApp.keyWindow {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                panel.begin(completionHandler: finish)
+            }
+        }
+        _ = semaphore.wait(timeout: .distantFuture)
+        return jsonResponse(PickResponse(ok: selectedPath != nil, path: selectedPath))
+        #else
+        return errorResponse("unsupported", "directory picker is macOS only", status: 501)
+        #endif
+    }
+
+    static func pickSessionLaunchAttachments(_ req: HttpRequest) -> HttpResponse {
+        #if os(macOS)
+        var selectedAttachments: [AgentLaunchAttachment] = []
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            panel.canCreateDirectories = false
+            panel.resolvesAliases = true
+            panel.message = "Select files for the new session"
+            let finish: (NSApplication.ModalResponse) -> Void = { response in
+                if response == .OK {
+                    selectedAttachments = panel.urls.map { url in
+                        AgentLaunchAttachment(
+                            path: url.path,
+                            filename: url.lastPathComponent,
+                            contentType: nil
+                        )
+                    }
+                }
+                semaphore.signal()
+            }
+            if let window = NSApp.keyWindow {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                panel.begin(completionHandler: finish)
+            }
+        }
+        _ = semaphore.wait(timeout: .distantFuture)
+        do {
+            return jsonResponse(SessionLaunchAttachmentsEnvelope(
+                ok: !selectedAttachments.isEmpty,
+                attachments: try normalizeLaunchAttachments(selectedAttachments)
+            ))
+        } catch {
+            return errorResponse("attachment_pick_failed", error.localizedDescription, status: 400)
+        }
+        #else
+        return errorResponse("unsupported", "file picker is macOS only", status: 501)
+        #endif
+    }
+
+    static func uploadSessionLaunchAttachment(_ req: HttpRequest) -> HttpResponse {
+        struct UploadRequest: Decodable {
+            let filename: String?
+            let contentType: String?
+            let dataBase64: String?
+        }
+        guard let body = decodeJSONBody(req, as: UploadRequest.self) else {
+            return errorResponse("invalid_json", "body must include filename, contentType, and dataBase64", status: 400)
+        }
+        let filename = body.filename?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "paste"
+        let contentType = body.contentType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "application/octet-stream"
+        guard let dataBase64 = body.dataBase64, !dataBase64.isEmpty else {
+            return errorResponse("bad_request", "missing 'dataBase64'", status: 400)
+        }
+        if dataBase64.count > AttachmentsAPI.maxBytes * 2 {
+            return errorResponse("too_large", "attachment exceeds \(AttachmentsAPI.maxBytes) bytes", status: 413)
+        }
+        guard let rawData = Data(base64Encoded: dataBase64, options: .ignoreUnknownCharacters) else {
+            return errorResponse("bad_request", "'dataBase64' is not valid base64", status: 400)
+        }
+        guard rawData.count <= AttachmentsAPI.maxBytes else {
+            return errorResponse("too_large", "attachment exceeds \(AttachmentsAPI.maxBytes) bytes (got \(rawData.count))", status: 413)
+        }
+        do {
+            let saved = try saveLaunchAttachment(data: rawData, filename: filename, contentType: contentType)
+            return jsonResponse(SessionLaunchAttachmentsEnvelope(ok: true, attachments: [saved]), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("attachment_upload_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func normalizeLaunchAttachments(_ attachments: [AgentLaunchAttachment]?) throws -> [AgentLaunchAttachment] {
+        let raw = attachments ?? []
+        guard raw.count <= 24 else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "too many attachments (max 24)"])
+        }
+        var seen = Set<String>()
+        var normalized: [AgentLaunchAttachment] = []
+        for attachment in raw {
+            let path = try normalizeLaunchAttachmentPath(attachment.path)
+            guard !seen.contains(path) else { continue }
+            seen.insert(path)
+            normalized.append(AgentLaunchAttachment(
+                path: path,
+                filename: attachment.filename,
+                contentType: attachment.contentType
+            ))
+        }
+        return normalized
+    }
+
+    private static func normalizeLaunchAttachmentPath(_ rawPath: String) throws -> String {
+        var value = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "attachment path is empty"])
+        }
+        if value.hasPrefix("~") {
+            value = NSHomeDirectory() + String(value.dropFirst(1))
+        }
+        let path = (value as NSString).standardizingPath
+        guard path.hasPrefix("/") else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "attachment path must be absolute: \(rawPath)"])
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "attachment file does not exist: \(path)"])
+        }
+        return path
+    }
+
+    private static func saveLaunchAttachment(data: Data, filename rawFilename: String, contentType: String) throws -> AgentLaunchAttachment {
+        let baseDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("attachments", isDirectory: true)
+            .appendingPathComponent("launcher", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+
+        let safeName = sanitizedAttachmentFilename(rawFilename)
+        let ext = attachmentExtension(filename: safeName, contentType: contentType)
+        let stem = safeName.isEmpty ? "attachment" : (safeName as NSString).deletingPathExtension
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8)
+        let fileName = ext.isEmpty
+            ? "\(Int(Date().timeIntervalSince1970 * 1000))-\(suffix)-\(stem)"
+            : "\(Int(Date().timeIntervalSince1970 * 1000))-\(suffix)-\(stem).\(ext)"
+        let url = baseDir.appendingPathComponent(fileName, isDirectory: false)
+        try data.write(to: url, options: .atomic)
+        return AgentLaunchAttachment(path: url.path, filename: safeName, contentType: contentType)
+    }
+
+    private static func sanitizedAttachmentFilename(_ raw: String) -> String {
+        let name = (raw as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "attachment" : name
+    }
+
+    private static func attachmentExtension(filename: String, contentType: String) -> String {
+        let existing = (filename as NSString).pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !existing.isEmpty { return existing }
+        let main = contentType.lowercased().split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? contentType.lowercased()
+        switch main {
+        case "image/png": return "png"
+        case "image/jpeg", "image/jpg": return "jpg"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "application/pdf": return "pdf"
+        case "text/plain": return "txt"
+        case "text/markdown": return "md"
+        case "application/json": return "json"
+        default: return ""
+        }
+    }
+
+    static func createSessionProjectSession(_ req: HttpRequest) -> HttpResponse {
+        struct SpawnRequest: Decodable {
+            let path: String?
+            let provider: String?
+            let permissionMode: String?
+            let planMode: Bool?
+            let initialPrompt: String?
+            let attachments: [AgentLaunchAttachment]?
+        }
+        struct SpawnResponse: Encodable {
+            let ok: Bool
+            let project: SessionProjectDTO
+            let surface: BoardSessionSurfaceDTO
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing project id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: SpawnRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        do {
+            let knownProject = SessionProjectStore.shared
+                .list()
+                .first { $0.id == id }
+            guard let projectPath = knownProject?.path, !projectPath.isEmpty else {
+                throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "project not found: \(id)"])
+            }
+            let cwd = try explicitSessionCwd(projectPath) ?? projectPath
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else {
+                throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
+            }
+            let project = try SessionProjectStore.shared.markUsed(
+                projectId: id,
+                path: projectPath,
+                provider: provider
+            )
+            let command = AgentLaunchCommand.launchCommand(
+                forProvider: provider,
+                permissionMode: body?.permissionMode,
+                planMode: body?.planMode == true
+            )
+            let prompt = AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: provider,
+                planMode: body?.planMode == true,
+                initialPrompt: body?.initialPrompt,
+                attachments: try normalizeLaunchAttachments(body?.attachments)
+            )
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: prompt
+            )
+            return jsonResponse(
+                SpawnResponse(ok: true, project: SessionProjectDTO(project), surface: BoardSessionSurfaceDTO(surface)),
+                status: 201,
+                reason: "Created"
+            )
+        } catch {
+            return errorResponse("project_session_spawn_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createTemporarySession(_ req: HttpRequest) -> HttpResponse {
+        struct SpawnRequest: Decodable {
+            let provider: String?
+            let permissionMode: String?
+            let planMode: Bool?
+            let initialPrompt: String?
+            let attachments: [AgentLaunchAttachment]?
+        }
+        struct SpawnResponse: Encodable {
+            let ok: Bool
+            let cwd: String
+            let surface: BoardSessionSurfaceDTO
+        }
+        let body = decodeJSONBody(req, as: SpawnRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        do {
+            let cwd = try createTemporarySessionWorkspace()
+            let command = AgentLaunchCommand.launchCommand(
+                forProvider: provider,
+                permissionMode: body?.permissionMode,
+                planMode: body?.planMode == true
+            )
+            let prompt = AgentLaunchCommand.launcherInitialPrompt(
+                forProvider: provider,
+                planMode: body?.planMode == true,
+                initialPrompt: body?.initialPrompt,
+                attachments: try normalizeLaunchAttachments(body?.attachments)
+            )
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: false,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: prompt
+            )
+            return jsonResponse(
+                SpawnResponse(ok: true, cwd: cwd, surface: BoardSessionSurfaceDTO(surface)),
+                status: 201,
+                reason: "Created"
+            )
+        } catch {
+            return errorResponse("temporary_session_spawn_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func getSessionArtifacts(_ req: HttpRequest) -> HttpResponse {
+        guard let sessionId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sessionId.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        return jsonResponse(SessionArtifactCandidateStore.shared.combinedArtifacts(sessionId: sessionId))
+    }
+
+    static func listArtifactCandidates(_ req: HttpRequest) -> HttpResponse {
+        let sessionIdRaw = req.queryParams.first(where: { $0.0 == "sessionId" })?.1
+        let sessionId = sessionIdRaw?.removingPercentEncoding ?? sessionIdRaw
+        let includeDiscarded = req.queryParams.first(where: { $0.0 == "includeDiscarded" })?.1 == "true"
+        let candidates = SessionArtifactCandidateStore.shared.list(
+            sessionId: sessionId,
+            includeDiscarded: includeDiscarded
+        )
+        return jsonResponse(ArtifactCandidateListEnvelope(candidates: candidates))
+    }
+
+    static func ingestArtifactCandidateHook(_ req: HttpRequest) -> HttpResponse {
+        struct Response: Encodable {
+            let ok: Bool
+            let inserted: Int
+        }
+        guard let raw = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body must be a JSON object", status: 400)
+        }
+        let inserted = SessionArtifactCandidateStore.shared.ingestCodexHookPayload(raw)
+        if !inserted.isEmpty {
+            BoardServer.shared.broadcastStateChanged()
+        }
+        return jsonResponse(Response(ok: true, inserted: inserted.count))
+    }
+
+    static func promoteArtifactCandidate(_ req: HttpRequest) -> HttpResponse {
+        struct PromoteRequest: Decodable {
+            let canvasId: String?
+            let nodeId: String?
+            let kind: PlannerArtifactKind?
+            let title: String?
+            let reference: String?
+            let status: String?
+        }
+        guard let candidateId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !candidateId.isEmpty else {
+            return errorResponse("bad_request", "missing candidate id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: PromoteRequest.self)
+        do {
+            guard let candidate = SessionArtifactCandidateStore.shared.get(candidateId: candidateId) else {
+                throw SessionArtifactCandidateStoreError.candidateNotFound(candidateId)
+            }
+            let targets = SessionArtifactCandidateStore.shared.attachTargets(sessionId: candidate.sessionId)
+            let target: SessionArtifactAttachTarget
+            if let canvasId = body?.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !canvasId.isEmpty,
+               let nodeId = body?.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !nodeId.isEmpty {
+                guard let selected = targets.first(where: { $0.canvasId == canvasId && $0.nodeId == nodeId }) else {
+                    throw SessionArtifactCandidateStoreError.attachTargetNotFound
+                }
+                target = selected
+            } else if targets.count == 1, let only = targets.first {
+                target = only
+            } else {
+                throw SessionArtifactCandidateStoreError.attachTargetRequired(targets)
+            }
+
+            let reference = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? candidate.references.first?.value
+                ?? candidate.id
+            let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? candidate.title
+            let state = try PlannerBoardBridge.attachArtifact(
+                nodeId: target.nodeId,
+                kind: body?.kind ?? plannerArtifactKind(forCandidateKind: candidate.kind),
+                title: title,
+                reference: reference,
+                status: body?.status ?? "attached",
+                payload: artifactPayload(for: candidate),
+                for: target.canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let artifact = state.artifacts
+                .filter({ $0.nodeId == target.nodeId && $0.reference == reference })
+                .sorted(by: { $0.createdAt > $1.createdAt })
+                .first else {
+                throw SessionArtifactCandidateStoreError.artifactAttachFailed
+            }
+            let updated = try SessionArtifactCandidateStore.shared.markPromoted(
+                candidateId: candidateId,
+                canvasId: target.canvasId,
+                nodeId: target.nodeId,
+                artifactId: artifact.id
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(ArtifactCandidateMutationEnvelope(candidate: updated, artifact: artifact, attachTargets: targets))
+        } catch let err as SessionArtifactCandidateStoreError {
+            return mapArtifactCandidateError(err)
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("artifact_candidate_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func discardArtifactCandidate(_ req: HttpRequest) -> HttpResponse {
+        guard let candidateId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !candidateId.isEmpty else {
+            return errorResponse("bad_request", "missing candidate id", status: 400)
+        }
+        do {
+            let updated = try SessionArtifactCandidateStore.shared.discard(candidateId: candidateId)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(ArtifactCandidateMutationEnvelope(candidate: updated, artifact: nil, attachTargets: []))
+        } catch let err as SessionArtifactCandidateStoreError {
+            return mapArtifactCandidateError(err)
+        } catch {
+            return errorResponse("artifact_candidate_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func reopenLauncherSession(_ req: HttpRequest) -> HttpResponse {
+        struct ReopenRequest: Decodable {
+            let provider: String?
+            let cwd: String?
+            let providerResumeSessionId: String?
+        }
+        struct ReopenResponse: Encodable {
+            let ok: Bool
+            let action: SessionSurfaceLaunchAction
+            let surface: BoardSessionSurfaceDTO
+        }
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: ReopenRequest.self)
+        do {
+            let result = try SessionSurfaceLauncher.restoreLauncherSession(
+                sessionId: id,
+                providerResumeSessionId: body?.providerResumeSessionId,
+                provider: body?.provider,
+                cwd: body?.cwd
+            )
+            return jsonResponse(
+                ReopenResponse(ok: true, action: result.action, surface: BoardSessionSurfaceDTO(result.surface)),
+                status: result.action == .reuse ? 200 : 201,
+                reason: result.action == .reuse ? "OK" : "Created"
+            )
+        } catch let err as NSError {
+            return errorResponse(
+                err.code == 404 ? "session_not_found" : "session_reopen_failed",
+                err.localizedDescription,
+                status: err.code == 404 ? 404 : (err.code == 409 ? 409 : 400)
+            )
+        } catch {
+            return errorResponse("session_reopen_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func createTemporarySessionWorkspace(now: Date = Date()) throws -> String {
+        let root = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("workspaces", isDirectory: true)
+            .appendingPathComponent("temporary", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let timestamp = formatter.string(from: now)
+
+        for _ in 0..<5 {
+            let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(6)
+            let candidate = root.appendingPathComponent("\(timestamp)-\(suffix)", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: false)
+                return candidate.path
+            }
+        }
+        throw NSError(domain: "BoardAPI", code: 500, userInfo: [NSLocalizedDescriptionKey: "failed to allocate temporary session workspace"])
+    }
+
     private static func createInternalSessionSurface(
         provider: String,
         cwd: String,
@@ -499,34 +1108,17 @@ enum BoardAPI {
         initialPrompt: String?,
         preferredSessionId: String? = nil
     ) throws -> TerminalSessionSnapshot {
-        var isDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
-            if createIfMissing {
-                try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
-            } else {
-                throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
-            }
-        }
-        let trimmedPreferredSessionId = preferredSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reusablePreferredSessionId = trimmedPreferredSessionId?.isEmpty == false ? trimmedPreferredSessionId : nil
-        let resumeSessionId = reusablePreferredSessionId.flatMap(providerResumeSessionId(forPlannerSessionId:))
-        let launchCommand = resumeSessionId.map {
-            AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: $0)
-        } ?? command
-        let handle = try TerminalSessionBackendRegistry.shared.createSession(
-            request: TerminalSessionRequest(
-                provider: provider,
-                cwd: cwd,
-                command: launchCommand,
-                canvasId: canvasId,
-                nodeId: nodeId,
-                // resume 丢弃 initialPrompt:恢复的对话已有上下文,不应重打 dispatch prompt。
-                initialPrompt: resumeSessionId == nil ? initialPrompt : nil,
-                preferredSessionId: reusablePreferredSessionId
-            )
+        return try SessionSurfaceLauncher.createInternalSessionSurface(
+            provider: provider,
+            cwd: cwd,
+            command: command,
+            createIfMissing: createIfMissing,
+            canvasId: canvasId,
+            nodeId: nodeId,
+            initialPrompt: initialPrompt,
+            preferredSessionId: preferredSessionId,
+            recordLauncherInitialPrompt: canvasId == nil && nodeId == nil
         )
-        BoardServer.shared.broadcastStateChanged()
-        return handle.snapshot
     }
 
     private static func graphEnvelope(_ state: PlannerGraphState) -> PlannerGraphStateEnvelope {
@@ -680,6 +1272,27 @@ enum BoardAPI {
             }
             .joined(separator: " ")
         NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
+    }
+
+    /// external-first writeback: after a gating submit, dispatch one dedicated
+    /// artifact-sync session per external-object reference the agent just wrote,
+    /// so the mirror snapshot catches up to the real external object. Best-effort
+    /// — a sync-dispatch failure must NEVER fail the submit (the external write
+    /// already landed; the worst case is a stale mirror the user can refresh
+    /// manually). Reuses the same per-reference dedupe + session registry as the
+    /// manual 「同步快照」 button via `dispatchArtifactSyncSession`. Engine decided
+    /// the references (`result.reconcileReferences`); this materializes them —
+    /// the same engine-decides / BoardAPI-spawns split as auto-dispatch.
+    static func reconcileExternalWriteMirrors(canvasId: String, references: [String]?) {
+        guard let references, !references.isEmpty else { return }
+        for reference in references {
+            do {
+                let result = try dispatchArtifactSyncSession(canvasId: canvasId, reference: reference, hint: "")
+                NSLog("[ExternalWriteback][reconcile] canvas=\(canvasId) reference=\(reference) -> \(result.action)")
+            } catch {
+                NSLog("[ExternalWriteback][reconcile] skip reference=\(reference) reason=\(error.localizedDescription)")
+            }
+        }
     }
 
     private static func parseISODate(_ raw: String?) -> Date? {
@@ -1848,7 +2461,7 @@ enum BoardAPI {
         }
         do {
             let proposal = try PlannerBoardBridge.graphChangeProposal(
-                summary: body.summary ?? "Update meee2 AI graph",
+                summary: body.summary ?? "Update Meee2 AI graph",
                 changes: body.changes,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
@@ -2100,8 +2713,7 @@ enum BoardAPI {
     }
 
     private static func isReusableInternalSurface(_ surface: TerminalSessionSnapshot) -> Bool {
-        surface.status == InternalTerminalLifecycle.starting.rawValue
-            || surface.status == InternalTerminalLifecycle.running.rawValue
+        SessionSurfaceLauncher.isReusableInternalSurface(surface)
     }
 
     /// 死会话自愈(owner 决策 2026-06-01):能拿到 provider resume id 就
@@ -2119,25 +2731,19 @@ enum BoardAPI {
     ) throws -> (surface: TerminalSessionSnapshot, resumed: Bool, providerSessionId: String?) {
         try PlannerPermission.requireNodeUpdate(on: node, access: access)
         let cwd = try explicitSessionCwd(explicitCwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-        let resumeSessionId = providerResumeSessionId(forPlannerSessionId: deadSessionId)
-        let command = resumeSessionId.map {
-            plannerResumeCommand(for: node, sessionId: $0)
-        }
-            ?? plannerFreshCommand(for: node)
-        let canResume = resumeSessionId != nil
-        let preferredSessionId = isProviderResumeSessionId(deadSessionId) || canResume ? deadSessionId : nil
-        let provider = AgentLaunchCommand.provider(forCommand: command)
-        let surface = try createInternalSessionSurface(
-            provider: provider,
+        let restore = try SessionSurfaceLauncher.restoreSessionSurface(
+            sessionId: deadSessionId,
             cwd: cwd,
-            command: command,
+            freshCommand: plannerFreshCommand(for: node),
+            resumeCommand: { plannerResumeCommand(for: node, sessionId: $0) },
             createIfMissing: true,
             canvasId: canvasId,
             nodeId: node.id,
             // recreate 用 dispatch prompt 开场;resume 的对话已有上下文,不打扰。
-            initialPrompt: canResume ? nil : plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
-            preferredSessionId: preferredSessionId
+            freshInitialPrompt: plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
         )
+        let surface = restore.surface
+        let canResume = restore.action == .resume
         if canResume {
             _ = PlannerSessionRunStateBridge.observeBound(
                 sessionId: surface.sessionId,
@@ -2161,7 +2767,7 @@ enum BoardAPI {
             )
         }
         BoardServer.shared.broadcastStateChanged()
-        return (surface, canResume, resumeSessionId)
+        return (surface, canResume, restore.providerResumeSessionId)
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -2261,25 +2867,19 @@ enum BoardAPI {
                     for node in nodes {
                         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
                     }
-                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
-                    let command = resumeSessionId.map {
-                        plannerResumeCommand(for: nodes.first, sessionId: $0)
-                    }
-                        ?? plannerFreshCommand(for: nodes.first)
-                    let canResume = resumeSessionId != nil
-                    let action = canResume ? "resume" : "recreate"
-                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
-                    let provider = AgentLaunchCommand.provider(forCommand: command)
-                    let surface = try createInternalSessionSurface(
-                        provider: provider,
+                    let restore = try SessionSurfaceLauncher.restoreSessionSurface(
+                        sessionId: sessionId,
                         cwd: cwd,
-                        command: command,
+                        freshCommand: plannerFreshCommand(for: nodes.first),
+                        resumeCommand: { plannerResumeCommand(for: nodes.first, sessionId: $0) },
                         createIfMissing: true,
                         canvasId: canvasId,
                         nodeId: nodes.first?.id,
-                        initialPrompt: canResume ? nil : nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) },
-                        preferredSessionId: preferredSessionId
+                        freshInitialPrompt: nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) }
                     )
+                    let surface = restore.surface
+                    let canResume = restore.action == .resume
+                    let action = restore.action.rawValue
                     if canResume {
                         _ = PlannerSessionRunStateBridge.observeBound(
                             sessionId: surface.sessionId,
@@ -2491,103 +3091,106 @@ enum BoardAPI {
             }
 
             let hint = (body.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
-            // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
-            let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等);表格类对象(google-sheets tab / 多维表格等)还必须把真实行内容写进 fields.values — 二维字符串数组、列序与 fields.header 对齐、最多前 50 行、单格截断 200 字符(快照不带行值的话画布预览只能画空表)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
-
-            // 投递矩阵 — 专属会话每 reference 至多一条:
-            //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY
-            //                          (空闲立即执行,忙碌则排成下一轮输入)
-            //   surface 活着但 hook 未链接(启动窗口内)→ 刚派发还在启动,开场
-            //                          指令在就绪门控队列里,此刻再打字会落进
-            //                          半渲染的 TUI 而丢失 → 去重
-            //   其余 → 收掉旧 pane(如还在),fresh spawn,指令作开场 prompt
-            // 「claude 活着」不能用 resolvePluginSession(surfaceId) 判:surface
-            // 一建立 recordManagedSession 就造出 .active 的合成 SessionData,
-            // 解析得到不证明 hook 注册过。真正的注册证据是 hook 事件把 provider
-            // session id 链到 surface(providerResumeSessionIdForManagedSurface),
-            // 活着的证据是该 provider 会话未走到 .dead(进程没了)/.completed
-            // (sessionEnd,REPL 已退出只剩 shell — 此时打字等于执行乱码命令)。
-            let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
-            let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
-            let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
-            let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
-            let providerSession = providerSessionId.flatMap(resolvePluginSession)
-            let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
-            // spawn 后超时仍未链接 hook = 启动即崩的僵尸 pane;放着会让每次
-            // 点击都误判「启动中」,必须收掉重建。
-            let bootTimeout: TimeInterval = 120
-            let stillBooting = providerSessionId == nil
-                && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
-            let response: SyncResponse
-            if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
-                // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
-                // composer 里是插入换行不是提交,指令会一直躺在输入框里。
-                switch TerminalSessionBackendRegistry.shared.deliverPrompt(
-                    id: trackedSessionId,
-                    text: instruction
-                ) {
-                case .delivered:
-                    response = SyncResponse(
-                        ok: true,
-                        sessionId: trackedSessionId,
-                        reference: reference,
-                        action: "reused",
-                        detail: "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。"
-                    )
-                case .busy:
-                    // 上一条同步指令还在提交窗口里 — 连点去重,不能再打字
-                    // (两条文本会被同一个 Return 拼成一条畸形请求)。
-                    response = SyncResponse(
-                        ok: true,
-                        sessionId: trackedSessionId,
-                        reference: reference,
-                        action: "pending",
-                        detail: "上一条同步指令正在提交,本次点击已去重。"
-                    )
-                case .sessionNotFound:
-                    return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
-                }
-            } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
-                response = SyncResponse(
-                    ok: true,
-                    sessionId: trackedSessionId,
-                    reference: reference,
-                    action: "pending",
-                    detail: "专属同步会话正在启动并执行同步指令,无需重复触发。"
-                )
-            } else {
-                if let trackedSessionId, liveSurface != nil {
-                    _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
-                }
-                let surface = try createInternalSessionSurface(
-                    provider: "claude",
-                    cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
-                    command: artifactSyncLaunchCommand(),
-                    createIfMissing: true,
-                    canvasId: canvasId,
-                    // 专属 sync 会话不绑节点:进不了节点账本、不挂节点会话三态,
-                    // 也不参与 planner run-state(不调 observe)。
-                    nodeId: nil,
-                    initialPrompt: instruction
-                )
-                recordArtifactSyncSession(surface.sessionId, forKey: registryKey)
-                response = SyncResponse(
-                    ok: true,
-                    sessionId: surface.sessionId,
-                    reference: reference,
-                    action: "created",
-                    detail: "已派发专属同步会话,完成后卡片自动更新。"
-                )
-            }
-            NSLog("[ArtifactSync] reference=\(reference) -> session=\(response.sessionId.prefix(12)) action=\(response.action)")
+            let result = try dispatchArtifactSyncSession(canvasId: canvasId, reference: reference, hint: hint)
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(response)
+            return jsonResponse(SyncResponse(
+                ok: true,
+                sessionId: result.sessionId,
+                reference: reference,
+                action: result.action,
+                detail: result.detail
+            ))
+        } catch is ArtifactSyncDeliveryRejected {
+            return errorResponse("sync_delivery_failed", "专属同步会话的终端拒绝输入,请重试。", status: 500)
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    /// 专属 sync 会话的终端拒绝了投递(`deliverPrompt` → `.sessionNotFound`)。
+    /// HTTP handler 映射成 500;自动对账路径吞掉(best-effort,记日志)。
+    struct ArtifactSyncDeliveryRejected: Error {}
+
+    /// external-first 写穿契约的 sync 派发核心:为某 reference 派发/复用其**专属
+    /// 轻量同步会话**(每 reference 至多一条,活着复用、死了重建,不绑节点),把
+    /// 「get_artifact → 核对外部对象 → update_artifact 回写」指令下达给它。
+    /// 手动「同步快照」HTTP 入口(`syncPlannerArtifact`)与门控提交后的自动对账
+    /// (`submitPlannerNodeOutput`)共用本例程 —— 同一去重矩阵、同一会话注册表。
+    @discardableResult
+    static func dispatchArtifactSyncSession(
+        canvasId: String,
+        reference: String,
+        hint: String
+    ) throws -> (sessionId: String, action: String, detail: String) {
+        // 单行指令:fresh spawn 作 initialPrompt、复用会话走 deliverPrompt,
+        // 两条路径最终都是「打字 + Return 键提交」;文本里不要带换行。
+        let instruction = "[Artifact 同步会话] 你是 reference = \(reference)(canvasId \(canvasId))的专属快照同步会话,只做账本同步,不做任何节点工作。任务:1) 用 get_artifact 拉当前快照;2) 与外部对象的真实状态核对\(hint.isEmpty ? "" : "(提示:\(hint))");3) 用 update_artifact 回写真实事实(fields.rows/updated/summary 等);表格类对象(google-sheets tab / 多维表格等)还必须把真实行内容写进 fields.values — 二维字符串数组、列序与 fields.header 对齐、最多前 50 行、单格截断 200 字符(快照不带行值的话画布预览只能画空表)。边界:不要 submit_node_output / attach_artifact_to_node / update_artifact_views(工具面已禁用),不要改节点状态或画布上的其它对象;完成后报告核对结果并结束回合。"
+
+        // 投递矩阵 — 专属会话每 reference 至多一条:
+        //   provider hook 已链接且 claude 活着 → 指令直接打进它的 PTY
+        //                          (空闲立即执行,忙碌则排成下一轮输入)
+        //   surface 活着但 hook 未链接(启动窗口内)→ 刚派发还在启动,开场
+        //                          指令在就绪门控队列里,此刻再打字会落进
+        //                          半渲染的 TUI 而丢失 → 去重
+        //   其余 → 收掉旧 pane(如还在),fresh spawn,指令作开场 prompt
+        // 「claude 活着」不能用 resolvePluginSession(surfaceId) 判:surface
+        // 一建立 recordManagedSession 就造出 .active 的合成 SessionData,
+        // 解析得到不证明 hook 注册过。真正的注册证据是 hook 事件把 provider
+        // session id 链到 surface(providerResumeSessionIdForManagedSurface),
+        // 活着的证据是该 provider 会话未走到 .dead(进程没了)/.completed
+        // (sessionEnd,REPL 已退出只剩 shell — 此时打字等于执行乱码命令)。
+        let registryKey = artifactSyncSessionKey(canvasId: canvasId, reference: reference)
+        let trackedSessionId = artifactSyncSessionId(forKey: registryKey)
+        let liveSurface = trackedSessionId.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0) }
+        let providerSessionId = trackedSessionId.flatMap(providerResumeSessionIdForManagedSurface)
+        let providerSession = providerSessionId.flatMap(resolvePluginSession)
+        let claudeAlive = providerSession.map { $0.status != .dead && $0.status != .completed } ?? false
+        // spawn 后超时仍未链接 hook = 启动即崩的僵尸 pane;放着会让每次
+        // 点击都误判「启动中」,必须收掉重建。
+        let bootTimeout: TimeInterval = 120
+        let stillBooting = providerSessionId == nil
+            && (liveSurface.map { Date().timeIntervalSince($0.createdAt) <= bootTimeout } ?? false)
+        let result: (sessionId: String, action: String, detail: String)
+        if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), claudeAlive {
+            // deliverPrompt 而非 writeInput:裸 "\n" 在 agent TUI 的
+            // composer 里是插入换行不是提交,指令会一直躺在输入框里。
+            switch TerminalSessionBackendRegistry.shared.deliverPrompt(
+                id: trackedSessionId,
+                text: instruction
+            ) {
+            case .delivered:
+                result = (trackedSessionId, "reused", "同步指令已下达给该 reference 的专属同步会话,完成后卡片自动更新。")
+            case .busy:
+                // 上一条同步指令还在提交窗口里 — 连点去重,不能再打字
+                // (两条文本会被同一个 Return 拼成一条畸形请求)。
+                result = (trackedSessionId, "pending", "上一条同步指令正在提交,本次点击已去重。")
+            case .sessionNotFound:
+                throw ArtifactSyncDeliveryRejected()
+            }
+        } else if let trackedSessionId, let liveSurface, isReusableInternalSurface(liveSurface), stillBooting {
+            result = (trackedSessionId, "pending", "专属同步会话正在启动并执行同步指令,无需重复触发。")
+        } else {
+            if let trackedSessionId, liveSurface != nil {
+                _ = TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: trackedSessionId)
+            }
+            let surface = try createInternalSessionSurface(
+                provider: "claude",
+                cwd: BoardLayoutStore.shared.workspacePath(canvasId: canvasId),
+                command: artifactSyncLaunchCommand(),
+                createIfMissing: true,
+                canvasId: canvasId,
+                // 专属 sync 会话不绑节点:进不了节点账本、不挂节点会话三态,
+                // 也不参与 planner run-state(不调 observe)。
+                nodeId: nil,
+                initialPrompt: instruction
+            )
+            recordArtifactSyncSession(surface.sessionId, forKey: registryKey)
+            result = (surface.sessionId, "created", "已派发专属同步会话,完成后卡片自动更新。")
+        }
+        NSLog("[ArtifactSync] reference=\(reference) -> session=\(result.sessionId.prefix(12)) action=\(result.action)")
+        return result
     }
 
     // MARK: - Artifact sync 专属会话注册表
@@ -2931,6 +3534,7 @@ enum BoardAPI {
             }
             routePlannerOutputMessages(result.routes)
             materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+            reconcileExternalWriteMirrors(canvasId: canvasId, references: result.reconcileReferences)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -3800,6 +4404,50 @@ enum BoardAPI {
         }
     }
 
+    /// proposal 子功能 · propose_add_node:节点工作会话经 MCP 提议新增 step。
+    /// 产物是 pending 提案(走既有 approve/apply/reject 管线),不直接落图。
+    /// 校验/权限错误原样回给调用方 —— MCP 把错误体透传给 agent 自纠。
+    static func proposePlannerAddNode(_ req: HttpRequest) -> HttpResponse {
+        struct ProposeAddNodeRequest: Decodable {
+            let title: String?
+            let goal: String?
+            let summary: String?
+            let dependsOnNodeIds: [String]?
+            let sessionId: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: ProposeAddNodeRequest.self)
+        guard let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return errorResponse(
+                "invalid_proposal",
+                "propose_add_node requires a non-empty `title` for the new step; optional: `goal`, `summary`, `dependsOnNodeIds` (defaults to the proposing node)",
+                status: 400
+            )
+        }
+        do {
+            let proposal = try PlannerBoardBridge.proposeAddNode(
+                originNodeId: nodeId,
+                originSessionId: body?.sessionId,
+                title: title,
+                goal: body?.goal,
+                summary: body?.summary,
+                dependsOnNodeIds: body?.dependsOnNodeIds,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func openKanbanItemSubCanvas(_ req: HttpRequest) -> HttpResponse {
         struct OpenKanbanItemRequest: Decodable {
             let title: String?
@@ -4000,6 +4648,67 @@ enum BoardAPI {
             // 方向 A:apply 委托 sidecar 时 governance 校验拒绝(引用完整性 / 事务原子 / footgun)。
             return errorResponse("apply_rejected", err.localizedDescription, status: 422)
         }
+    }
+
+    static func mapArtifactCandidateError(_ err: SessionArtifactCandidateStoreError) -> HttpResponse {
+        switch err {
+        case .candidateNotFound:
+            return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .attachTargetRequired(let targets):
+            struct TargetRequired: Encodable {
+                let error: String
+                let message: String
+                let attachTargets: [SessionArtifactAttachTarget]
+            }
+            return jsonResponse(
+                TargetRequired(
+                    error: "attach_target_required",
+                    message: err.localizedDescription,
+                    attachTargets: targets
+                ),
+                status: 409,
+                reason: "Conflict"
+            )
+        case .attachTargetNotFound:
+            return errorResponse("attach_target_not_found", err.localizedDescription, status: 404)
+        case .artifactAttachFailed:
+            return errorResponse("artifact_attach_failed", err.localizedDescription, status: 500)
+        case .missingSession:
+            return errorResponse("bad_request", err.localizedDescription, status: 400)
+        }
+    }
+
+    private static func plannerArtifactKind(forCandidateKind kind: String) -> PlannerArtifactKind {
+        switch kind {
+        case "impl-pr":
+            return .implPR
+        case "check-result":
+            return .checkResult
+        case "prd":
+            return .prd
+        case "kanban":
+            return .kanban
+        default:
+            return .generic
+        }
+    }
+
+    private static func artifactPayload(for candidate: SessionArtifactCandidate) -> BoardJSONValue {
+        let refs = candidate.references.map { reference in
+            BoardJSONValue.object([
+                "kind": .string(reference.kind),
+                "value": .string(reference.value),
+                "label": reference.label.map(BoardJSONValue.string) ?? .null
+            ])
+        }
+        return .object([
+            "type": .string(PlannerArtifactPayloadType.text.rawValue),
+            "text": .string(candidate.summary),
+            "source": .string("artifact-candidate"),
+            "candidateId": .string(candidate.id),
+            "candidateKind": .string(candidate.kind),
+            "references": .array(refs)
+        ])
     }
 
     private static func recordPlannerDispatchIntents(canvasId: String, proposal: PlanProposal, nodes: [PlanningNode]) {
@@ -4261,22 +4970,15 @@ enum BoardAPI {
     }
 
     private static func isProviderResumeSessionId(_ sessionId: String) -> Bool {
-        AgentLaunchCommand.isLikelyProviderResumeSessionId(sessionId)
+        SessionSurfaceLauncher.isProviderResumeSessionId(sessionId)
     }
 
     private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
-        providerResumeSessionIdForManagedSurface(sessionId)
-            ?? (isProviderResumeSessionId(sessionId) ? sessionId : nil)
+        SessionSurfaceLauncher.providerResumeSessionId(forSessionId: sessionId)
     }
 
     private static func providerResumeSessionIdForManagedSurface(_ sessionId: String) -> String? {
-        if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !mapped.isEmpty,
-           !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
-            return mapped
-        }
-        return nil
+        SessionSurfaceLauncher.providerResumeSessionId(forSessionId: sessionId)
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {
@@ -4292,19 +4994,7 @@ enum BoardAPI {
     }
 
     private static func explicitSessionCwd(_ raw: String?) throws -> String? {
-        var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !value.isEmpty else { return nil }
-        if value.hasPrefix("~") {
-            value = NSHomeDirectory() + String(value.dropFirst(1))
-        }
-        let normalized = (value as NSString).standardizingPath
-        guard normalized.hasPrefix("/") else {
-            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd must be an absolute path"])
-        }
-        guard normalized != "/" && normalized != NSHomeDirectory() else {
-            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd is too broad"])
-        }
-        return normalized
+        try SessionSurfaceLauncher.explicitCwd(raw)
     }
 
     // MARK: - GET /api/user-profile
@@ -4312,7 +5002,12 @@ enum BoardAPI {
     static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
         let settings = readMeee2OnlineSettings()
         let defaults = UserDefaults.standard
-        let connected = defaults.bool(forKey: "meee2Connected")
+        // 凭证态以 settings.json 为准:authExpired 由任一二进制形态在 refresh
+        // 被吊销时写入,两种形态(bundled app / debug 二进制)都要立即退出
+        // 「已连接」展示,引导重新登录,而不是顶着 401 假装在线。
+        let authExpired = (settings["authExpired"] as? Bool) ?? false
+        let fileConnected = (settings["online"] as? Bool) ?? false
+        let connected = (defaults.bool(forKey: "meee2Connected") || fileConnected) && !authExpired
         let userName = connected
             ? defaultString(defaults, key: "meee2UserName", fallback: settings["userName"])
             : ""
@@ -4331,11 +5026,12 @@ enum BoardAPI {
         } else if !userEmail.isEmpty {
             displayName = userEmail.components(separatedBy: "@").first ?? userEmail
         } else {
-            displayName = connected ? "meee2 user" : "Not connected"
+            displayName = connected ? "Meee2 user" : "Not connected"
         }
 
         return jsonResponse(UserProfileDTO(
             connected: connected,
+            authExpired: authExpired,
             userId: userId,
             displayName: displayName,
             userName: userName,
@@ -4351,7 +5047,7 @@ enum BoardAPI {
     // MARK: - GET /api/team/members
 
     /// Team member directory for assignment and Team UI. This endpoint must
-    /// only expose real meee2 Online team members; planner doer/activity ids
+    /// only expose real Meee2 Online team members; planner doer/activity ids
     /// are local execution identities and are not assignable people.
     static func getTeamMembers(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()
@@ -4411,6 +5107,12 @@ enum BoardAPI {
 
         if let theme = json["theme"] as? String, ["system", "light", "dark"].contains(theme) {
             defaults.set(theme, forKey: "meee2.theme")
+        }
+        if json.keys.contains("themeProfile") {
+            guard let profile = WebBoardThemeProfile.parse(json["themeProfile"]) else {
+                return errorResponse("invalid_theme_profile", "themeProfile must be a supported v1 Web Board theme profile", status: 400)
+            }
+            WebBoardThemeProfile.store(profile, defaults: defaults)
         }
         if let locale = json["locale"] as? String, ["en", "zh-CN"].contains(locale) {
             defaults.set(locale, forKey: "meee2.locale")
@@ -4624,6 +5326,7 @@ enum BoardAPI {
         let defaults = UserDefaults.standard
         return AppSettingsDTO(
             theme: validTheme(defaults.string(forKey: "meee2.theme")),
+            themeProfile: WebBoardThemeProfile.storedProfile(defaults: defaults),
             locale: validLocale(defaults.string(forKey: "meee2.locale")),
             devMode: appDevMode(),
             showIsland: defaults.object(forKey: "showIsland") as? Bool ?? true,
@@ -4726,11 +5429,14 @@ enum BoardAPI {
         return components.url!
     }
 
-    private static func clearMeee2OnlineSettings() {
+    /// 主动断开：清空当前偏好域 + settings.json（含 token，文件是凭证唯一
+    /// 真相）。SettingsView 的 Disconnect 也走这里，保证两个入口语义一致。
+    static func clearMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         for key in [
             "meee2Connected",
             "meee2Online",
+            "meee2AuthExpired",
             "meee2TeamId",
             "meee2TeamName",
             "meee2Teams",
@@ -4750,8 +5456,10 @@ enum BoardAPI {
             defaults.removeObject(forKey: key)
         }
 
-        let settings: [String: Any] = [
-            "meee2": [
+        // 断开 = 整文件重置（token 一并清掉）；忽略文件现值，但仍须持锁
+        // 与在飞刷新串行，避免清理与轮换落盘交错出半新半旧状态
+        OnlineProxy.rewriteSettingsFile { _ in
+            [
                 "enabled": false,
                 "online": false,
                 "teams": [],
@@ -4762,12 +5470,6 @@ enum BoardAPI {
                 "machineId": Host.current().name ?? "unknown",
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
-        ]
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
         }
     }
 
@@ -4784,14 +5486,12 @@ enum BoardAPI {
                 "role": team.role ?? ""
             ]
         }
-        let meee2Settings: [String: Any] = [
+        let base: [String: Any] = [
             "enabled": true,
             "online": defaults.bool(forKey: "meee2Connected"),
             "supabaseUrl": normalizedSupabaseUrl,
             "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
             "onlineBaseUrl": defaults.string(forKey: "meee2OnlineBaseUrl") ?? "",
-            "accessToken": defaults.string(forKey: "meee2OnlineAccessToken") ?? "",
-            "refreshToken": defaults.string(forKey: "meee2OnlineRefreshToken") ?? "",
             "teamId": defaults.string(forKey: "meee2TeamId") ?? "",
             "userId": defaults.string(forKey: "meee2UserId") ?? "",
             "userName": defaults.string(forKey: "meee2UserName") ?? "",
@@ -4805,13 +5505,15 @@ enum BoardAPI {
             "machineId": Host.current().name ?? "unknown",
             "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
         ]
-        let settings: [String: Any] = ["meee2": meee2Settings]
-
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: file, options: .atomic)
+        // token / authExpired 在凭证锁内重读 settings.json 合并(rewrite
+        // 内部持锁):偏好域不再存 token,不持锁的 read-then-write 会把并发
+        // 刷新刚轮换的凭证冲回已吊销的旧 token family
+        OnlineProxy.rewriteSettingsFile { credentials in
+            var meee2 = base
+            meee2["accessToken"] = credentials.accessToken
+            meee2["refreshToken"] = credentials.refreshToken
+            meee2["authExpired"] = credentials.authExpired
+            return meee2
         }
     }
 
@@ -4957,6 +5659,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
         if TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: sid) {
+            SessionArtifactCandidateStore.shared.removeSession(sid)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
         }
@@ -4980,6 +5683,7 @@ enum BoardAPI {
         // 进程已经走了：kill(pid, 0) 返回 -1 / ESRCH。直接清掉 lingering card 算成功
         if kill(pid_t(pid), 0) != 0 {
             SessionStore.shared.delete(session.sessionId)
+            SessionArtifactCandidateStore.shared.removeSession(session.sessionId)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(CloseEnvelope(ok: true, alreadyDead: true))
         }
@@ -4991,6 +5695,7 @@ enum BoardAPI {
             return errorResponse("kill_failed", "SIGTERM failed: \(err)", status: 500)
         }
         SessionStore.shared.delete(session.sessionId)
+        SessionArtifactCandidateStore.shared.removeSession(session.sessionId)
         BoardServer.shared.broadcastStateChanged()
         MLog("[BoardAPI] Closed session \(session.sessionId.prefix(8)) (SIGTERM pid \(pid))")
         return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
@@ -6352,7 +7057,7 @@ enum BoardAPI {
             category: "official",
             tags: tagsForOfficialTemplate(template),
             ownerUserId: nil,
-            ownerName: "meee2",
+            ownerName: "Meee2",
             version: 1,
             readOnly: true,
             canEdit: false,
@@ -7326,5 +8031,11 @@ enum BoardAPI {
     private static func parseStringArray(_ raw: Any?) -> [String] {
         guard let arr = raw as? [Any] else { return [] }
         return arr.compactMap { $0 as? String }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

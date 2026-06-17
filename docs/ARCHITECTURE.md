@@ -13,7 +13,7 @@ meee2 is a single macOS process that:
 3. **Publishes** a unified session model to four surfaces: the Dynamic Island (SwiftUI), a TUI dashboard (ncurses), a CLI, and a Web Board (React, served by an embedded HTTP server).
 4. **Routes** messages between AI sessions through A2A channels, and handles permission-request round-trips back to the CLI.
 
-The whole app runs as a `.accessory` activation policy process — no Dock icon, just the menu bar + overlay window. The CLI/TUI and GUI share the same `meee2Kit` Swift module; the binary dispatches on argv in `Meee2App.init()`.
+The app runs as a standard `.regular` activation policy process — Dock icon, App Switcher entry, and a main Board window as the **primary surface** (opened on launch). The menu bar item + Dynamic Island overlay are secondary, always-on accessories. The CLI/TUI and GUI share the same `meee2Kit` Swift module; the binary dispatches on argv in `Meee2App.init()`.
 
 ---
 
@@ -156,8 +156,11 @@ The event handler lives in `ClaudePlugin` (a built-in `SessionPlugin`). It:
 
 - Upserts an `AISession` / `SessionData` into `SessionStore`, preserving sticky fields (see §7).
 - Derives `SessionStatus` from `HookEvent.inferredStatus` as a first cut.
+- Sends material `PostToolUse` / `Stop` evidence to `SessionArtifactCandidateStore`, which indexes session-scoped Artifact Candidates without mutating `SessionData` or planner node outputs.
 - Publishes an urgent event (`UrgentEventInfo`) when the event is a permission request or a user-facing notification.
 - Calls `onSessionsUpdated` so `StatusManager` re-publishes to the UI.
+
+Codex plugin hooks follow the same candidate path through the local Board API. The `meee2` Codex plugin bundles `hooks/hooks.json`; Codex still requires users to review and trust plugin-bundled hooks before they run. See OpenAI's Codex [plugin](https://developers.openai.com/codex/plugins/build) and [hook](https://developers.openai.com/codex/hooks) documentation.
 
 ---
 

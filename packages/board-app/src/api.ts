@@ -21,7 +21,14 @@ import type {
   CanvasSceneSpec,
   CanvasScope,
   SelectedCanvasElementContext,
+  SessionProject,
+  SessionProjectCreateInput,
+  SessionProjectList,
+  SessionProjectUpdateInput,
+  SessionLaunchAttachment,
   SpawnProvider,
+  AgentPermissionMode,
+  TemporarySessionCreateInput,
   CoordinationGroup,
   PlanProposal,
   PlannerActivity,
@@ -53,7 +60,11 @@ import type {
   ContextSourceKind,
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
+  SessionArtifactsEnvelope,
+  ArtifactCandidateListEnvelope,
+  ArtifactCandidateMutationEnvelope,
 } from './types'
+import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
 
 declare global {
@@ -85,7 +96,7 @@ let demoProposal: PlanProposal | null = null
 let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
   [DEMO_CANVAS_ID]: {
     id: DEMO_CANVAS_ID,
-    name: 'meee2 AI Demo',
+    name: 'Meee2 AI Demo',
     scope: 'personal',
     kind: 'monitor',
     isDefault: true,
@@ -110,7 +121,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
   [DEMO_CANVAS_ID]: [
     demoNode({
       id: 'contract',
-      title: 'meee2 AI Core Contract',
+      title: 'Meee2 AI Core Contract',
       status: 'done',
       executorType: 'human',
       executionMode: 'human',
@@ -118,7 +129,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     }),
     demoNode({
       id: 'state-api',
-      title: 'Store-backed meee2 AI State API',
+      title: 'Store-backed Meee2 AI State API',
       status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
@@ -138,7 +149,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     }),
     demoNode({
       id: 'react-flow-graph',
-      title: 'React Flow meee2 AI Graph',
+      title: 'React Flow Meee2 AI Graph',
       status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
@@ -209,7 +220,7 @@ function demoNode(input: {
     contextSources: [
       {
         kind: 'repository',
-        title: 'meee2 AI branch',
+        title: 'Meee2 AI branch',
         reference: 'codex/react-flow-planner-graph',
       },
     ],
@@ -272,7 +283,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
       id: safeCanvasId,
       ownerId: DEMO_OWNER_ID,
       title: canvas.name,
-      plannerContext: 'Static public demo of the React Flow meee2 AI Graph.',
+      plannerContext: 'Static public demo of the React Flow Meee2 AI Graph.',
     },
     nodes,
     states: nodes.map(demoNodeState),
@@ -311,7 +322,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         type: 'node.created',
         nodeId: nodes[0]?.id ?? null,
         proposalId: null,
-        summary: 'meee2 AI graph loaded from public demo fixtures.',
+        summary: 'Meee2 AI graph loaded from public demo fixtures.',
         artifactRefs: ['demo://planner'],
         createdAt: now,
       },
@@ -756,7 +767,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'engineering',
     tags: ['engineering', 'code-review', 'workflow'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -776,7 +787,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'engineering',
     tags: ['engineering', 'release', 'workflow'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -802,7 +813,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'team',
     tags: ['recap', 'ops'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -822,7 +833,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'team',
     tags: ['monitor', 'ops'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -842,7 +853,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'engineering',
     tags: ['engineering', 'workflow'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -867,7 +878,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'demo',
     tags: ['design', 'demo'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -892,7 +903,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'demo',
     tags: ['demo', 'scene', 'travel'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -945,7 +956,7 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     category: 'demo',
     tags: ['demo', 'scene', 'game'],
     ownerUserId: null,
-    ownerName: 'meee2',
+    ownerName: 'Meee2',
     version: 1,
     readOnly: true,
     canEdit: false,
@@ -1128,6 +1139,7 @@ export interface SessionSurface {
   command: string
   canvasId?: string | null
   nodeId?: string | null
+  sessionScope?: 'meee2' | 'canvas' | 'node' | 'external' | string
   status: 'starting' | 'running' | 'exited' | 'failed' | string
   pid?: number | null
   exitCode?: number | null
@@ -1142,6 +1154,114 @@ export interface SessionSurface {
 
 export function listSessionSurfaces(): Promise<SessionSurface[]> {
   return jsonRequest<{ surfaces: SessionSurface[] }>('/api/session-surfaces').then((result) => result.surfaces)
+}
+
+export function fetchSessionProjects(): Promise<SessionProjectList> {
+  return jsonRequest<SessionProjectList>('/api/session-projects')
+}
+
+export function createSessionProject(input: SessionProjectCreateInput): Promise<SessionProject> {
+  return jsonRequest<SessionProject>('/api/session-projects', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function renameSessionProject(id: string, input: SessionProjectUpdateInput): Promise<SessionProject> {
+  return jsonRequest<SessionProject>(`/api/session-projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function revealSessionProjectInFinder(id: string): Promise<{ ok: boolean; path: string }> {
+  return jsonRequest<{ ok: boolean; path: string }>(`/api/session-projects/${encodeURIComponent(id)}/reveal`, {
+    method: 'POST',
+  })
+}
+
+export function forgetSessionProject(id: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`/api/session-projects/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function pickSessionProjectDirectory(): Promise<{ ok: boolean; path?: string | null }> {
+  return jsonRequest<{ ok: boolean; path?: string | null }>('/api/session-projects/pick-directory', {
+    method: 'POST',
+  })
+}
+
+export function createProjectSession(input: {
+  projectId: string
+  path?: string
+  provider: SpawnProvider
+  permissionMode?: AgentPermissionMode
+  planMode?: boolean
+  initialPrompt?: string
+  attachments?: SessionLaunchAttachment[]
+}): Promise<{ ok: boolean; project: SessionProject; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; project: SessionProject; surface: SessionSurface }>(
+    `/api/session-projects/${encodeURIComponent(input.projectId)}/sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        path: input.path,
+        provider: input.provider,
+        permissionMode: input.permissionMode,
+        planMode: input.planMode,
+        initialPrompt: input.initialPrompt,
+        attachments: input.attachments,
+      }),
+    },
+  )
+}
+
+export function createTemporarySession(input: TemporarySessionCreateInput): Promise<{ ok: boolean; cwd: string; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; cwd: string; surface: SessionSurface }>('/api/session-launcher/temporary-sessions', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function pickSessionLaunchAttachments(): Promise<{ ok: boolean; attachments: SessionLaunchAttachment[] }> {
+  return jsonRequest<{ ok: boolean; attachments: SessionLaunchAttachment[] }>('/api/session-launcher/pick-attachments', {
+    method: 'POST',
+  })
+}
+
+export async function uploadSessionLaunchAttachment(file: File): Promise<SessionLaunchAttachment> {
+  const dataBase64 = await fileToBase64(file)
+  const result = await jsonRequest<{ ok: boolean; attachments: SessionLaunchAttachment[] }>('/api/session-launcher/attachments', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: file.name || 'paste',
+      contentType: file.type || 'application/octet-stream',
+      dataBase64,
+    }),
+  })
+  const attachment = result.attachments[0]
+  if (!attachment) throw new Error('Attachment upload returned no file')
+  return attachment
+}
+
+export function reopenLauncherSession(input: {
+  sessionId: string
+  providerResumeSessionId?: string | null
+  provider?: SpawnProvider | string | null
+  cwd?: string | null
+}): Promise<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }> {
+  return jsonRequest<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }>(
+    `/api/session-launcher/sessions/${encodeURIComponent(input.sessionId)}/reopen`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        providerResumeSessionId: input.providerResumeSessionId ?? undefined,
+        provider: input.provider ?? undefined,
+        cwd: input.cwd ?? undefined,
+      }),
+    },
+  )
 }
 
 export function createSessionSurface(input: {
@@ -1176,6 +1296,7 @@ export function openNativeTerminalSurface(input: {
   sessionId?: string
   rect?: NativeTerminalRect
   type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus' | 'prewarm'
+  theme?: 'light' | 'dark'
   traceId?: string
   clickStartedAtMs?: number
   sentAtMs?: number
@@ -1188,6 +1309,7 @@ export function openNativeTerminalSurface(input: {
     surfaceId: input.surfaceId,
     sessionId: input.sessionId,
     rect: input.rect,
+    theme: input.theme,
     traceId: input.traceId,
     clickStartedAtMs: input.clickStartedAtMs,
     sentAtMs: input.sentAtMs,
@@ -1198,10 +1320,11 @@ export function openNativeTerminalSurface(input: {
 
 export function syncNativeSessionsWorkspace(input: {
   rect?: NativeTerminalRect
-  phase?: 'show' | 'layout' | 'hide' | 'focus'
+  phase?: 'show' | 'layout' | 'hide' | 'focus' | 'obscure'
   mode?: 'full' | 'terminal'
   sessionId?: string | null
   surfaceId?: string | null
+  theme?: 'light' | 'dark'
   traceId?: string
   clickStartedAtMs?: number
   sentAtMs?: number
@@ -1216,6 +1339,7 @@ export function syncNativeSessionsWorkspace(input: {
     rect: input.rect,
     sessionId: input.sessionId ?? undefined,
     surfaceId: input.surfaceId ?? undefined,
+    theme: input.theme,
     traceId: input.traceId,
     clickStartedAtMs: input.clickStartedAtMs,
     sentAtMs: input.sentAtMs,
@@ -1292,7 +1416,7 @@ export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
         id: `monitor-${node.id}`,
         kind: 'node' as const,
         canvasId: node.canvasId,
-        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'meee2 AI Demo',
+        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'Meee2 AI Demo',
         nodeId: node.id,
         nodeTitle: node.title,
         proposalId: null,
@@ -1341,7 +1465,7 @@ export async function generatePlannerProposal(
   if (PLANNER_DEMO_MODE) {
     demoProposal = nextDemoProposal(
       canvasId,
-      `Generate meee2 AI graph for: ${goal || 'owner goal'}`,
+      `Generate Meee2 AI graph for: ${goal || 'owner goal'}`,
       goal ? `Owner review: ${goal}` : 'Owner review checkpoint',
     )
     return demoProposal
@@ -1827,6 +1951,44 @@ export function getPlannerArtifactContent(
   )
 }
 
+export function fetchSessionArtifacts(sessionId: string): Promise<SessionArtifactsEnvelope> {
+  return jsonRequest<SessionArtifactsEnvelope>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+  )
+}
+
+export function fetchArtifactCandidates(sessionId?: string): Promise<ArtifactCandidateListEnvelope> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+  return jsonRequest<ArtifactCandidateListEnvelope>(`/api/artifact-candidates${query}`)
+}
+
+export function promoteArtifactCandidate(
+  candidateId: string,
+  input?: {
+    canvasId?: string
+    nodeId?: string
+    kind?: PlannerArtifactKind
+    title?: string
+    reference?: string
+    status?: string
+  },
+): Promise<ArtifactCandidateMutationEnvelope> {
+  return jsonRequest<ArtifactCandidateMutationEnvelope>(
+    `/api/artifact-candidates/${encodeURIComponent(candidateId)}/promote`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input ?? {}),
+    },
+  )
+}
+
+export function discardArtifactCandidate(candidateId: string): Promise<ArtifactCandidateMutationEnvelope> {
+  return jsonRequest<ArtifactCandidateMutationEnvelope>(
+    `/api/artifact-candidates/${encodeURIComponent(candidateId)}/discard`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 // UI-1 (ENG-3) — version chain read API. The dropdown calls listArtifactVersions
 // once per artifact slot; selecting a non-latest entry calls getArtifactVersion
 // to fetch its full payload + input snapshot.
@@ -2151,6 +2313,30 @@ export function installIntegration(integrationId: string): Promise<IntegrationIn
   )
 }
 
+/** POST /api/integrations/:id/credentials — upload the OAuth client
+ *  credentials.json for a localStdio connector (e.g. google-sheets). Body is
+ *  the raw file content. */
+export function uploadIntegrationCredentials(
+  integrationId: string,
+  credentialsJson: string,
+): Promise<{ ok: boolean; path: string; message: string }> {
+  return jsonRequest(
+    `/api/integrations/${encodeURIComponent(integrationId)}/credentials`,
+    { method: 'POST', body: credentialsJson },
+  )
+}
+
+/** POST /api/integrations/:id/preauth — provoke the stdio connector's server
+ *  OAuth browser flow now, so the token caches before headless dispatch. */
+export function preauthIntegration(
+  integrationId: string,
+): Promise<{ status: string; message: string }> {
+  return jsonRequest(
+    `/api/integrations/${encodeURIComponent(integrationId)}/preauth`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
 /** POST /api/integrations/:id/recommend-workflow —— planner agent 提议
  *  一份使用刚装好这个 integration 的小流程到 `canvasId`,产物是一条
  *  pending PlanProposal,会在 planner UI 的审批闸门里出现。 */
@@ -2224,7 +2410,7 @@ export async function setPlannerCanvasVisibility(
     return Promise.resolve({
       id: canvasId,
       ownerId: DEMO_OWNER_ID,
-      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      title: demoCanvasRecords[canvasId]?.name ?? 'Meee2 AI Demo',
       plannerContext: `canvas:${canvasId}`,
       visibility,
     })
@@ -2247,7 +2433,7 @@ export async function setPlannerCanvasDescription(
     return Promise.resolve({
       id: canvasId,
       ownerId: DEMO_OWNER_ID,
-      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      title: demoCanvasRecords[canvasId]?.name ?? 'Meee2 AI Demo',
       plannerContext: description.trim() || `canvas:${canvasId}`,
       visibility: demoCanvasRecords[canvasId]?.scope === 'team' ? 'public' : 'private',
     })
@@ -2398,6 +2584,7 @@ export function disconnectMeee2Online(): Promise<{ ok: boolean }> {
 
 export interface AppSettings {
   theme: 'system' | 'light' | 'dark'
+  themeProfile: ThemeProfile
   locale: 'en' | 'zh-CN'
   devMode?: boolean
   showIsland: boolean
@@ -2422,6 +2609,24 @@ export function fetchAppSettings(): Promise<AppSettings> {
   if (PLANNER_DEMO_MODE) {
     return Promise.resolve({
       theme: 'system',
+      themeProfile: {
+        schemaVersion: 1,
+        presetId: 'claude',
+        light: {
+          accentColor: '#B95F43',
+          backgroundColor: '#F4F1EA',
+          sidebarColor: '#FBF8F1',
+          foregroundColor: '#25211D',
+          contrast: 55,
+        },
+        dark: {
+          accentColor: '#CC785C',
+          backgroundColor: '#262624',
+          sidebarColor: '#2C2B29',
+          foregroundColor: '#F5F4EF',
+          contrast: 58,
+        },
+      },
       locale: 'en',
       devMode: true,
       showIsland: true,
