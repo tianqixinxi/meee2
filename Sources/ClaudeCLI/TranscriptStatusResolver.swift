@@ -263,7 +263,7 @@ public enum TranscriptStatusResolver {
         }
 
         // Step 1: read tail & find last user/assistant/system entry.
-        guard let tail = readTail(path: transcriptPath, bytes: 4096) else {
+        guard let tail = readTail(path: transcriptPath, bytes: _resolverTailBytes) else {
             stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no transcript)")
             return hookStatus
         }
@@ -456,7 +456,7 @@ public enum TranscriptStatusResolver {
         transcriptPath: String?,
         currentTool: String?
     ) -> String?? {
-        guard let tail = readTail(path: transcriptPath, bytes: 4096) else {
+        guard let tail = readTail(path: transcriptPath, bytes: _resolverTailBytes) else {
             return nil
         }
         guard let last = findLastRelevantEntry(tail: tail) else {
@@ -492,7 +492,7 @@ public enum TranscriptStatusResolver {
     }
 
     public static func resolveChoicePrompt(transcriptPath: String?) -> ChoicePrompt? {
-        guard let tail = readTail(path: transcriptPath, bytes: 4096),
+        guard let tail = readTail(path: transcriptPath, bytes: _resolverTailBytes),
               let last = findLastRelevantEntry(tail: tail),
               let tool = last.pendingChoiceTool else {
             return nil
@@ -598,6 +598,14 @@ private func transcriptFileMtime(path: String) -> Date? {
 /// - assistant / system case：tail 久了 + hook working → 仍降级 idle（这两种
 ///   tail 类型下 hook 翻转几乎是即时的，stale 几乎只能解释为 ESC）
 private let _workingHooks: Set<SessionStatus> = [.thinking, .tooling, .active, .compacting]
+
+/// resolver 读 transcript 尾巴的字节数。早期是 4KB,但 `ExitPlanMode` 会把整份
+/// 计划塞进那条 assistant JSONL —— 单行轻松 >4KB,4KB 窗口只切到半行碎片,
+/// `findLastRelevantEntry` 解析不出该 assistant entry → 漏判 awaitingChoice,
+/// 回退成 hook 的 permissionRequired(长计划被显示成"需权限")。提到 64KB 覆盖
+/// 绝大多数计划。多读旧字节不改普通场景结果(findLastRelevantEntry 返回最新一条),
+/// 只在"最新那条本身很大"时救场;TTL 1s 缓存 + page cache,开销可忽略。
+private let _resolverTailBytes = 65_536
 
 /// Read the last `bytes` bytes of a file as UTF-8 (replacement on invalid
 /// bytes). Returns nil if the path is missing or unreadable.

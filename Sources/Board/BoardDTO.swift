@@ -1088,8 +1088,12 @@ enum BoardDTOBuilder {
             usageStats: usageStatsDTOFinal,
             tasks: tasksDTO,
             currentTask: sessionData?.currentTask ?? session.subtitle,
-            pendingPermissionTool: sessionData?.pendingPermissionTool,
-            pendingPermissionMessage: sessionData?.pendingPermissionMessage,
+            // choice 现场（含 ExitPlanMode，它经 permission 通道也会带
+            // pendingPermissionTool）抑制权限字段——否则 effectiveSessionStatus
+            // 会把非空 pendingPermissionTool 顶回 .permissionRequired，盖掉
+            // awaitingChoice。一个 pending 工具不可能既是权限又是选择。
+            pendingPermissionTool: choicePrompt == nil ? sessionData?.pendingPermissionTool : nil,
+            pendingPermissionMessage: choicePrompt == nil ? sessionData?.pendingPermissionMessage : nil,
             pendingChoiceTool: choicePrompt?.tool,
             pendingChoiceMessage: choicePrompt?.summary,
             ghosttyTerminalId: sessionData?.ghosttyTerminalId,

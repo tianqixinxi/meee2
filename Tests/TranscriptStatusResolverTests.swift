@@ -553,4 +553,35 @@ final class TranscriptStatusResolverTests: XCTestCase {
         XCTAssertEqual(resolved, .active,
                        "resolver must use the lone fresh assistant entry (.active mid-turn), not fall back to stale hook .idle")
     }
+
+    /// ExitPlanMode 把整份计划塞进那条 assistant JSONL,单行 >4KB。旧的 4KB tail
+    /// 窗口只切到半行碎片 → 解析不出 assistant entry → 漏判 awaitingChoice,回退成
+    /// hook 的 permissionRequired。加大 tail(_resolverTailBytes)后应正确识别为
+    /// awaitingChoice 并盖过 hook。
+    func testResolve_largeExitPlanModeEntry_detectedAsChoice() throws {
+        let bigPlan = String(repeating: "step do the thing ", count: 400) // ~7KB
+        let nowISO = ISO8601DateFormatter().string(from: Date())
+        let lines = [
+            #"{"type":"user","message":{"role":"user","content":"go"},"timestamp":"2020-01-01T00:00:00Z"}"#,
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"ExitPlanMode","input":{"plan":"\#(bigPlan)"}}]},"timestamp":"\#(nowISO)"}"#
+        ]
+        let path = try writeFixture(lines)
+        defer {
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent()
+            )
+        }
+        let size = (try FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0
+        XCTAssertGreaterThan(size, 4096, "fixture must exceed the old 4KB tail window")
+
+        let resolved = TranscriptStatusResolver.resolve(
+            sessionId: nil,
+            transcriptPath: path,
+            hookStatus: .permissionRequired,   // ExitPlanMode 经 permission 通道
+            pid: nil,
+            ghosttyTerminalId: nil
+        )
+        XCTAssertEqual(resolved, .awaitingChoice,
+                       "large ExitPlanMode entry must be detected as choice, not fall back to permissionRequired")
+    }
 }
