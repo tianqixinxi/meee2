@@ -564,6 +564,7 @@ public final class BoardServer {
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
         server.DELETE["/api/automations/:id"] = BoardServer.cors(BoardAPI.deleteAutomation)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
+        server.POST["/api/sessions/:id/open-workspace"] = BoardServer.cors(BoardAPI.openSessionWorkspace)
         server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.POST["/api/sessions/:id/control"] = BoardServer.cors(BoardAPI.updateSessionControl)
