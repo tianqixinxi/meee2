@@ -57,6 +57,7 @@ import {
   type StorageStats,
   type UserProfile,
 } from '../api'
+import { displaySessionTitle } from '../lib/sessionRecap'
 import type { BoardPerfSnapshot, Session } from '../types'
 
 interface Props {
@@ -184,12 +185,7 @@ function timestampForSettingsSession(session: Session): number {
 }
 
 function settingsSessionTitle(session: Session): string {
-  const recap = session.latestRecap?.content?.trim()
-  if (recap) return truncateSettingsSessionTitle(recap)
-  const firstUser = session.recentMessages.find((entry) => entry.role.toLowerCase() === 'user' && entry.text.trim())
-  if (firstUser) return truncateSettingsSessionTitle(firstUser.text)
-  if (session.currentTask?.trim()) return truncateSettingsSessionTitle(session.currentTask)
-  return truncateSettingsSessionTitle(session.title || session.id)
+  return truncateSettingsSessionTitle(displaySessionTitle(session).text || session.id)
 }
 
 function truncateSettingsSessionTitle(value: string): string {

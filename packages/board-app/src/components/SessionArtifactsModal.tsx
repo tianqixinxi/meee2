@@ -1,5 +1,5 @@
 import { Archive, CheckCircle2, ExternalLink, FileText, Loader2, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   discardArtifactCandidate,
@@ -9,7 +9,6 @@ import {
 } from '../api'
 import type {
   PlannerArtifact,
-  SessionArtifactAttachTarget,
   SessionArtifactCandidate,
   SessionArtifactsEnvelope,
 } from '../types'
@@ -28,25 +27,28 @@ interface SessionArtifactsModalProps {
   target: SessionArtifactsModalTarget
   onClose: () => void
   onChanged?: () => void
+  onOpenDetails?: (target: SessionArtifactsModalTarget) => void
 }
 
-export function SessionArtifactsModal({ target, onClose, onChanged }: SessionArtifactsModalProps) {
+interface SessionArtifactsPanelProps {
+  target: SessionArtifactsModalTarget
+  onChanged?: () => void
+  onOpenDetails?: (target: SessionArtifactsModalTarget) => void
+  className?: string
+}
+
+export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, className }: SessionArtifactsPanelProps) {
   const { t } = useI18n()
   const [data, setData] = useState<SessionArtifactsEnvelope | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [selectedTargetKey, setSelectedTargetKey] = useState<string>('')
 
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
     fetchSessionArtifacts(target.sessionId)
-      .then((next) => {
-        setData(next)
-        const first = next.attachTargets[0]
-        setSelectedTargetKey(first ? targetKey(first) : '')
-      })
+      .then((next) => setData(next))
       .catch((err) => setError((err as Error).message || t('artifacts.loadFailed')))
       .finally(() => setLoading(false))
   }, [target.sessionId, t])
@@ -54,6 +56,129 @@ export function SessionArtifactsModal({ target, onClose, onChanged }: SessionArt
   useEffect(() => {
     load()
   }, [load])
+
+  const handlePromote = useCallback((candidate: SessionArtifactCandidate) => {
+    if (busyId) return
+    setBusyId(candidate.id)
+    promoteArtifactCandidate(candidate.id)
+      .then((result) => {
+        setData((current) => {
+          if (!current) return current
+          const candidates = current.candidates.filter((item) => item.id !== candidate.id)
+          const artifacts = result.artifact
+            ? [result.artifact, ...current.artifacts.filter((item) => item.id !== result.artifact?.id)]
+            : current.artifacts
+          return {
+            ...current,
+            candidates,
+            artifacts,
+            totalCount: candidates.length + artifacts.length,
+            attachTargets: result.attachTargets.length > 0 ? result.attachTargets : current.attachTargets,
+          }
+        })
+        window.dispatchEvent(new CustomEvent('meee2:session-artifacts-changed', {
+          detail: { sessionId: target.sessionId, candidateId: candidate.id, action: 'promote' },
+        }))
+        onChanged?.()
+        load()
+      })
+      .catch((err) => setError((err as Error).message || t('artifacts.promoteFailed')))
+      .finally(() => setBusyId(null))
+  }, [busyId, load, onChanged, t, target.sessionId])
+
+  const handleDiscard = useCallback((candidate: SessionArtifactCandidate) => {
+    if (busyId) return
+    setBusyId(candidate.id)
+    discardArtifactCandidate(candidate.id)
+      .then(() => {
+        setData((current) => {
+          if (!current) return current
+          const candidates = current.candidates.filter((item) => item.id !== candidate.id)
+          return {
+            ...current,
+            candidates,
+            totalCount: candidates.length + current.artifacts.length,
+          }
+        })
+        window.dispatchEvent(new CustomEvent('meee2:session-artifacts-changed', {
+          detail: { sessionId: target.sessionId, candidateId: candidate.id, action: 'discard' },
+        }))
+        onChanged?.()
+        load()
+      })
+      .catch((err) => setError((err as Error).message || t('artifacts.discardFailed')))
+      .finally(() => setBusyId(null))
+  }, [busyId, load, onChanged, t, target.sessionId])
+
+  return (
+    <div className={['session-artifacts-panel', className].filter(Boolean).join(' ')}>
+      <header className="session-artifacts-modal__header">
+        <h2>{t('artifacts.title')}</h2>
+        {onOpenDetails && (
+          <button
+            type="button"
+            className="session-artifacts-modal__details-button"
+            onClick={() => onOpenDetails(target)}
+          >
+            <ExternalLink size={14} aria-hidden />
+            <span>{t('artifacts.openDetailsPage')}</span>
+          </button>
+        )}
+      </header>
+
+      {error && <div className="session-artifacts-modal__error" role="status">{error}</div>}
+
+      {loading ? (
+        <div className="session-artifacts-modal__empty" role="status">
+          <Loader2 size={15} className="spin" aria-hidden />
+          <span>{t('artifacts.loading')}</span>
+        </div>
+      ) : !data || data.totalCount === 0 ? (
+        <div className="session-artifacts-modal__empty">
+          <Archive size={16} aria-hidden />
+          <span>{t('artifacts.empty')}</span>
+        </div>
+      ) : (
+        <div className="session-artifacts-modal__body">
+          <section>
+            <h3>{t('artifacts.candidates')}</h3>
+            {data.candidates.length === 0 ? (
+              <div className="session-artifacts-modal__empty compact">{t('artifacts.noCandidates')}</div>
+            ) : (
+              <div className="session-artifacts-list">
+                {data.candidates.map((candidate) => (
+                    <CandidateRow
+                      key={candidate.id}
+                      candidate={candidate}
+                      busy={busyId === candidate.id}
+                      onPromote={() => handlePromote(candidate)}
+                      onDiscard={() => handleDiscard(candidate)}
+                    />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h3>{t('artifacts.attachedArtifacts')}</h3>
+            {data.artifacts.length === 0 ? (
+              <div className="session-artifacts-modal__empty compact">{t('artifacts.noAttachedArtifacts')}</div>
+            ) : (
+              <div className="session-artifacts-list">
+                {data.artifacts.map((artifact) => (
+                  <AttachedArtifactRow artifact={artifact} key={artifact.id} />
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function SessionArtifactsModal({ target, onClose, onChanged, onOpenDetails }: SessionArtifactsModalProps) {
+  const { t } = useI18n()
 
   useEffect(() => {
     syncNativeSessionsWorkspace({
@@ -75,45 +200,7 @@ export function SessionArtifactsModal({ target, onClose, onChanged }: SessionArt
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
-  const selectedTarget = useMemo(
-    () => data?.attachTargets.find((item) => targetKey(item) === selectedTargetKey) ?? null,
-    [data?.attachTargets, selectedTargetKey],
-  )
-
-  const handlePromote = useCallback((candidate: SessionArtifactCandidate) => {
-    if (busyId) return
-    const attachTargets = data?.attachTargets ?? []
-    const explicitTarget = attachTargets.length === 1 ? attachTargets[0] : selectedTarget
-    if (!explicitTarget) {
-      setError(t('artifacts.chooseAttachTarget'))
-      return
-    }
-    setBusyId(candidate.id)
-    promoteArtifactCandidate(candidate.id, {
-      canvasId: explicitTarget.canvasId,
-      nodeId: explicitTarget.nodeId,
-    })
-      .then(() => {
-        onChanged?.()
-        load()
-      })
-      .catch((err) => setError((err as Error).message || t('artifacts.promoteFailed')))
-      .finally(() => setBusyId(null))
-  }, [busyId, data?.attachTargets, load, onChanged, selectedTarget, t])
-
-  const handleDiscard = useCallback((candidate: SessionArtifactCandidate) => {
-    if (busyId) return
-    setBusyId(candidate.id)
-    discardArtifactCandidate(candidate.id)
-      .then(() => {
-        onChanged?.()
-        load()
-      })
-      .catch((err) => setError((err as Error).message || t('artifacts.discardFailed')))
-      .finally(() => setBusyId(null))
-  }, [busyId, load, onChanged, t])
-
-  const body = (
+  return createPortal(
     <div className="session-artifacts-modal-backdrop" role="presentation" onClick={onClose}>
       <section
         className="session-artifacts-modal"
@@ -122,91 +209,26 @@ export function SessionArtifactsModal({ target, onClose, onChanged }: SessionArt
         aria-label={t('artifacts.sessionModalTitle', { title: target.title })}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="session-artifacts-modal__header">
-          <div>
-            <span>{target.title}</span>
-            <h2>{t('artifacts.sessionModalHeading', { count: data?.totalCount ?? 0 })}</h2>
-          </div>
-        </header>
-
-        {error && <div className="session-artifacts-modal__error" role="status">{error}</div>}
-
-        {loading ? (
-          <div className="session-artifacts-modal__empty" role="status">
-            <Loader2 size={15} className="spin" aria-hidden />
-            <span>{t('artifacts.loading')}</span>
-          </div>
-        ) : !data || data.totalCount === 0 ? (
-          <div className="session-artifacts-modal__empty">
-            <Archive size={16} aria-hidden />
-            <span>{t('artifacts.empty')}</span>
-          </div>
-        ) : (
-          <div className="session-artifacts-modal__body">
-            {data.attachTargets.length > 1 && (
-              <label className="session-artifacts-modal__target">
-                <span>{t('artifacts.attachTarget')}</span>
-                <select value={selectedTargetKey} onChange={(event) => setSelectedTargetKey(event.target.value)}>
-                  {data.attachTargets.map((item) => (
-                    <option value={targetKey(item)} key={targetKey(item)}>
-                      {item.canvasName} / {item.nodeTitle}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <section>
-              <h3>{t('artifacts.candidates')}</h3>
-              {data.candidates.length === 0 ? (
-                <div className="session-artifacts-modal__empty compact">{t('artifacts.noCandidates')}</div>
-              ) : (
-                <div className="session-artifacts-list">
-                  {data.candidates.map((candidate) => (
-                    <CandidateRow
-                      key={candidate.id}
-                      candidate={candidate}
-                      busy={busyId === candidate.id}
-                      canPromote={data.attachTargets.length > 0}
-                      onPromote={() => handlePromote(candidate)}
-                      onDiscard={() => handleDiscard(candidate)}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section>
-              <h3>{t('artifacts.attachedArtifacts')}</h3>
-              {data.artifacts.length === 0 ? (
-                <div className="session-artifacts-modal__empty compact">{t('artifacts.noAttachedArtifacts')}</div>
-              ) : (
-                <div className="session-artifacts-list">
-                  {data.artifacts.map((artifact) => (
-                    <AttachedArtifactRow artifact={artifact} key={artifact.id} />
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
+        <SessionArtifactsPanel
+          target={target}
+          onChanged={onChanged}
+          onOpenDetails={onOpenDetails}
+          className="session-artifacts-panel--modal"
+        />
       </section>
-    </div>
+    </div>,
+    document.body,
   )
-
-  return createPortal(body, document.body)
 }
 
 function CandidateRow({
   candidate,
   busy,
-  canPromote,
   onPromote,
   onDiscard,
 }: {
   candidate: SessionArtifactCandidate
   busy: boolean
-  canPromote: boolean
   onPromote: () => void
   onDiscard: () => void
 }) {
@@ -227,7 +249,7 @@ function CandidateRow({
         <ReferenceList references={candidate.references} />
       </div>
       <div className="session-artifact-row__actions">
-        <button type="button" onClick={onPromote} disabled={busy || !canPromote}>
+        <button type="button" onClick={onPromote} disabled={busy}>
           {busy ? <Loader2 size={14} className="spin" aria-hidden /> : <CheckCircle2 size={14} aria-hidden />}
           <span>{t('artifacts.promote')}</span>
         </button>
@@ -292,10 +314,6 @@ function openReference(value: string) {
   if (value.startsWith('/')) {
     window.open(`file://${value}`, '_blank', 'noopener,noreferrer')
   }
-}
-
-function targetKey(target: SessionArtifactAttachTarget): string {
-  return `${target.canvasId}:${target.nodeId}`
 }
 
 function formatDate(value: string): string {

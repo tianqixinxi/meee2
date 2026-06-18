@@ -220,6 +220,19 @@ _Avoid_: Canvas Evidence, status without proof, hidden artifact
 Session-attached traceable work proof captured from agent hooks before it is archived into a Canvas Workspace or node. Artifact Candidates are globally searchable evidence, but they are not canonical node outputs until promoted into an Artifact.
 _Avoid_: Draft Artifact, hidden hook output, automatic node output
 
+**Provider Recap Signal**:
+A provider-native summary signal observed from a Supported Provider, such as Claude Code `away_summary` / `/recap` or a Codex compact summary. A Provider Recap Signal is source material for a Session Recap, not the normalized recap itself; provider adapters expose signals, while recap-core owns cross-provider normalization.
+Claude human-facing summaries and Codex context-compaction summaries are different Provider Recap Signal intents, and context-compaction signals must not automatically become Display Session Titles.
+_Avoid_: Session Recap, canonical summary, display title, all provider summaries as equal
+
+**Session Recap**:
+A normalized cross-provider recap projection for one Canonical Session Identity. Session Recap may be built from Provider Recap Signals, transcript tails, user notes, and artifacts, but meee2 owns its source, evidence, freshness, and display suitability.
+_Avoid_: Provider raw summary, Claude recap, Codex compact summary
+
+**Display Session Title**:
+A user-facing label deterministically derived for compact session surfaces from user rename overrides, Session Recap, active task, prompt text, provider title, or folder context. A Display Session Title is not Canonical Session Identity, must not rename or reassign the underlying session, and does not require an LLM in the default path.
+_Avoid_: Session identity, provider title as truth, recap as title
+
 **Artifact View**:
 A named projection over an Artifact's data, owned by the Artifact and carried with it wherever the Artifact is shown. Canvas cards, Inspector detail, and the Artifacts rail choose and render Artifact Views, but do not own the view definitions.
 _Avoid_: Canvas Render Value, widget-local tab, duplicate artifact data

@@ -106,6 +106,7 @@ export function ArtifactsView({
   const [selectedVersionBySlot, setSelectedVersionBySlot] = useState<Record<string, string>>({})
   const [versionDetailById, setVersionDetailById] = useState<Record<string, PlannerArtifactVersion>>({})
   const [contentModalKey, setContentModalKey] = useState<string | null>(null)
+  const [refreshTick, setRefreshTick] = useState(0)
 
   const canvasSignature = useMemo(
     () => canvases.map((canvas) => `${canvas.id}:${canvas.name}`).join('|'),
@@ -152,7 +153,18 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature, sessionFilter?.sessionId, t])
+  }, [canvasSignature, refreshTick, sessionFilter?.sessionId, t])
+
+  useEffect(() => {
+    const handleArtifactsChanged = (event: Event) => {
+      const changedSessionId = (event as CustomEvent<{ sessionId?: string }>).detail?.sessionId
+      if (!sessionFilter?.sessionId || !changedSessionId || changedSessionId === sessionFilter.sessionId) {
+        setRefreshTick((value) => value + 1)
+      }
+    }
+    window.addEventListener('meee2:session-artifacts-changed', handleArtifactsChanged)
+    return () => window.removeEventListener('meee2:session-artifacts-changed', handleArtifactsChanged)
+  }, [sessionFilter?.sessionId])
 
   const allItems = useMemo(() => [
     ...buildArtifactIndex(sources),

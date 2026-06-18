@@ -967,7 +967,14 @@ enum BoardAPI {
                 throw SessionArtifactCandidateStoreError.candidateNotFound(candidateId)
             }
             let targets = SessionArtifactCandidateStore.shared.attachTargets(sessionId: candidate.sessionId)
-            let target: SessionArtifactAttachTarget
+            let reference = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? candidate.references.first?.value
+                ?? candidate.id
+            let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? candidate.title
+            let kind = body?.kind ?? plannerArtifactKind(forCandidateKind: candidate.kind)
+            let status = body?.status ?? "attached"
+            let target: SessionArtifactAttachTarget?
             if let canvasId = body?.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !canvasId.isEmpty,
                let nodeId = body?.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -976,23 +983,35 @@ enum BoardAPI {
                     throw SessionArtifactCandidateStoreError.attachTargetNotFound
                 }
                 target = selected
-            } else if targets.count == 1, let only = targets.first {
-                target = only
             } else {
-                throw SessionArtifactCandidateStoreError.attachTargetRequired(targets)
+                target = nil
             }
 
-            let reference = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? candidate.references.first?.value
-                ?? candidate.id
-            let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? candidate.title
+            guard let target else {
+                let artifactId = "session-artifact-\(candidate.id)"
+                let updated = try SessionArtifactCandidateStore.shared.markPromoted(
+                    candidateId: candidateId,
+                    canvasId: nil,
+                    nodeId: nil,
+                    artifactId: artifactId
+                )
+                let artifact = SessionArtifactCandidateStore.shared.sessionScopedArtifact(
+                    for: updated,
+                    kind: kind,
+                    title: title,
+                    reference: reference,
+                    status: body?.status ?? "promoted"
+                )
+                BoardServer.shared.broadcastStateChanged()
+                return jsonResponse(ArtifactCandidateMutationEnvelope(candidate: updated, artifact: artifact, attachTargets: targets))
+            }
+
             let state = try PlannerBoardBridge.attachArtifact(
                 nodeId: target.nodeId,
-                kind: body?.kind ?? plannerArtifactKind(forCandidateKind: candidate.kind),
+                kind: kind,
                 title: title,
                 reference: reference,
-                status: body?.status ?? "attached",
+                status: status,
                 payload: artifactPayload(for: candidate),
                 for: target.canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
@@ -5310,21 +5329,6 @@ enum BoardAPI {
         switch err {
         case .candidateNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
-        case .attachTargetRequired(let targets):
-            struct TargetRequired: Encodable {
-                let error: String
-                let message: String
-                let attachTargets: [SessionArtifactAttachTarget]
-            }
-            return jsonResponse(
-                TargetRequired(
-                    error: "attach_target_required",
-                    message: err.localizedDescription,
-                    attachTargets: targets
-                ),
-                status: 409,
-                reason: "Conflict"
-            )
         case .attachTargetNotFound:
             return errorResponse("attach_target_not_found", err.localizedDescription, status: 404)
         case .artifactAttachFailed:

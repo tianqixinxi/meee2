@@ -12,7 +12,6 @@ import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView, type ArtifactSessionFilter } from './components/ArtifactsView'
 import { SessionLauncherView } from './components/SessionLauncherView'
-import { SessionArtifactsModal, type SessionArtifactsModalTarget } from './components/SessionArtifactsModal'
 import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -419,7 +418,6 @@ export default function App() {
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
   const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
-  const [sessionArtifactsModalTarget, setSessionArtifactsModalTarget] = useState<SessionArtifactsModalTarget | null>(null)
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [sessionTerminalTarget, setSessionTerminalTarget] = useState<SessionOpenTarget | null>(null)
@@ -1186,7 +1184,8 @@ export default function App() {
   }, [])
 
   const handleOpenSessionArtifacts = useCallback((_session: Session, _title: string, filter: ArtifactSessionFilter) => {
-    setSessionArtifactsModalTarget(filter)
+    setArtifactSessionFilter(filter)
+    setWorkspaceMode('artifacts')
   }, [])
 
   const refreshUserProfile = useCallback(() => {
@@ -1428,13 +1427,6 @@ export default function App() {
             installLogs={agentRuntimeInstallLogs}
             onInstall={handleInstallAgentRuntime}
             onClose={() => setAgentRuntimeModalOpen(false)}
-          />
-        )}
-        {sessionArtifactsModalTarget && (
-          <SessionArtifactsModal
-            target={sessionArtifactsModalTarget}
-            onClose={() => setSessionArtifactsModalTarget(null)}
-            onChanged={() => boardState.forceRefresh()}
           />
         )}
         <CommandPalette
