@@ -27,6 +27,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
+import { sessionRecapProgressText } from '../lib/sessionRecap'
 import { useTheme } from '../lib/theme'
 import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
@@ -506,7 +507,7 @@ const SessionRow = memo(function SessionRow({
 }) {
   const attention = sessionNeedsAttention(session) || unread
   const done = session.status === 'completed' || session.status === 'done'
-  const context = session.currentTask || session.latestRecap?.content || session.recentMessages[0]?.text || ''
+  const context = session.currentTask || sessionRecapProgressText(session) || session.recentMessages[0]?.text || ''
   return (
     <article
       className={[

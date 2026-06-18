@@ -72,6 +72,9 @@ struct SessionDTO: Encodable {
 
     /// Claude Code 最新的 "away summary" / `/recap` 内容；无则为 null
     let latestRecap: RecapDTO?
+    /// Provider-native recap signals. Swift exposes raw source signals; recap-core
+    /// owns cross-provider normalization.
+    let providerRecapSignals: [ProviderRecapSignalDTO]
 
     /// session 来源客户端：cli (`claude` CLI) / desktop (Claude.app embedded
     /// runtime) / nil (未知 / 非 Claude plugin session)。CLI 和 desktop 共用
@@ -95,6 +98,20 @@ struct SessionDTO: Encodable {
 struct RecapDTO: Encodable {
     let content: String
     let timestamp: String?   // ISO8601
+}
+
+/// Provider-native recap signal DTO. This is intentionally raw source material,
+/// not the normalized cross-provider Session Recap contract.
+struct ProviderRecapSignalDTO: Encodable {
+    let id: String
+    let provider: String
+    let sessionId: String
+    let intent: String
+    let content: String
+    let timestamp: String?
+    let sourceRef: String?
+    let confidence: String
+    let metadata: [String: String]
 }
 
 /// 后台子 agent / task DTO
@@ -582,6 +599,56 @@ enum BoardDTOBuilder {
         return f
     }()
 
+    private static func providerKey(pluginId: String) -> String {
+        let lowered = pluginId.lowercased()
+        if lowered.contains("codex") { return "codex" }
+        if lowered.contains("claude") { return "claude" }
+        return pluginId
+    }
+
+    private static func providerRecapSignals(
+        recap: SessionRecap?,
+        provider: String,
+        sessionId: String,
+        transcriptPath: String?
+    ) -> [ProviderRecapSignalDTO] {
+        guard let recap else { return [] }
+        let content = recap.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return [] }
+        let timestamp = recap.timestamp.map { iso($0) }
+        let fingerprint = stableRecapSignalHash([
+            provider,
+            sessionId,
+            "human_recap",
+            timestamp ?? "",
+            content
+        ].joined(separator: "\u{1f}"))
+        return [
+            ProviderRecapSignalDTO(
+                id: "\(provider):\(sessionId):human_recap:\(fingerprint)",
+                provider: provider,
+                sessionId: sessionId,
+                intent: "human_recap",
+                content: content,
+                timestamp: timestamp,
+                sourceRef: transcriptPath,
+                confidence: "high",
+                metadata: [
+                    "format": "claude.away_summary"
+                ]
+            )
+        ]
+    }
+
+    private static func stableRecapSignalHash(_ value: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(hash, radix: 16)
+    }
+
     private struct TranscriptPreviewCacheKey: Hashable {
         let parser: String
         let path: String
@@ -985,6 +1052,12 @@ enum BoardDTOBuilder {
                     )
                 }
             : nil
+        let providerSignals = providerRecapSignals(
+            recap: hydrateHeavyTranscriptFields ? RecapResolver.resolve(transcriptPath: sessionData?.transcriptPath) : nil,
+            provider: providerKey(pluginId: session.pluginId),
+            sessionId: session.id,
+            transcriptPath: sessionData?.transcriptPath
+        )
 
         // ─── Claude Desktop 集成 ───
         // 查一下 ClaudeDesktopMetadataReader：命中即说明这是 Claude.app 起的
@@ -1096,6 +1169,7 @@ enum BoardDTOBuilder {
             sessionScope: scope.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
+            providerRecapSignals: providerSignals,
             clientKind: clientKind,
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
@@ -1116,6 +1190,19 @@ enum BoardDTOBuilder {
         // transcript path 已经由 ClaudeDesktopMetadataReader 解析好
         // （~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl）。文件不存在时为 nil → recent 空。
         let recent: [TranscriptEntryDTO] = m.transcriptPath.map(transcriptPreviewFromFullReader) ?? []
+        let recap = RecapResolver.resolve(transcriptPath: m.transcriptPath)
+        let recapDTO = recap.map {
+            RecapDTO(
+                content: $0.content,
+                timestamp: $0.timestamp.map { iso($0) } ?? nil
+            )
+        }
+        let providerSignals = providerRecapSignals(
+            recap: recap,
+            provider: "claude",
+            sessionId: m.cliSessionId,
+            transcriptPath: m.transcriptPath
+        )
 
         // Desktop metadata-only sessions are not live terminal sessions. They
         // can still be opened through Claude.app, but the runtime lifecycle has
@@ -1170,7 +1257,8 @@ enum BoardDTOBuilder {
             controlState: controlState.rawValue,
             sessionScope: scope.rawValue,
             backgroundAgents: [],
-            latestRecap: nil,
+            latestRecap: recapDTO,
+            providerRecapSignals: providerSignals,
             clientKind: "desktop",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
@@ -1271,6 +1359,7 @@ enum BoardDTOBuilder {
             sessionScope: scope.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
+            providerRecapSignals: [],
             clientKind: "cli",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
@@ -1347,6 +1436,7 @@ enum BoardDTOBuilder {
             sessionScope: scope.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
+            providerRecapSignals: [],
             clientKind: "cli",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
@@ -1384,6 +1474,19 @@ enum BoardDTOBuilder {
             }
             return cli.currentTool ?? surface.currentTool
         }()
+        let cliRecap = RecapResolver.resolve(transcriptPath: cli.transcriptPath)
+        let cliRecapDTO = cliRecap.map {
+            RecapDTO(
+                content: $0.content,
+                timestamp: $0.timestamp.map { iso($0) } ?? nil
+            )
+        }
+        let cliSignals = providerRecapSignals(
+            recap: cliRecap,
+            provider: providerKey(pluginId: surface.pluginId),
+            sessionId: surface.id,
+            transcriptPath: cli.transcriptPath
+        )
 
         return SessionDTO(
             id: surface.id,
@@ -1427,7 +1530,8 @@ enum BoardDTOBuilder {
             controlState: surface.controlState,
             sessionScope: surface.sessionScope,
             backgroundAgents: surface.backgroundAgents,
-            latestRecap: surface.latestRecap,
+            latestRecap: cliRecapDTO ?? surface.latestRecap,
+            providerRecapSignals: cliSignals.isEmpty ? surface.providerRecapSignals : cliSignals,
             clientKind: surface.clientKind,
             syncEnabled: surface.syncEnabled,
             syncTeamId: surface.syncTeamId,

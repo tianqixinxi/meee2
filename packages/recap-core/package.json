@@ -30,6 +30,10 @@
       "types": "./dist/cache.d.ts",
       "default": "./dist/cache.js"
     },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "default": "./dist/session.js"
+    },
     "./fingerprint": {
       "types": "./dist/fingerprint.d.ts",
       "default": "./dist/fingerprint.js"
@@ -47,7 +51,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run build && node test/monitor.test.mjs",
+    "test": "pnpm run build && node test/monitor.test.mjs && node test/session.test.mjs",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "publishConfig": {
