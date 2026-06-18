@@ -62,6 +62,7 @@ import { SessionArtifactsPanel } from './SessionArtifactsModal'
 
 interface Props {
   state: BoardState | null
+  openTarget?: { sessionId?: string; surfaceId?: string; nonce?: number } | null
   onSessionCreated?: () => void
   onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
   onToast?: (kind: 'success' | 'error', text: string) => void
@@ -232,6 +233,7 @@ const PERMISSION_OPTIONS: Record<SpawnProvider, PermissionOption[]> = {
 
 export function SessionLauncherView({
   state,
+  openTarget,
   onSessionCreated,
   onOpenSessionArtifacts,
   onToast,
@@ -281,6 +283,7 @@ export function SessionLauncherView({
   const [sidebarWidth, setSidebarWidth] = useState(() => readStoredSidebarWidth())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
   const initializedSelectionRef = useRef(initialSelection !== null)
+  const handledOpenTargetRef = useRef<string | null>(null)
   const autoRestoreAttemptedRef = useRef<Set<string>>(new Set())
   const pointerSidebarResizeActiveRef = useRef(false)
   const sessions = state?.sessions ?? []
@@ -300,6 +303,26 @@ export function SessionLauncherView({
   useEffect(() => {
     refreshProjects()
   }, [refreshProjects])
+
+  useEffect(() => {
+    const sessionId = openTarget?.sessionId?.trim()
+    const surfaceId = openTarget?.surfaceId?.trim()
+    if (!sessionId && !surfaceId) return
+    const key = `${sessionId ?? ''}:${surfaceId ?? ''}:${openTarget?.nonce ?? ''}`
+    if (handledOpenTargetRef.current === key) return
+    handledOpenTargetRef.current = key
+    initializedSelectionRef.current = true
+    const session = sessions.find((item) => (
+      (sessionId && item.id === sessionId)
+      || (surfaceId && item.surfaceId === surfaceId)
+    ))
+    setSelection({
+      kind: 'session',
+      sessionId: session?.id ?? sessionId ?? '',
+      surfaceId: session?.surfaceId ?? surfaceId ?? null,
+    })
+    refreshProjects()
+  }, [openTarget, refreshProjects, sessions])
 
   useEffect(() => {
     const refreshOverrides = () => {
@@ -378,12 +401,9 @@ export function SessionLauncherView({
         pinned.push(session)
         continue
       }
-      if (sessionScope(session) === 'external') {
-        external.push(session)
-        continue
-      }
       const project = projectByPath.get(normalizePath(session.project))
       if (project) byProject.get(project.id)?.push(session)
+      else if (sessionScope(session) === 'external') external.push(session)
       else temporary.push(session)
     }
 

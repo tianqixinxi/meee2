@@ -92,6 +92,8 @@ import {
 
 const PLANNER_PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
 
+type SessionsWorkspaceOpenTarget = { sessionId?: string; surfaceId?: string; nonce: number }
+
 function readStoredPlannerPanelCollapsed(): boolean {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(PLANNER_PANEL_COLLAPSED_KEY) === '1'
@@ -417,6 +419,7 @@ export default function App() {
     boardState: boardState.state,
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
+  const [sessionsWorkspaceTarget, setSessionsWorkspaceTarget] = useState<SessionsWorkspaceOpenTarget | null>(null)
   const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
@@ -651,6 +654,18 @@ export default function App() {
     workspaceCanvases,
   ])
 
+  const openSessionsWorkspace = useCallback((detail?: SessionOpenTarget | null) => {
+    setDegradedEntry(true)
+    setWorkspaceMode('session')
+    setSessionTerminalTarget(null)
+    setSessionsWorkspaceTarget({
+      sessionId: detail?.sessionId?.trim() || undefined,
+      surfaceId: detail?.surfaceId?.trim() || undefined,
+      nonce: Date.now(),
+    })
+    void boardState.forceRefresh()
+  }, [boardState])
+
   useEffect(() => {
     const openSession = (event: Event) => {
       const detail = (event as CustomEvent<SessionOpenTarget>).detail
@@ -661,19 +676,21 @@ export default function App() {
   }, [openSessionTerminalOverlay])
 
   useEffect(() => {
-    const openSessionsWorkspace = (event: Event) => {
+    const handleOpenSessionsWorkspace = (event: Event) => {
       const detail = (event as CustomEvent<SessionOpenTarget>).detail
-      openSessionTerminalOverlay(detail)
+      openSessionsWorkspace(detail)
     }
-    window.addEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
-    const pending = window.__meee2PendingSessionTerminalOverlay ?? window.__meee2PendingSessionsWorkspace
-    if (pending) {
-      openSessionTerminalOverlay(pending)
+    window.addEventListener('meee2:open-sessions-workspace', handleOpenSessionsWorkspace)
+    if (window.__meee2PendingSessionTerminalOverlay) {
+      openSessionTerminalOverlay(window.__meee2PendingSessionTerminalOverlay)
       window.__meee2PendingSessionTerminalOverlay = null
+    }
+    if (window.__meee2PendingSessionsWorkspace) {
+      openSessionsWorkspace(window.__meee2PendingSessionsWorkspace)
       window.__meee2PendingSessionsWorkspace = null
     }
-    return () => window.removeEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
-  }, [openSessionTerminalOverlay])
+    return () => window.removeEventListener('meee2:open-sessions-workspace', handleOpenSessionsWorkspace)
+  }, [openSessionTerminalOverlay, openSessionsWorkspace])
 
   // 2026-06-02 · session overlay 与 inspector 绑定:inspector 关闭时一并关掉 overlay
   // (仅 UI 关闭,不杀会话进程 —— overlay 卸载只发 phase:'hide',native terminal runtime
@@ -1263,6 +1280,7 @@ export default function App() {
           {workspaceMode === 'session' ? (
             <SessionLauncherView
               state={boardState.state}
+              openTarget={sessionsWorkspaceTarget}
               onSessionCreated={() => boardState.forceRefresh()}
               onOpenSessionArtifacts={handleOpenSessionArtifacts}
               onToast={pushToast}

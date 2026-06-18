@@ -6306,6 +6306,135 @@ enum BoardAPI {
         return errorResponse("not_found", "managed session not found: \(sid)", status: 404)
     }
 
+    /// POST /api/sessions/:id/open-workspace
+    /// Bring the meee2 Sessions workspace to the front and pass the target
+    /// session id to the board. Unlike `/activate`, this does not jump back to
+    /// Claude Desktop or the original terminal; it keeps the user in meee2.
+    static func openSessionWorkspace(_ req: HttpRequest) -> HttpResponse {
+        struct OpenWorkspaceRequest: Decodable {
+            let cwd: String?
+            let provider: String?
+            let title: String?
+        }
+        struct OpenWorkspaceResponse: Encodable {
+            let ok: Bool
+            let project: SessionProjectDTO
+            let sessionId: String
+            let surfaceId: String?
+            let openTarget: String
+        }
+
+        guard let rawSid = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawSid.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: OpenWorkspaceRequest.self)
+        let provider = normalizedProvider(body?.provider ?? "claude")
+        let session = resolvePluginSession(rawSid)
+        let surface = TerminalSessionBackendRegistry.shared.snapshot(id: rawSid)
+            ?? session.flatMap { pluginSession in
+                TerminalSessionBackendRegistry.shared.snapshot(id: pluginSession.id)
+            }
+        let existingStoreSession = SessionStore.shared.get(rawSid)
+            ?? session.flatMap { SessionStore.shared.get($0.id) }
+            ?? surface.flatMap { SessionStore.shared.get($0.sessionId) }
+        let sessionId = session?.id ?? surface?.sessionId ?? existingStoreSession?.sessionId ?? rawSid
+        let surfaceId = surface?.surfaceId
+
+        do {
+            let cwd = try SessionSurfaceLauncher.explicitCwd(
+                body?.cwd ?? session?.cwd ?? surface?.cwd ?? existingStoreSession?.cwd
+            )
+            guard let cwd else {
+                return errorResponse("bad_request", "cwd is required to create or find the meee2 project", status: 400)
+            }
+            let projectRecord = try SessionProjectStore.shared.upsert(
+                path: cwd,
+                name: nil,
+                preferredProvider: provider
+            )
+            let project = try SessionProjectStore.shared.markUsed(
+                projectId: projectRecord.id,
+                path: cwd,
+                provider: provider
+            )
+            let now = Date()
+            let projectName = URL(fileURLWithPath: cwd).lastPathComponent
+            let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayTitle = title?.isEmpty == false
+                ? title!
+                : (session?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                   ? session!.title
+                   : (projectName.isEmpty ? cwd : projectName))
+            let providerResumeSessionId = AgentLaunchCommand.isLikelyProviderResumeSessionId(rawSid)
+                ? rawSid
+                : existingStoreSession?.providerResumeSessionId
+            let storedSession = SessionData(
+                sessionId: sessionId,
+                project: displayTitle,
+                cwd: cwd,
+                pid: existingStoreSession?.pid,
+                ghosttyTerminalId: existingStoreSession?.ghosttyTerminalId,
+                iTermSessionId: existingStoreSession?.iTermSessionId,
+                appleTerminalSessionId: existingStoreSession?.appleTerminalSessionId,
+                transcriptPath: existingStoreSession?.transcriptPath,
+                providerResumeSessionId: providerResumeSessionId,
+                startedAt: existingStoreSession?.startedAt ?? session?.startedAt ?? surface?.createdAt ?? now,
+                lastActivity: now,
+                status: existingStoreSession?.status.isHistorical == false ? existingStoreSession!.status : .active,
+                currentTool: existingStoreSession?.currentTool ?? session?.toolName,
+                description: existingStoreSession?.description,
+                tasks: existingStoreSession?.tasks ?? session?.tasks ?? [],
+                currentTask: existingStoreSession?.currentTask ?? session?.subtitle,
+                terminalInfo: existingStoreSession?.terminalInfo ?? session?.terminalInfo,
+                usageStats: existingStoreSession?.usageStats ?? session?.usageStats,
+                lastMessage: existingStoreSession?.lastMessage ?? session?.lastMessage
+            )
+            SessionStore.shared.upsert(storedSession)
+            SessionTerminalStore.shared.update(
+                sessionId: sessionId,
+                tty: nil,
+                termProgram: nil,
+                termBundleId: nil,
+                cmuxSocketPath: nil,
+                cmuxSurfaceId: surfaceId,
+                cwd: cwd,
+                status: surface?.status ?? "running",
+                command: provider,
+                provider: provider,
+                providerResumeSessionId: providerResumeSessionId,
+                canvasId: nil,
+                nodeId: nil,
+                sessionScope: Meee2SessionScope.external.rawValue,
+                backend: TerminalSessionBackendKind.external.rawValue,
+                fallbackReason: "opened from /meee2:desktop"
+            )
+            BoardServer.shared.broadcastStateChanged()
+
+            DispatchQueue.main.async {
+                var userInfo: [String: String] = ["sessionId": sessionId]
+                if let surfaceId, !surfaceId.isEmpty {
+                    userInfo["surfaceId"] = surfaceId
+                }
+                NotificationCenter.default.post(
+                    name: Notification.Name("meee2.openBoardSessionsWorkspace"),
+                    object: nil,
+                    userInfo: userInfo
+                )
+            }
+
+            return jsonResponse(OpenWorkspaceResponse(
+                ok: true,
+                project: SessionProjectDTO(project),
+                sessionId: sessionId,
+                surfaceId: surfaceId,
+                openTarget: "sessions-workspace"
+            ))
+        } catch {
+            return errorResponse("session_workspace_open_failed", error.localizedDescription, status: 400)
+        }
+    }
+
     /// DELETE /api/sessions/:id
     /// SIGTERM 真实进程并清掉 SessionStore 记录。
     ///

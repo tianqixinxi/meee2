@@ -175,6 +175,31 @@ describe('SessionLauncherView', () => {
     })
   })
 
+  it('selects the requested session when opening the Sessions workspace', async () => {
+    const requested = makeSession({
+      id: 'requested-session',
+      title: 'Claude Code - requested',
+      recentMessages: [{ role: 'user', text: '来自 slash command 的 Session' }],
+      surfaceId: 'requested-surface',
+      lastActivity: '2026-06-14T09:00:00Z',
+      pluginId: 'com.meee2.plugin.claude',
+      pluginDisplayName: 'Claude Code',
+      sessionScope: 'external',
+    })
+
+    const view = renderWithI18n(
+      <SessionLauncherView
+        state={makeState([makeSession(), requested])}
+        openTarget={{ sessionId: 'requested-session', nonce: 1 }}
+      />,
+    )
+
+    const requestedButton = await screen.findByRole('button', { name: '来自 slash command 的 Session' })
+    await waitFor(() => expect(requestedButton.closest('.session-launcher__session-item')).toHaveClass('is-selected'))
+    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('来自 slash command 的 Session')
+    expect(screen.queryByText('我们应该在meee2-workspace中做些什么？')).not.toBeInTheDocument()
+  })
+
   it('auto-restores a stored stale session selection on first entry', async () => {
     localStorage.setItem(lastSelectionKey, JSON.stringify({
       kind: 'session',

@@ -456,6 +456,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(openBoardSessionsWorkspace(_:)),
+            name: NSNotification.Name("meee2.openBoardSessionsWorkspace"),
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(openPlannerItem(_:)),
             name: NSNotification.Name("meee2.openPlannerItem"),
             object: nil
@@ -558,6 +565,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     @objc private func openNativeSessionsWorkspaceMenu() {
         showNativeSessionsWorkspaceInBoard(sessionId: nil, surfaceId: nil)
+    }
+
+    @MainActor
+    @objc private func openBoardSessionsWorkspace(_ notification: Notification) {
+        let sessionId = notification.userInfo?["sessionId"] as? String
+        let surfaceId = notification.userInfo?["surfaceId"] as? String
+        showNativeSessionsWorkspaceInBoard(sessionId: sessionId, surfaceId: surfaceId)
     }
 
     @MainActor
