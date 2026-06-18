@@ -1633,17 +1633,28 @@ function SessionRow({
   const { t } = useI18n()
   const age = compactSessionAge(session)
   const state = sessionRowState(session, t)
-  const tooltip = sessionRowTooltip(session, title, state?.label, age)
+  // External native sessions (terminals meee2 only observes) support a single
+  // action — jump to their terminal via the row click. Management actions
+  // (pin / archive / rename / artifacts) and the context menu are suppressed.
+  const external = sessionScope(session) === 'external'
+  const tooltip = external
+    ? sessionRowTooltip(session, title, t('sessions.launcher.externalHint'), age)
+    : sessionRowTooltip(session, title, state?.label, age)
   const handleMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
+    if (external) return
     if (event.button === 2) onContextMenu(event)
   }
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (external) return
     if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
     event.preventDefault()
     event.stopPropagation()
     const rect = event.currentTarget.getBoundingClientRect()
     onOpenMenuAt(rect.left + 14, rect.top + 14)
   }
+  const handleContextMenu = external
+    ? (event: ReactMouseEvent<HTMLElement>) => event.preventDefault()
+    : onContextMenu
   return (
     <div className={[
       'session-launcher__session-item',
@@ -1651,7 +1662,7 @@ function SessionRow({
       state?.tone === 'attention' ? 'session-launcher__session-item--attention' : '',
       state?.tone === 'done' ? 'session-launcher__session-item--done' : '',
     ].filter(Boolean).join(' ')}
-      onContextMenu={onContextMenu}
+      onContextMenu={handleContextMenu}
       onMouseDown={handleMouseDown}
       onKeyDown={handleKeyDown}
     >
@@ -1659,7 +1670,7 @@ function SessionRow({
         type="button"
         className="session-launcher__session-row"
         onClick={onSelect}
-        onContextMenu={onContextMenu}
+        onContextMenu={handleContextMenu}
         onMouseDown={handleMouseDown}
         onKeyDown={handleKeyDown}
         aria-label={state ? `${title} · ${state.label}` : title}
@@ -1667,6 +1678,11 @@ function SessionRow({
       >
         <span>
           <strong>{title}</strong>
+          {external && (
+            <em className="session-launcher__session-badge session-launcher__session-badge--external">
+              {t('sessions.launcher.externalBadge')}
+            </em>
+          )}
           {state && (
             <em className={`session-launcher__session-state is-${state.tone}`}>
               {state.tone === 'done' ? <CheckCircle2 size={11} aria-hidden /> : <AlertCircle size={11} aria-hidden />}
@@ -1676,27 +1692,29 @@ function SessionRow({
         </span>
         {age && <time aria-hidden dateTime={session.lastActivity ?? session.startedAt ?? undefined}>{age}</time>}
       </button>
-      <div className="session-launcher__session-actions">
-        <button
-          type="button"
-          className="session-launcher__pin-button"
-          onClick={onTogglePinned}
-          aria-label={pinned ? t('sessions.launcher.unpinSessionNamed', { title }) : t('sessions.launcher.pinSessionNamed', { title })}
-          title={pinned ? t('sessions.launcher.unpin') : t('sessions.launcher.pin')}
-        >
-          {pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        </button>
-        <button
-          type="button"
-          className="session-launcher__archive-button"
-          onClick={onArchive}
-          disabled={archiving}
-          aria-label={t('sessions.launcher.archiveSessionNamed', { title })}
-          title={t('sessions.archive')}
-        >
-          {archiving ? <Loader2 size={13} className="spin" /> : <Archive size={13} />}
-        </button>
-      </div>
+      {!external && (
+        <div className="session-launcher__session-actions">
+          <button
+            type="button"
+            className="session-launcher__pin-button"
+            onClick={onTogglePinned}
+            aria-label={pinned ? t('sessions.launcher.unpinSessionNamed', { title }) : t('sessions.launcher.pinSessionNamed', { title })}
+            title={pinned ? t('sessions.launcher.unpin') : t('sessions.launcher.pin')}
+          >
+            {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+          </button>
+          <button
+            type="button"
+            className="session-launcher__archive-button"
+            onClick={onArchive}
+            disabled={archiving}
+            aria-label={t('sessions.launcher.archiveSessionNamed', { title })}
+            title={t('sessions.archive')}
+          >
+            {archiving ? <Loader2 size={13} className="spin" /> : <Archive size={13} />}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
