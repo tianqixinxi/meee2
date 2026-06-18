@@ -4027,7 +4027,7 @@ enum SessionToPlanningNodeMapper {
         switch status {
         case .thinking, .tooling, .active, .compacting:
             return .ready
-        case .permissionRequired, .dead:
+        case .permissionRequired, .awaitingChoice, .dead:
             return .blocked
         case .completed:
             return .done
@@ -10302,7 +10302,7 @@ enum PlannerSessionRunStateBridge {
             return .running
         case .idle:
             return .dispatched
-        case .waitingForUser:
+        case .waitingForUser, .awaitingChoice:
             return .awaitingInput
         case .permissionRequired:
             return .gateWait

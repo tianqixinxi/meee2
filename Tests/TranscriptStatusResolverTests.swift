@@ -282,6 +282,60 @@ final class TranscriptStatusResolverTests: XCTestCase {
         XCTAssertEqual(status, .permissionRequired, "permission 不应被 stale 兜底误伤")
     }
 
+    // MARK: - awaitingChoice（assistant 挂着 pending 的 choice 工具）
+
+    /// assistant turn 末尾挂着 AskUserQuestion / ExitPlanMode 的 pending tool_use →
+    /// awaitingChoice，盖过任何 hookStatus。尤其 ExitPlanMode 走 permission 通道
+    /// (hook=permissionRequired)，但语义是"批不批计划"的决策，应归 awaitingChoice。
+    func testAssistant_pendingChoice_overridesAnyHook() {
+        for hook in [SessionStatus.idle, .waitingForUser, .permissionRequired, .tooling, .active] {
+            let last = LastEntry(type: "assistant", isInterrupt: false, timestamp: now, pendingChoiceTool: "AskUserQuestion")
+            let (status, reason) = TranscriptStatusResolver.decideFromTail(last: last, hookStatus: hook, now: now)
+            XCTAssertEqual(status, .awaitingChoice, "hook=\(hook.rawValue) 时仍应为 awaitingChoice")
+            XCTAssertTrue(reason.contains("pending-choice"))
+        }
+    }
+
+    /// 用户晾着不选 → assistant tail 很旧也保持 awaitingChoice，不被 stale 兜底降 idle。
+    func testAssistant_pendingChoice_staleStillChoice() {
+        let last = LastEntry(type: "assistant", isInterrupt: false, timestamp: now.addingTimeInterval(-3600), pendingChoiceTool: "ExitPlanMode")
+        let (status, _) = TranscriptStatusResolver.decideFromTail(last: last, hookStatus: .tooling, now: now)
+        XCTAssertEqual(status, .awaitingChoice)
+    }
+
+    /// 普通工具的 pending（pendingChoiceTool=nil）不受影响：permission 仍走 permissionRequired。
+    func testAssistant_noChoice_keepsPermission() {
+        let last = LastEntry(type: "assistant", isInterrupt: false, timestamp: now)
+        let (status, _) = TranscriptStatusResolver.decideFromTail(last: last, hookStatus: .permissionRequired, now: now)
+        XCTAssertEqual(status, .permissionRequired)
+    }
+
+    /// findLastRelevantEntry 从 assistant message.content 里识别 AskUserQuestion 的
+    /// pending tool_use，并取首个问题文本作 summary。
+    func testFindLast_assistantAskUserQuestion_setsChoice() {
+        let tail = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"AskUserQuestion\",\"input\":{\"questions\":[{\"question\":\"用哪个方案?\"}]}}]}}"
+        let e = findLastRelevantEntry(tail: tail)
+        XCTAssertEqual(e?.type, "assistant")
+        XCTAssertEqual(e?.pendingChoiceTool, "AskUserQuestion")
+        XCTAssertEqual(e?.pendingChoiceSummary, "用哪个方案?")
+    }
+
+    /// ExitPlanMode：识别工具但无 summary（计划正文不入提示）。
+    func testFindLast_assistantExitPlanMode_setsChoiceNoSummary() {
+        let tail = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"ExitPlanMode\",\"input\":{\"plan\":\"do x then y\"}}]}}"
+        let e = findLastRelevantEntry(tail: tail)
+        XCTAssertEqual(e?.pendingChoiceTool, "ExitPlanMode")
+        XCTAssertNil(e?.pendingChoiceSummary)
+    }
+
+    /// 普通工具（Bash）不是 choice 工具 → pendingChoiceTool 为 nil。
+    func testFindLast_assistantNormalTool_noChoice() {
+        let tail = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}"
+        let e = findLastRelevantEntry(tail: tail)
+        XCTAssertEqual(e?.type, "assistant")
+        XCTAssertNil(e?.pendingChoiceTool)
+    }
+
     // MARK: - case "system"
 
     /// priority 1: system tail 老于 600s + 工作态 hookStatus → .idle

@@ -370,6 +370,17 @@ public enum TranscriptStatusResolver {
             return (.active, "user-recent")
 
         case "assistant":
+            // 最高优先：assistant turn 末尾挂着 pending 的 choice 工具调用
+            // （AskUserQuestion / ExitPlanMode，还没 tool_result）→ 会话卡在
+            // "等用户做选择"。这条要盖过 hookStatus —— 尤其 ExitPlanMode 走的是
+            // permission 通道（hook=permissionRequired），但语义是"批不批计划"
+            // 的决策，应归 awaitingChoice 而非 permissionRequired。普通工具
+            // （Bash/Edit…）的 pending tool_use 不在 choice 集里，照常落到下面
+            // 的 hookStatus 分支（permission 仍走 permissionRequired）。
+            // 不设年龄守卫：用户晾着不选，状态就该一直是 awaitingChoice。
+            if let tool = last.pendingChoiceTool {
+                return (.awaitingChoice, "assistant-pending-choice(\(tool))")
+            }
             // 只有 fresh assistant tail（< _midTurnFreshnessWindow）才算"刚 stream
             // 完还没等到 Stop hook"的 mid-turn。Claude 流式输出时 transcript 每秒
             // 追写，turn 结束后 1-2s 内 Stop hook 必到——所以这个窗口很小。
@@ -470,6 +481,24 @@ public enum TranscriptStatusResolver {
             return nil
         }
     }
+
+    /// 等用户做选择时的提示信息（工具名 + 可读摘要）。当 resolve 判定为
+    /// `.awaitingChoice` 时，由 DTO 层调用以填充左侧列表的提示文案。和
+    /// resolveCurrentTool 一样独立读一次 tail（4KB，OS page cache 命中，廉价）。
+    /// 不是 awaitingChoice 现场（tail 末尾不是挂着 choice 工具的 assistant）返回 nil。
+    public struct ChoicePrompt: Equatable {
+        public let tool: String       // "AskUserQuestion" | "ExitPlanMode"
+        public let summary: String?   // AskUserQuestion 的问题文本；ExitPlanMode 为 nil
+    }
+
+    public static func resolveChoicePrompt(transcriptPath: String?) -> ChoicePrompt? {
+        guard let tail = readTail(path: transcriptPath, bytes: 4096),
+              let last = findLastRelevantEntry(tail: tail),
+              let tool = last.pendingChoiceTool else {
+            return nil
+        }
+        return ChoicePrompt(tool: tool, summary: last.pendingChoiceSummary)
+    }
 }
 
 // MARK: - Transcript tail parsing
@@ -481,6 +510,26 @@ struct LastEntry {
     let type: String        // "user" | "assistant" | "system"
     let isInterrupt: Bool
     let timestamp: Date?    // entry's own timestamp (ISO8601) if parseable
+    /// 当 tail 末尾是一条 assistant entry，且它挂着尚未回应的 choice 工具调用
+    /// （AskUserQuestion / ExitPlanMode 的 tool_use，还没有对应 tool_result）时
+    /// 填工具名 —— 会话卡在"等用户做选择"。其它情况为 nil。
+    let pendingChoiceTool: String?
+    /// 选择提示的可读摘要（仅 AskUserQuestion 取首个问题文本；ExitPlanMode 为 nil）。
+    let pendingChoiceSummary: String?
+
+    init(
+        type: String,
+        isInterrupt: Bool,
+        timestamp: Date?,
+        pendingChoiceTool: String? = nil,
+        pendingChoiceSummary: String? = nil
+    ) {
+        self.type = type
+        self.isInterrupt = isInterrupt
+        self.timestamp = timestamp
+        self.pendingChoiceTool = pendingChoiceTool
+        self.pendingChoiceSummary = pendingChoiceSummary
+    }
 }
 
 /// 如果最后一条 user 消息比这个旧，就认为"会话被放弃"，降级为 idle。
@@ -642,10 +691,55 @@ func findLastRelevantEntry(tail: String) -> LastEntry? {
         }
 
         // assistant / system
+        if type == "assistant", let choice = extractPendingChoice(json) {
+            return LastEntry(
+                type: type,
+                isInterrupt: false,
+                timestamp: ts,
+                pendingChoiceTool: choice.tool,
+                pendingChoiceSummary: choice.summary
+            )
+        }
         return LastEntry(type: type, isInterrupt: false, timestamp: ts)
     }
 
     return nil
+}
+
+/// 会让会话卡在"等用户做选择"的工具（区别于普通待批权限工具）。assistant turn
+/// 末尾挂着这些工具的 pending tool_use（还没 tool_result）即视为 awaitingChoice。
+private let _choiceToolNames: Set<String> = ["AskUserQuestion", "ExitPlanMode"]
+
+/// 从 assistant entry 的 message.content 里找 pending 的 choice 工具调用。
+/// 命中返回 (toolName, summary?)；summary 仅 AskUserQuestion 取问题文本。
+private func extractPendingChoice(_ entry: [String: Any]) -> (tool: String, summary: String?)? {
+    guard let msg = entry["message"] as? [String: Any],
+          let content = msg["content"] as? [[String: Any]] else {
+        return nil
+    }
+    for block in content {
+        guard (block["type"] as? String) == "tool_use",
+              let name = block["name"] as? String,
+              _choiceToolNames.contains(name) else {
+            continue
+        }
+        return (name, choiceSummary(toolName: name, input: block["input"] as? [String: Any]))
+    }
+    return nil
+}
+
+/// AskUserQuestion 的 input.questions[].question 拼成一句摘要；ExitPlanMode 无摘要
+/// （计划正文太长，文案交给 UI 用工具名走 i18n）。
+private func choiceSummary(toolName: String, input: [String: Any]?) -> String? {
+    guard toolName == "AskUserQuestion",
+          let input,
+          let questions = input["questions"] as? [[String: Any]] else {
+        return nil
+    }
+    let texts = questions
+        .compactMap { ($0["question"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    return texts.isEmpty ? nil : texts.joined(separator: " · ")
 }
 
 private let _iso8601WithFractional: ISO8601DateFormatter = {
