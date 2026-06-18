@@ -38,7 +38,7 @@ struct PluginSessionRowView: View {
     private func colorName(_ s: SessionStatus) -> String {
         switch s {
         case .permissionRequired: return "orange"
-        case .thinking, .tooling, .active, .compacting: return "blue"
+        case .thinking, .tooling, .active, .compacting, .awaitingChoice: return "blue"
         case .idle, .completed, .waitingForUser: return "gray"
         case .dead: return "red"
         }

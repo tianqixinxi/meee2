@@ -43,6 +43,11 @@ struct SessionDTO: Encodable {
     let pendingPermissionTool: String?
     /// 待审批权限描述；无待审批时为 null
     let pendingPermissionMessage: String?
+    /// 等用户做选择的工具名（"AskUserQuestion" | "ExitPlanMode"）；非该现场为 null。
+    /// 与 pendingPermission* 正交：status==awaitingChoice 时填充，权限时为 null。
+    let pendingChoiceTool: String?
+    /// 选择提示摘要（AskUserQuestion 的问题文本；ExitPlanMode 为 null）。
+    let pendingChoiceMessage: String?
     /// Ghostty 终端 ID（诊断用）；未捕获时为 null
     let ghosttyTerminalId: String?
     /// 终端 TTY 路径（诊断用）；未知时为 null
@@ -983,6 +988,13 @@ enum BoardDTOBuilder {
             NSLog("[StateTrace][boardDTO] sid=\(session.id.prefix(8)) hook=\(sessionData?.status.rawValue ?? session.status.rawValue) → api.status=\(resolvedStatus.rawValue) (for Web)")
         }
 
+        // 等用户做选择（AskUserQuestion / ExitPlanMode）的提示信息。仅在 resolver
+        // 判定 awaitingChoice 时从 transcript 尾巴取，权限/其它状态下为 nil。
+        let choicePrompt: TranscriptStatusResolver.ChoicePrompt? =
+            resolvedStatus == .awaitingChoice
+                ? TranscriptStatusResolver.resolveChoicePrompt(transcriptPath: sessionData?.transcriptPath)
+                : nil
+
         // Tool name: let the resolver override to "thinking" / clear when
         // appropriate; otherwise keep whatever the plugin set.
         let currentTool: String?
@@ -1149,8 +1161,14 @@ enum BoardDTOBuilder {
             usageStats: usageStatsDTOFinal,
             tasks: tasksDTO,
             currentTask: sessionData?.currentTask ?? session.subtitle,
-            pendingPermissionTool: sessionData?.pendingPermissionTool,
-            pendingPermissionMessage: sessionData?.pendingPermissionMessage,
+            // choice 现场（含 ExitPlanMode，它经 permission 通道也会带
+            // pendingPermissionTool）抑制权限字段——否则 effectiveSessionStatus
+            // 会把非空 pendingPermissionTool 顶回 .permissionRequired，盖掉
+            // awaitingChoice。一个 pending 工具不可能既是权限又是选择。
+            pendingPermissionTool: choicePrompt == nil ? sessionData?.pendingPermissionTool : nil,
+            pendingPermissionMessage: choicePrompt == nil ? sessionData?.pendingPermissionMessage : nil,
+            pendingChoiceTool: choicePrompt?.tool,
+            pendingChoiceMessage: choicePrompt?.summary,
             ghosttyTerminalId: sessionData?.ghosttyTerminalId,
             tty: tty,
             termProgram: termProgram,
@@ -1243,6 +1261,8 @@ enum BoardDTOBuilder {
             currentTask: nil,
             pendingPermissionTool: nil,
             pendingPermissionMessage: nil,
+            pendingChoiceTool: nil,
+            pendingChoiceMessage: nil,
             ghosttyTerminalId: nil,
             tty: nil,
             termProgram: nil,
@@ -1344,6 +1364,8 @@ enum BoardDTOBuilder {
             currentTask: sessionData.currentTask,
             pendingPermissionTool: sessionData.pendingPermissionTool,
             pendingPermissionMessage: sessionData.pendingPermissionMessage,
+            pendingChoiceTool: nil,
+            pendingChoiceMessage: nil,
             ghosttyTerminalId: nil,
             tty: nil,
             termProgram: sessionData.terminalInfo?.termProgram ?? terminalInfo?.termProgram ?? "meee2-internal",
@@ -1421,6 +1443,8 @@ enum BoardDTOBuilder {
             currentTask: sessionData?.currentTask ?? surface.nodeId.map { "Node \($0)" },
             pendingPermissionTool: sessionData?.pendingPermissionTool,
             pendingPermissionMessage: sessionData?.pendingPermissionMessage,
+            pendingChoiceTool: nil,
+            pendingChoiceMessage: nil,
             ghosttyTerminalId: nil,
             tty: nil,
             termProgram: termProgram,
@@ -1515,6 +1539,8 @@ enum BoardDTOBuilder {
             currentTask: surface.currentTask,
             pendingPermissionTool: cli.pendingPermissionTool,
             pendingPermissionMessage: cli.pendingPermissionMessage,
+            pendingChoiceTool: nil,
+            pendingChoiceMessage: nil,
             ghosttyTerminalId: surface.ghosttyTerminalId,
             tty: surface.tty,
             termProgram: surface.termProgram,

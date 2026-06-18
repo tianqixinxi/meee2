@@ -4912,6 +4912,11 @@ textarea {
   background: rgba(204, 120, 92, 0.08);
 }
 
+.sessions-row--choice {
+  border-color: rgba(120, 160, 204, 0.4);
+  background: rgba(120, 160, 204, 0.10);
+}
+
 .sessions-row--unread {
   border-color: rgba(139, 169, 194, 0.28);
 }
@@ -4993,6 +4998,23 @@ textarea {
   border: 1px solid rgba(204, 120, 92, 0.25);
 }
 
+/* 「需选择」用蓝色，区别于「需权限」的橙色 attention(AskUserQuestion / ExitPlanMode)。 */
+.sessions-row__choice {
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  width: auto;
+  padding: 0 7px;
+  background: rgba(120, 160, 204, 0.18);
+  border: 1px solid rgba(120, 160, 204, 0.32);
+  color: #6f9fc8;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .sessions-row__unread {
   width: auto;
   padding: 0 7px;
@@ -5067,6 +5089,10 @@ textarea {
 
 .sessions-row--attention .sessions-row__signal {
   color: var(--accent-hover);
+}
+
+.sessions-row--choice .sessions-row__signal {
+  color: #6f9fc8;
 }
 
 .sessions-row__actions {

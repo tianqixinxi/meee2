@@ -1393,6 +1393,13 @@ enum BoardAPI {
     ///    `.awaitingInput` and the working states → `.running`.
     static func effectiveSessionStatus(for session: SessionDTO) -> SessionStatus {
         let baseStatus = SessionStatus.from(rawString: session.status)
+        // 「需做选择」优先于权限提升:ExitPlanMode 经 permission 通道也带
+        // pendingPermissionTool,但语义是决策(awaitingChoice),不能被顶回 permission。
+        // (DTO 层已对 choice 现场抑制 pendingPermission*,这里再兜一层防御。)
+        if baseStatus == .awaitingChoice || session.pendingChoiceTool?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return .awaitingChoice
+        }
         if let pendingTool = session.pendingPermissionTool?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !pendingTool.isEmpty {

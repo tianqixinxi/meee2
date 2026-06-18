@@ -220,6 +220,10 @@ export interface Session {
   // 可选诊断/通知字段（SessionDTO 里有，但不是所有代码都需要）
   pendingPermissionTool?: string | null
   pendingPermissionMessage?: string | null
+  // 等用户做选择（status === 'awaitingChoice'）：AskUserQuestion 选项 / ExitPlanMode 批准计划。
+  // 与 pendingPermission* 正交——权限是 allow/deny 门，选择是内容决策。
+  pendingChoiceTool?: string | null
+  pendingChoiceMessage?: string | null
   startedAt?: string | null
   lastActivity?: string | null
   ghosttyTerminalId?: string | null

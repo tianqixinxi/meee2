@@ -17,6 +17,11 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
     case active
     case waitingForUser
     case permissionRequired
+    /// Agent 主动等用户做选择/决策（AskUserQuestion 选项 / ExitPlanMode 批准计划）。
+    /// 与 permissionRequired 区分：那是"批不批工具调用"的 allow/deny 门，这是
+    /// "选哪个 / 批不批计划"的内容决策。靠 transcript 尾巴 pending 的 tool_use
+    /// 工具名判别（见 TranscriptStatusResolver），不依赖 hook。
+    case awaitingChoice
     case compacting
     case completed
     case dead
@@ -29,6 +34,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         case .tooling: return "wrench.and.screwdriver.fill"
         case .active: return "play.circle.fill"
         case .permissionRequired: return "lock.shield.fill"
+        case .awaitingChoice: return "questionmark.circle.fill"
         case .compacting: return "rectangle.compress.vertical"
         case .completed: return "checkmark.circle.fill"
         case .dead: return "xmark.circle.fill"
@@ -43,6 +49,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         case .tooling: return "🔧"
         case .active: return "▶"
         case .permissionRequired: return "🔒"
+        case .awaitingChoice: return "❓"
         case .compacting: return "📦"
         case .completed: return "✅"
         case .dead: return "❌"
@@ -58,6 +65,8 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         switch self {
         case .permissionRequired:
             return .orange
+        case .awaitingChoice:
+            return .blue
         case .thinking, .tooling, .active, .compacting:
             return .blue
         case .idle, .completed, .waitingForUser:
@@ -82,6 +91,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         case .tooling: return "Tooling"
         case .active: return "Active"
         case .permissionRequired: return "Permission"
+        case .awaitingChoice: return "Choice"
         case .compacting: return "Compacting"
         case .completed: return "Completed"
         case .dead: return "Dead"
@@ -95,6 +105,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         case .tooling: return "Tool"
         case .active: return "Run"
         case .permissionRequired: return "Perm"
+        case .awaitingChoice: return "Ask"
         case .compacting: return "Ctx"
         case .completed: return "Done"
         case .dead: return "Dead"
@@ -114,6 +125,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         case .tooling: return "Tooling..."
         case .active: return "Running"
         case .permissionRequired: return "Permission required"
+        case .awaitingChoice: return "Awaiting choice"
         case .compacting: return "Compacting..."
         case .completed: return "Completed"
         case .dead: return "Dead"
@@ -124,6 +136,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         switch self {
         case .thinking, .tooling, .active, .compacting: return .pulse
         case .permissionRequired: return .bounce
+        case .awaitingChoice: return .pulse
         default: return .none
         }
     }
@@ -142,7 +155,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         switch self {
         case .thinking, .tooling, .active, .compacting:
             return true
-        case .idle, .waitingForUser, .permissionRequired, .completed, .dead:
+        case .idle, .waitingForUser, .permissionRequired, .awaitingChoice, .completed, .dead:
             return false
         }
     }
@@ -151,7 +164,7 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         switch self {
         case .idle, .waitingForUser, .completed:
             return true
-        case .thinking, .tooling, .active, .permissionRequired, .compacting, .dead:
+        case .thinking, .tooling, .active, .permissionRequired, .awaitingChoice, .compacting, .dead:
             return false
         }
     }

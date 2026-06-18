@@ -1464,6 +1464,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         case .idle: return "idle"
         case .waitingForUser: return "waitingForUser"
         case .permissionRequired: return "permissionRequired"
+        case .awaitingChoice: return "awaitingChoice"
         case .thinking: return "thinking"
         case .tooling: return "tooling"
         case .compacting: return "compacting"

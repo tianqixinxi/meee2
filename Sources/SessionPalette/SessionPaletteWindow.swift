@@ -450,7 +450,7 @@ private struct SessionPaletteRow: View {
         switch entry.statusRaw {
         case .some(.permissionRequired):
             return Color(red: 0.95, green: 0.62, blue: 0.34)
-        case .some(.thinking), .some(.tooling), .some(.active), .some(.compacting):
+        case .some(.thinking), .some(.tooling), .some(.active), .some(.compacting), .some(.awaitingChoice):
             return Color(red: 0.55, green: 0.72, blue: 0.88)
         case .some(.dead):
             return Color(red: 0.84, green: 0.36, blue: 0.32)
