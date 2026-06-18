@@ -8,6 +8,7 @@ import {
   EyeOff,
   ExternalLink,
   FileText,
+  HelpCircle,
   MessageSquareText,
   Pencil,
   RefreshCw,
@@ -27,6 +28,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { NATIVE_TERMINAL_STABILIZED_LAYOUT_DELAYS_MS } from '../lib/nativeTerminalLayout'
+import { sessionRecapProgressText } from '../lib/sessionRecap'
 import { useTheme } from '../lib/theme'
 import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
@@ -505,15 +507,16 @@ const SessionRow = memo(function SessionRow({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const attention = sessionNeedsAttention(session) || unread
+  const needsChoice = sessionNeedsChoice(session)
   const done = session.status === 'completed' || session.status === 'done'
-  const context = session.currentTask || session.latestRecap?.content || session.recentMessages[0]?.text || ''
+  const context = session.currentTask || sessionRecapProgressText(session) || session.recentMessages[0]?.text || ''
   return (
     <article
       className={[
         'sessions-row',
         isInternalSession(session) ? 'sessions-row--internal' : 'sessions-row--external',
         selected ? 'is-selected' : '',
-        attention ? 'sessions-row--attention' : '',
+        needsChoice ? 'sessions-row--choice' : (attention ? 'sessions-row--attention' : ''),
         done ? 'sessions-row--done' : '',
         unread ? 'sessions-row--unread' : '',
       ].filter(Boolean).join(' ')}
@@ -534,7 +537,8 @@ const SessionRow = memo(function SessionRow({
             <div className="sessions-row__badges">
               <span className="sessions-row__kind">{isInternalSession(session) ? t('sessions.internal') : t('sessions.external')}</span>
               {unread && <span className="sessions-row__unread">{t('sessions.unread')}</span>}
-              {attention && <span className="sessions-row__attention">{t('sessions.attention')}</span>}
+              {needsChoice && <span className="sessions-row__choice">{t('sessions.needsChoice')}</span>}
+              {attention && !needsChoice && <span className="sessions-row__attention">{t('sessions.attention')}</span>}
               {done && <span className="sessions-row__done">{t('common.done')}</span>}
               {session.inboxPending > 0 && <span className="sessions-row__count">{session.inboxPending}</span>}
             </div>
@@ -1529,14 +1533,28 @@ function isLiveInternalSession(session: Session): boolean {
   return status !== 'exited' && status !== 'failed' && status !== 'dead'
 }
 
+// 等用户「做选择」（AskUserQuestion 选项 / ExitPlanMode 批准计划）——区别于
+// 「需要权限」（allow/deny 工具门）。两者都需要人介入，但语义和提示不同。
+function sessionNeedsChoice(session: Session): boolean {
+  return session.status === 'awaitingChoice' || Boolean(session.pendingChoiceTool)
+}
+
 function sessionNeedsAttention(session: Session): boolean {
   return session.status === 'permissionRequired'
     || session.status === 'waitingForUser'
     || session.inboxPending > 0
     || Boolean(session.pendingPermissionTool)
+    || sessionNeedsChoice(session)
+}
+
+function choiceReason(session: Session, t: ReturnType<typeof useI18n>['t']): string {
+  if (session.pendingChoiceTool === 'ExitPlanMode') return t('sessions.choicePlan')
+  if (session.pendingChoiceMessage) return t('sessions.choiceFor', { question: session.pendingChoiceMessage })
+  return t('sessions.needsChoice')
 }
 
 function attentionReason(session: Session, unread: boolean, t: ReturnType<typeof useI18n>['t']): string {
+  if (sessionNeedsChoice(session)) return choiceReason(session, t)
   if (session.pendingPermissionTool) return t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
   if (session.pendingPermissionMessage) return session.pendingPermissionMessage
   if (session.inboxPending > 0) return t('sessions.pendingMessages', { count: session.inboxPending })
@@ -1547,6 +1565,7 @@ function attentionReason(session: Session, unread: boolean, t: ReturnType<typeof
 
 function sessionIcon(session: Session) {
   if (isInternalSession(session)) return <TerminalIcon size={16} aria-hidden />
+  if (sessionNeedsChoice(session)) return <HelpCircle size={16} aria-hidden />
   if (session.status === 'permissionRequired' || session.status === 'waitingForUser') return <AlertCircle size={16} aria-hidden />
   if (session.status === 'completed' || session.status === 'done') return <CheckCircle2 size={16} aria-hidden />
   return <Clock3 size={16} aria-hidden />

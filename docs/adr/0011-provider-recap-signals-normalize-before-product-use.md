@@ -1,0 +1,3 @@
+# Provider recap signals are normalized before product use
+
+Provider-native summaries from Claude Code, Codex, and future local AI tools are treated as Provider Recap Signals, not as meee2 Session Recaps or session titles. Swift/provider adapters may expose raw signals such as Claude `away_summary` or Codex context compaction summaries, but recap-core owns cross-provider normalization, trust, evidence, freshness, and deterministic Display Session Title derivation. This keeps provider-specific summary formats from leaking into product surfaces while still preserving the raw signals as evidence for re-normalization and debugging.

@@ -16,8 +16,35 @@ export interface BackgroundAgent {
 }
 
 export interface SessionRecap {
+  // Legacy provider-facing recap payload. New code should prefer normalized
+  // fields or providerRecapSignals via lib/sessionRecap.
   content: string
   timestamp: string | null  // ISO8601
+  headline?: string
+  displayTitle?: string
+  details?: string[]
+  source?: {
+    kind: 'deterministic' | 'ai' | 'provider' | 'mixed' | string
+    provider?: string
+    model?: string
+    generatedFrom?: string[]
+    error?: string
+  }
+  intent?: 'human_recap' | 'context_compaction' | 'final_summary' | 'manual_note' | string
+  confidence?: 'high' | 'medium' | 'low' | string
+  fingerprint?: string
+}
+
+export interface ProviderRecapSignal {
+  id: string
+  provider: string
+  sessionId: string
+  intent: 'human_recap' | 'context_compaction' | 'final_summary' | 'manual_note' | string
+  content: string
+  timestamp?: string | null
+  sourceRef?: string | null
+  confidence?: 'high' | 'medium' | 'low' | string
+  metadata?: Record<string, string>
 }
 
 export interface UsageStats {
@@ -188,9 +215,15 @@ export interface Session {
   backgroundAgents: BackgroundAgent[]
   // Claude CLI 最近一次 /recap 或 away_summary 产生的内容
   latestRecap: SessionRecap | null
+  // Provider-native recap signals. recap-core normalizes these before product use.
+  providerRecapSignals?: ProviderRecapSignal[]
   // 可选诊断/通知字段（SessionDTO 里有，但不是所有代码都需要）
   pendingPermissionTool?: string | null
   pendingPermissionMessage?: string | null
+  // 等用户做选择（status === 'awaitingChoice'）：AskUserQuestion 选项 / ExitPlanMode 批准计划。
+  // 与 pendingPermission* 正交——权限是 allow/deny 门，选择是内容决策。
+  pendingChoiceTool?: string | null
+  pendingChoiceMessage?: string | null
   startedAt?: string | null
   lastActivity?: string | null
   ghosttyTerminalId?: string | null

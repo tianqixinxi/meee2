@@ -103,17 +103,68 @@ export interface RecapSource {
   error?: string
 }
 
+export type ProviderRecapIntent =
+  | 'human_recap'
+  | 'context_compaction'
+  | 'final_summary'
+  | 'manual_note'
+
+export type RecapConfidence = 'high' | 'medium' | 'low'
+
+export interface ProviderRecapSignal {
+  id: string
+  provider: string
+  sessionId: string
+  intent: ProviderRecapIntent
+  content: string
+  timestamp?: string | null
+  sourceRef?: string | null
+  confidence?: RecapConfidence
+  metadata?: Record<string, string>
+}
+
 export interface SessionRecap {
   scope: 'session'
   sessionId: string
   provider: string
   headline: string
+  displayTitle?: string
   details: string[]
   statusSignals: RecapStatusSignal[]
   evidenceRefs: EvidenceRef[]
   source: RecapSource
+  intent?: ProviderRecapIntent
+  confidence?: RecapConfidence
   updatedAt: string
   fingerprint: string
+}
+
+export interface SessionRecapBuildInput {
+  now: string
+  sessionId: string
+  provider: string
+  title?: string | null
+  status?: string | null
+  currentTask?: string | null
+  signals?: ProviderRecapSignal[]
+  recentMessages?: Array<{ role: string; text: string }>
+  evidenceRefs?: EvidenceRef[]
+}
+
+export interface DisplaySessionTitle {
+  text: string
+  source: 'manual_override' | 'session_recap' | 'current_task' | 'initial_prompt' | 'provider_title' | 'fallback'
+  confidence: RecapConfidence
+}
+
+export interface DisplaySessionTitleInput {
+  manualOverride?: string | null
+  sessionRecap?: Pick<SessionRecap, 'headline' | 'displayTitle' | 'intent' | 'confidence'> | null
+  currentTask?: string | null
+  initialUserMessage?: string | null
+  providerTitle?: string | null
+  fallbackTitle?: string | null
+  providerDisplayName?: string | null
 }
 
 export interface CanvasRecap {

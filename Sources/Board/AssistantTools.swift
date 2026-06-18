@@ -2117,6 +2117,7 @@ enum AssistantTools {
         case .idle: return "idle"
         case .waitingForUser: return "waitingForUser"
         case .permissionRequired: return "permissionRequired"
+        case .awaitingChoice: return "awaitingChoice"
         case .completed: return "completed"
         case .compacting: return "compacting"
         case .dead: return "dead"

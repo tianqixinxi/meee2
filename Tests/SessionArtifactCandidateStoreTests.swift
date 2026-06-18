@@ -171,6 +171,42 @@ final class SessionArtifactCandidateStoreTests: XCTestCase {
         XCTAssertTrue(envelope.candidates.allSatisfy { $0.sessionId == providerSessionId })
     }
 
+    func testPromotedCandidateWithoutCanvasTargetMovesToFormalArtifacts() throws {
+        let store = SessionArtifactCandidateStore(rootURL: tempRoot)
+        let event = try hookEvent("""
+        {
+          "hook_event_name": "Stop",
+          "session_id": "sid-promote",
+          "cwd": "/tmp/work",
+          "last_assistant_message": "Implemented the artifact promote flow and verified it with frontend and Swift tests."
+        }
+        """)
+
+        let inserted = store.ingestClaudeHook(event)
+        XCTAssertEqual(inserted.count, 1)
+
+        let artifactId = "session-artifact-\(inserted[0].id)"
+        let promoted = try store.markPromoted(
+            candidateId: inserted[0].id,
+            canvasId: nil,
+            nodeId: nil,
+            artifactId: artifactId
+        )
+
+        XCTAssertEqual(promoted.status, .promoted)
+        XCTAssertTrue(store.list(sessionId: "sid-promote").isEmpty)
+
+        let envelope = store.combinedArtifacts(sessionId: "sid-promote")
+        XCTAssertTrue(envelope.candidates.isEmpty)
+        XCTAssertEqual(envelope.artifacts.count, 1)
+        XCTAssertEqual(envelope.totalCount, 1)
+        XCTAssertEqual(envelope.artifacts[0].id, artifactId)
+        XCTAssertEqual(envelope.artifacts[0].canvasId, "session:sid-promote")
+        XCTAssertEqual(envelope.artifacts[0].nodeId, "sid-promote")
+        XCTAssertEqual(envelope.artifacts[0].title, inserted[0].title)
+        XCTAssertEqual(envelope.artifacts[0].status, "promoted")
+    }
+
     func testCodexTranscriptBackfillCapturesToolResultURL() throws {
         let transcript = tempRoot.appendingPathComponent("codex.jsonl")
         try """

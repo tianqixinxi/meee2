@@ -93,6 +93,7 @@ import {
   runPlannerApprovalNotifications,
 } from '../../notifications'
 import { useI18n } from '../../lib/i18n'
+import { sessionRecapProgressText } from '../../lib/sessionRecap'
 import {
   cssEscape,
   requestBoardGuide,
@@ -3265,7 +3266,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // session recap / summary,避免把最近一条原始 assistant 消息(常带 markdown
 // 和完成报告全文)贴到节点卡片上；没有 summary 时才短 fallback 到 assistant tail。
 function summarizeSessionProgress(session: Session): NodeLiveProgress {
-  const recap = cleanProgressText(session.latestRecap?.content)
+  const recap = cleanProgressText(sessionRecapProgressText(session))
   if (recap) {
     return { lastReply: { role: 'summary', text: truncateMessageText(recap, 160) } }
   }
