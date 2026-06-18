@@ -171,6 +171,21 @@ echo ""
 echo "=== Fixing Rpath ==="
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
 
+# Bundle the Claude/Codex plugin marketplace so the in-app "Configure Claude
+# Code" can resolve it via Bundle.main.url(forResource:"meee2-agent-plugin-marketplace").
+# Without this, resolveMarketplacePath() falls back to a #file build-time path
+# (/Users/runner/work/... on CI) that doesn't exist on users' machines →
+# "marketplace was not found" → install ok=false. Must run before signing so the
+# bundle seal below covers it.
+if [ -d "meee2-agent-plugin-marketplace/.claude-plugin" ]; then
+    rm -rf "$APP_DIR/Contents/Resources/meee2-agent-plugin-marketplace"
+    cp -R "meee2-agent-plugin-marketplace" "$APP_DIR/Contents/Resources/meee2-agent-plugin-marketplace"
+    echo "Bundled meee2-agent-plugin-marketplace into app Resources"
+else
+    echo "ERROR: meee2-agent-plugin-marketplace/ missing — cannot bundle plugin marketplace" >&2
+    exit 1
+fi
+
 # Sign the app bundle with entitlements + (when IDENTITY is set) hardened
 # runtime + secure timestamp via the shared helper.
 echo ""

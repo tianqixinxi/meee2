@@ -1,0 +1,34 @@
+{
+  "name": "meee2",
+  "version": "0.1.0",
+  "description": "Meee2 Skill plus MCP tools for reading planner canvas context, orchestration profiles, node contracts, and writing structured artifacts back to the canvas.",
+  "author": {
+    "name": "Meee2"
+  },
+  "homepage": "https://meee2.local",
+  "repository": "https://meee2.local",
+  "license": "UNLICENSED",
+  "keywords": [
+    "meee2",
+    "planner",
+    "artifacts",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.codex.mcp.json",
+  "interface": {
+    "displayName": "Meee2",
+    "shortDescription": "Execute Meee2 planner nodes with canvas-aware MCP",
+    "longDescription": "Adds the Meee2 Skill and MCP bridge so Codex sessions can read canvas context, orchestration profiles, planner node contracts, submit structured outputs, attach artifacts, and keep the Meee2 board UI in sync.",
+    "developerName": "Meee2",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use Meee2 MCP to read canvas context and the current planner node contract, then submit structured artifacts back to the canvas",
+    "screenshots": [],
+    "brandColor": "#CC785C"
+  }
+}

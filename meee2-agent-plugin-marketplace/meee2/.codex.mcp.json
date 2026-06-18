@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "meee2": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./bin/meee2-mcp.js"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -378,12 +378,14 @@ enum Meee2AgentRuntimeInstaller {
         if let bundled = Bundle.main.url(forResource: "meee2-agent-plugin-marketplace", withExtension: nil) {
             return bundled
         }
+        // Dev fallback (non-bundled .build binary): the marketplace is vendored
+        // at the repo root (meee2/meee2-agent-plugin-marketplace), so go up three
+        // components from this source file (Board/ → Sources/ → repo root).
         let thisFileURL = URL(fileURLWithPath: #file)
         return thisFileURL
             .deletingLastPathComponent() // Board/
             .deletingLastPathComponent() // Sources/
-            .deletingLastPathComponent() // meee2/
-            .deletingLastPathComponent() // meee2-workspace/
+            .deletingLastPathComponent() // meee2/ (repo root)
             .appendingPathComponent("meee2-agent-plugin-marketplace", isDirectory: true)
     }
 
