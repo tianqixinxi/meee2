@@ -68,12 +68,36 @@ enum BoardSessionSnapshotProvider {
             }
             return BoardDTOBuilder.surfaceDTOAdoptingCliSession(dto, cli: cli)
         }
-        return enrichedInternalSessions
+        let externalStoredSessions = SessionStore.shared.listAll()
+            .filter { !$0.status.isHistorical }
+            .filter { !BoardDTOBuilder.isInternalTerminalProgram($0.terminalInfo?.termProgram) }
+            .filter { session in
+                !enrichedInternalSessions.contains { boardSession($0, matches: session.sessionId) }
+            }
+            .map { session in
+                let terminalInfo = terminalInfos[session.sessionId]
+                let pluginId = pluginId(for: session, terminalInfo: terminalInfo)
+                return BoardDTOBuilder.sessionDTO(session.toPluginSession(pluginId: pluginId))
+            }
+        return enrichedInternalSessions + externalStoredSessions
     }
 
     private static func boardSession(_ session: SessionDTO, matches sessionId: String) -> Bool {
         session.id == sessionId
             || session.id.hasSuffix("-\(sessionId)")
             || session.surfaceId == sessionId
+    }
+
+    private static func pluginId(for session: SessionData, terminalInfo: SessionTerminalInfo?) -> String {
+        let haystack = [
+            terminalInfo?.provider,
+            terminalInfo?.command,
+            session.terminalInfo?.termProgram,
+            session.sessionId
+        ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        return haystack.contains("codex") ? "com.meee2.plugin.codex" : "com.meee2.plugin.claude"
     }
 }

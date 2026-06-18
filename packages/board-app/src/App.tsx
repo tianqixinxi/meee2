@@ -12,7 +12,6 @@ import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView, type ArtifactSessionFilter } from './components/ArtifactsView'
 import { SessionLauncherView } from './components/SessionLauncherView'
-import { SessionArtifactsModal, type SessionArtifactsModalTarget } from './components/SessionArtifactsModal'
 import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -92,6 +91,8 @@ import {
 } from './api'
 
 const PLANNER_PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
+
+type SessionsWorkspaceOpenTarget = { sessionId?: string; surfaceId?: string; nonce: number }
 
 function readStoredPlannerPanelCollapsed(): boolean {
   if (typeof window === 'undefined') return false
@@ -418,8 +419,8 @@ export default function App() {
     boardState: boardState.state,
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
+  const [sessionsWorkspaceTarget, setSessionsWorkspaceTarget] = useState<SessionsWorkspaceOpenTarget | null>(null)
   const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
-  const [sessionArtifactsModalTarget, setSessionArtifactsModalTarget] = useState<SessionArtifactsModalTarget | null>(null)
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [sessionTerminalTarget, setSessionTerminalTarget] = useState<SessionOpenTarget | null>(null)
@@ -653,6 +654,18 @@ export default function App() {
     workspaceCanvases,
   ])
 
+  const openSessionsWorkspace = useCallback((detail?: SessionOpenTarget | null) => {
+    setDegradedEntry(true)
+    setWorkspaceMode('session')
+    setSessionTerminalTarget(null)
+    setSessionsWorkspaceTarget({
+      sessionId: detail?.sessionId?.trim() || undefined,
+      surfaceId: detail?.surfaceId?.trim() || undefined,
+      nonce: Date.now(),
+    })
+    void boardState.forceRefresh()
+  }, [boardState])
+
   useEffect(() => {
     const openSession = (event: Event) => {
       const detail = (event as CustomEvent<SessionOpenTarget>).detail
@@ -663,19 +676,21 @@ export default function App() {
   }, [openSessionTerminalOverlay])
 
   useEffect(() => {
-    const openSessionsWorkspace = (event: Event) => {
+    const handleOpenSessionsWorkspace = (event: Event) => {
       const detail = (event as CustomEvent<SessionOpenTarget>).detail
-      openSessionTerminalOverlay(detail)
+      openSessionsWorkspace(detail)
     }
-    window.addEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
-    const pending = window.__meee2PendingSessionTerminalOverlay ?? window.__meee2PendingSessionsWorkspace
-    if (pending) {
-      openSessionTerminalOverlay(pending)
+    window.addEventListener('meee2:open-sessions-workspace', handleOpenSessionsWorkspace)
+    if (window.__meee2PendingSessionTerminalOverlay) {
+      openSessionTerminalOverlay(window.__meee2PendingSessionTerminalOverlay)
       window.__meee2PendingSessionTerminalOverlay = null
+    }
+    if (window.__meee2PendingSessionsWorkspace) {
+      openSessionsWorkspace(window.__meee2PendingSessionsWorkspace)
       window.__meee2PendingSessionsWorkspace = null
     }
-    return () => window.removeEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
-  }, [openSessionTerminalOverlay])
+    return () => window.removeEventListener('meee2:open-sessions-workspace', handleOpenSessionsWorkspace)
+  }, [openSessionTerminalOverlay, openSessionsWorkspace])
 
   // 2026-06-02 · session overlay 与 inspector 绑定:inspector 关闭时一并关掉 overlay
   // (仅 UI 关闭,不杀会话进程 —— overlay 卸载只发 phase:'hide',native terminal runtime
@@ -1186,7 +1201,8 @@ export default function App() {
   }, [])
 
   const handleOpenSessionArtifacts = useCallback((_session: Session, _title: string, filter: ArtifactSessionFilter) => {
-    setSessionArtifactsModalTarget(filter)
+    setArtifactSessionFilter(filter)
+    setWorkspaceMode('artifacts')
   }, [])
 
   const refreshUserProfile = useCallback(() => {
@@ -1264,6 +1280,7 @@ export default function App() {
           {workspaceMode === 'session' ? (
             <SessionLauncherView
               state={boardState.state}
+              openTarget={sessionsWorkspaceTarget}
               onSessionCreated={() => boardState.forceRefresh()}
               onOpenSessionArtifacts={handleOpenSessionArtifacts}
               onToast={pushToast}
@@ -1428,13 +1445,6 @@ export default function App() {
             installLogs={agentRuntimeInstallLogs}
             onInstall={handleInstallAgentRuntime}
             onClose={() => setAgentRuntimeModalOpen(false)}
-          />
-        )}
-        {sessionArtifactsModalTarget && (
-          <SessionArtifactsModal
-            target={sessionArtifactsModalTarget}
-            onClose={() => setSessionArtifactsModalTarget(null)}
-            onChanged={() => boardState.forceRefresh()}
           />
         )}
         <CommandPalette

@@ -39,7 +39,6 @@ import {
   createProjectSession,
   createSessionProject,
   createTemporarySession,
-  fetchSessionArtifacts,
   fetchSessionProjects,
   forgetSessionProject,
   pickSessionProjectDirectory,
@@ -52,15 +51,18 @@ import {
   uploadSessionLaunchAttachment,
   type NativeTerminalRect,
 } from '../api'
+import { displaySessionTitle } from '../lib/sessionRecap'
 import { nativeTerminalTargetForSession } from '../lib/sessionTerminal'
 import { useTheme } from '../lib/theme'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, loadTitleOverrides, saveTitleOverride, togglePinned } from '../sessionOverrides'
 import type { AgentPermissionMode, BoardState, Session, SessionLaunchAttachment, SessionProject, SpawnProvider } from '../types'
+import { SessionArtifactsPanel } from './SessionArtifactsModal'
 
 interface Props {
   state: BoardState | null
+  openTarget?: { sessionId?: string; surfaceId?: string; nonce?: number } | null
   onSessionCreated?: () => void
   onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
   onToast?: (kind: 'success' | 'error', text: string) => void
@@ -75,6 +77,8 @@ type RestoredTerminalTarget = {
   sessionId: string
   surfaceId: string
 }
+
+type SessionPanelTab = 'terminal' | 'artifact'
 
 export type SessionArtifactFilterPayload = {
   sessionId: string
@@ -229,6 +233,7 @@ const PERMISSION_OPTIONS: Record<SpawnProvider, PermissionOption[]> = {
 
 export function SessionLauncherView({
   state,
+  openTarget,
   onSessionCreated,
   onOpenSessionArtifacts,
   onToast,
@@ -274,9 +279,11 @@ export function SessionLauncherView({
   const [reopeningSessionId, setReopeningSessionId] = useState<string | null>(null)
   const [locallyArchivedSessionIds, setLocallyArchivedSessionIds] = useState<Set<string>>(() => new Set())
   const [restoredSessionTargets, setRestoredSessionTargets] = useState<Record<string, RestoredTerminalTarget>>({})
+  const [sessionPanelTabs, setSessionPanelTabs] = useState<Record<string, SessionPanelTab>>({})
   const [sidebarWidth, setSidebarWidth] = useState(() => readStoredSidebarWidth())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
   const initializedSelectionRef = useRef(initialSelection !== null)
+  const handledOpenTargetRef = useRef<string | null>(null)
   const autoRestoreAttemptedRef = useRef<Set<string>>(new Set())
   const pointerSidebarResizeActiveRef = useRef(false)
   const sessions = state?.sessions ?? []
@@ -296,6 +303,26 @@ export function SessionLauncherView({
   useEffect(() => {
     refreshProjects()
   }, [refreshProjects])
+
+  useEffect(() => {
+    const sessionId = openTarget?.sessionId?.trim()
+    const surfaceId = openTarget?.surfaceId?.trim()
+    if (!sessionId && !surfaceId) return
+    const key = `${sessionId ?? ''}:${surfaceId ?? ''}:${openTarget?.nonce ?? ''}`
+    if (handledOpenTargetRef.current === key) return
+    handledOpenTargetRef.current = key
+    initializedSelectionRef.current = true
+    const session = sessions.find((item) => (
+      (sessionId && item.id === sessionId)
+      || (surfaceId && item.surfaceId === surfaceId)
+    ))
+    setSelection({
+      kind: 'session',
+      sessionId: session?.id ?? sessionId ?? '',
+      surfaceId: session?.surfaceId ?? surfaceId ?? null,
+    })
+    refreshProjects()
+  }, [openTarget, refreshProjects, sessions])
 
   useEffect(() => {
     const refreshOverrides = () => {
@@ -374,12 +401,9 @@ export function SessionLauncherView({
         pinned.push(session)
         continue
       }
-      if (sessionScope(session) === 'external') {
-        external.push(session)
-        continue
-      }
       const project = projectByPath.get(normalizePath(session.project))
       if (project) byProject.get(project.id)?.push(session)
+      else if (sessionScope(session) === 'external') external.push(session)
       else temporary.push(session)
     }
 
@@ -743,6 +767,13 @@ export function SessionLauncherView({
     reopenLauncherSessionForSession(session)
   }, [reopenLauncherSessionForSession])
 
+  const handleOpenSessionArtifactsTab = useCallback((session: Session) => {
+    setSessionMenu(null)
+    setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
+    setSessionPanelTabs((current) => ({ ...current, [session.id]: 'artifact' }))
+    reopenLauncherSessionForSession(session)
+  }, [reopenLauncherSessionForSession])
+
   const handleTogglePinned = useCallback((session: Session) => {
     setSessionMenu(null)
     const pinned = togglePinned(session.id)
@@ -1067,6 +1098,8 @@ export function SessionLauncherView({
             titleOverrides={titleOverrides}
             theme={resolvedTheme}
             onOpenSessionArtifacts={onOpenSessionArtifacts}
+            activeTab={sessionPanelTabs[selection.sessionId] ?? 'terminal'}
+            onActiveTabChange={(tab) => setSessionPanelTabs((current) => ({ ...current, [selection.sessionId]: tab }))}
           />
         ) : selection?.kind === 'temporaryDraft' ? (
           <SessionComposer
@@ -1148,9 +1181,7 @@ export function SessionLauncherView({
           setArchiveSession(sessionMenu.session)
         }}
         onOpenArtifacts={() => {
-          const title = sessionDisplayTitle(sessionMenu.session, titleOverrides)
-          setSessionMenu(null)
-          onOpenSessionArtifacts?.(sessionMenu.session, title, sessionArtifactFilter(sessionMenu.session, title))
+          handleOpenSessionArtifactsTab(sessionMenu.session)
         }}
       />,
       document.body,
@@ -2059,6 +2090,8 @@ function SessionLauncherTerminal({
   titleOverrides,
   theme,
   onOpenSessionArtifacts,
+  activeTab,
+  onActiveTabChange,
 }: {
   session: Session | null
   statusSession?: Session | null
@@ -2069,6 +2102,8 @@ function SessionLauncherTerminal({
   titleOverrides: Record<string, string>
   theme: 'light' | 'dark'
   onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
+  activeTab: SessionPanelTab
+  onActiveTabChange: (tab: SessionPanelTab) => void
 }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -2076,48 +2111,13 @@ function SessionLauncherTerminal({
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const switchTraceIdRef = useRef<string>('')
   const switchStartedAtRef = useRef<number>(Date.now())
-  const [artifactCount, setArtifactCount] = useState(0)
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
   const targetSurfaceId = liveTarget.surfaceId ?? suppliedSurfaceId
   const targetSessionId = liveTarget.sessionId ?? (targetSurfaceId ? sessionId : undefined)
   const canOpenNativeTerminal = Boolean(targetSurfaceId && targetSessionId)
+  const terminalTabActive = activeTab === 'terminal'
   const targetKey = `${targetSessionId ?? 'missing'}:${targetSurfaceId ?? 'missing'}`
-  const obscureForArtifacts = useCallback(() => {
-    syncNativeSessionsWorkspace({
-      phase: 'obscure',
-      mode: 'terminal',
-      theme,
-      traceId: switchTraceIdRef.current,
-      clickStartedAtMs: Date.now(),
-      sentAtMs: Date.now(),
-      webPhase: 'sessionLauncher.artifacts.pointerDown',
-    })
-  }, [theme])
-
-  useEffect(() => {
-    if (!session?.id) {
-      setArtifactCount(0)
-      return undefined
-    }
-    let cancelled = false
-    let timer: number | null = null
-    const load = () => {
-      fetchSessionArtifacts(session.id)
-        .then((payload) => {
-          if (!cancelled) setArtifactCount(payload.totalCount)
-        })
-        .catch(() => {
-          if (!cancelled) setArtifactCount(0)
-        })
-    }
-    load()
-    timer = window.setInterval(load, 5000)
-    return () => {
-      cancelled = true
-      if (timer !== null) window.clearInterval(timer)
-    }
-  }, [session?.id])
 
   useLayoutEffect(() => {
     const startedAt = Date.now()
@@ -2131,7 +2131,7 @@ function SessionLauncherTerminal({
     const traceId = switchTraceIdRef.current
     const clickStartedAtMs = switchStartedAtRef.current
     const host = hostRef.current
-    if (!host || !canOpenNativeTerminal) {
+    if (!host || !canOpenNativeTerminal || !terminalTabActive) {
       syncNativeSessionsWorkspace({
         phase: 'hide',
         mode: 'terminal',
@@ -2139,7 +2139,7 @@ function SessionLauncherTerminal({
         traceId,
         clickStartedAtMs,
         sentAtMs: Date.now(),
-        webPhase: 'sessionLauncher.hide.missingTarget',
+        webPhase: terminalTabActive ? 'sessionLauncher.hide.missingTarget' : 'sessionLauncher.hide.artifactTab',
       })
       lastRectRef.current = null
       return
@@ -2165,7 +2165,7 @@ function SessionLauncherTerminal({
       sentAtMs: Date.now(),
       webPhase: `sessionLauncher.${phase}`,
     })
-  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId, theme])
+  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId, terminalTabActive, theme])
 
   const scheduleLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) return
@@ -2195,7 +2195,7 @@ function SessionLauncherTerminal({
       window.removeEventListener('meee2:restore-native-sessions-workspace', handleNativeRestore)
       lastRectRef.current = null
     }
-  }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId])
+  }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId, terminalTabActive])
 
   useEffect(() => {
     return () => {
@@ -2211,17 +2211,6 @@ function SessionLauncherTerminal({
     }
   }, [theme])
 
-  if (!canOpenNativeTerminal) {
-    const fallbackMessage = sessionLauncherTerminalFallbackMessage(session, reopening, t)
-    return (
-      <div className="session-launcher__terminal-empty">
-        <strong>{session ? sessionDisplayTitle(session, titleOverrides) : t('rail.session')}</strong>
-        {reopening ? <Loader2 size={16} className="spin" aria-hidden /> : null}
-        <span>{fallbackMessage}</span>
-      </div>
-    )
-  }
-
   const title = session ? sessionDisplayTitle(session, titleOverrides) : t('sessions.launcher.startingSession')
   const runtime = sessionRuntimeLabel(session)
   const project = sessionProjectLabel(session)
@@ -2229,13 +2218,14 @@ function SessionLauncherTerminal({
     ? { ...session, status: 'running', surfaceStatus: 'running' }
     : session
   const status = sessionTerminalStatus(statusSession ?? fallbackRunningSession, t)
-  const canOpenArtifacts = Boolean(session && onOpenSessionArtifacts)
+  const artifactTarget = session ? sessionArtifactFilter(session, title) : null
+  const fallbackMessage = sessionLauncherTerminalFallbackMessage(session, reopening, t)
 
   return (
     <div className="session-launcher-terminal">
       <header className="session-launcher-terminal__header">
         <div className="session-launcher-terminal__identity">
-          <strong>{title}</strong>
+          <strong title={title}>{title}</strong>
           <span title={session?.project || undefined}>
             {runtime ? <b>{runtime}</b> : null}
             {runtime && project ? <i aria-hidden>·</i> : null}
@@ -2244,21 +2234,59 @@ function SessionLauncherTerminal({
         </div>
         <div className="session-launcher-terminal__actions">
           <em className={`session-launcher-terminal__status is-${status.tone}`}>{status.label}</em>
-          {canOpenArtifacts && session && (
-            <button
-              type="button"
-              className="session-launcher-terminal__artifact-button"
-              onPointerDown={obscureForArtifacts}
-              onClick={() => onOpenSessionArtifacts?.(session, title, sessionArtifactFilter(session, title))}
-              aria-label={t('sessions.launcher.openArtifactsForSession', { title })}
-              title={t('sessions.launcher.openArtifacts')}
-            >
-              <span>Artifacts[{artifactCount}]</span>
-            </button>
-          )}
         </div>
       </header>
-      <div ref={hostRef} className="session-launcher-terminal__host" />
+      <div className="session-launcher-terminal__tabs" role="tablist" aria-label={t('sessions.launcher.sessionPanelTabs')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'terminal'}
+          className={activeTab === 'terminal' ? 'is-active' : ''}
+          onClick={() => onActiveTabChange('terminal')}
+        >
+          {t('sessions.launcher.tabTerminal')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'artifact'}
+          className={activeTab === 'artifact' ? 'is-active' : ''}
+          onClick={() => onActiveTabChange('artifact')}
+        >
+          {t('sessions.launcher.tabArtifact')}
+        </button>
+      </div>
+      {canOpenNativeTerminal ? (
+        <div
+          ref={hostRef}
+          className={`session-launcher-terminal__host${activeTab === 'terminal' ? ' is-active' : ''}`}
+          role="tabpanel"
+          aria-label={t('sessions.launcher.tabTerminal')}
+          hidden={activeTab !== 'terminal'}
+        />
+      ) : activeTab === 'terminal' ? (
+        <div
+          className="session-launcher__terminal-empty session-launcher-terminal__fallback"
+          role="tabpanel"
+          aria-label={t('sessions.launcher.tabTerminal')}
+        >
+          <strong>{session ? title : t('rail.session')}</strong>
+          {reopening ? <Loader2 size={16} className="spin" aria-hidden /> : null}
+          <span>{fallbackMessage}</span>
+        </div>
+      ) : null}
+      {activeTab === 'artifact' && session && artifactTarget && (
+        <div
+          className="session-launcher-terminal__artifact-panel"
+          role="tabpanel"
+          aria-label={t('sessions.launcher.tabArtifact')}
+        >
+          <SessionArtifactsPanel
+            target={artifactTarget}
+            className="session-artifacts-panel--inline"
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -2488,55 +2516,7 @@ function sessionLauncherTerminalFallbackMessage(
 
 function sessionDisplayTitle(session: Session, titleOverrides: Record<string, string>): string {
   const override = titleOverrides[session.id]?.replace(/\s+/g, ' ').trim()
-  return override || sessionTitle(session)
-}
-
-function sessionTitle(session: Session): string {
-  const candidates = [
-    session.latestRecap?.content,
-    session.currentTask,
-    initialUserMessage(session),
-    session.title,
-  ]
-  for (const candidate of candidates) {
-    const title = cleanSessionTitle(candidate)
-    if (title) return title
-  }
-  return session.pluginDisplayName || 'Session'
-}
-
-function initialUserMessage(session: Session): string | null {
-  for (const entry of session.recentMessages) {
-    if (entry.role.toLowerCase() === 'user' && entry.text.trim()) return entry.text
-  }
-  return null
-}
-
-function cleanSessionTitle(raw: string | null | undefined): string {
-  const rawValue = raw ?? ''
-  const planModeUserRequest = extractPlanModeUserRequest(rawValue)
-  if (planModeUserRequest) return cleanSessionTitle(planModeUserRequest)
-  if (/^\s*Plan mode is enabled for this Codex session\./i.test(rawValue)) return ''
-  const value = rawValue
-    .replace(/\[[^\]]+\]\([^)]+\)/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!value) return ''
-  const firstSentence = value.split(/\n|。|[.!?]\s/)[0]?.trim() ?? value
-  const withoutSpeaker = firstSentence.replace(/^(user|assistant|human|system)\s*:\s*/i, '').trim()
-  const withoutPlanSlash = withoutSpeaker.replace(/^\/plan(?:\s+|$)/i, '').trim()
-  const genericProviderTitle = /^(codex|claude code|claude)\s+-\s+[^/\\]+$/i
-  const internalNodeTitle = /^node\s+(?:node-)?[a-z0-9][a-z0-9-]{10,}(?:-transcript)?$/i
-  if (!withoutPlanSlash) return ''
-  if (genericProviderTitle.test(withoutPlanSlash)) return ''
-  if (internalNodeTitle.test(withoutPlanSlash)) return ''
-  return withoutPlanSlash.length > 56 ? `${withoutPlanSlash.slice(0, 54).trim()}...` : withoutPlanSlash
-}
-
-function extractPlanModeUserRequest(raw: string): string | null {
-  if (!/^\s*Plan mode is enabled for this Codex session\./i.test(raw)) return null
-  const match = raw.match(/\bUser request:\s*([\s\S]+)$/i)
-  return match?.[1]?.trim() || null
+  return displaySessionTitle(session, override).text
 }
 
 function sameRect(a: NativeTerminalRect | null, b: NativeTerminalRect): boolean {

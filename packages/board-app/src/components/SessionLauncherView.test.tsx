@@ -175,6 +175,31 @@ describe('SessionLauncherView', () => {
     })
   })
 
+  it('selects the requested session when opening the Sessions workspace', async () => {
+    const requested = makeSession({
+      id: 'requested-session',
+      title: 'Claude Code - requested',
+      recentMessages: [{ role: 'user', text: '来自 slash command 的 Session' }],
+      surfaceId: 'requested-surface',
+      lastActivity: '2026-06-14T09:00:00Z',
+      pluginId: 'com.meee2.plugin.claude',
+      pluginDisplayName: 'Claude Code',
+      sessionScope: 'external',
+    })
+
+    const view = renderWithI18n(
+      <SessionLauncherView
+        state={makeState([makeSession(), requested])}
+        openTarget={{ sessionId: 'requested-session', nonce: 1 }}
+      />,
+    )
+
+    const requestedButton = await screen.findByRole('button', { name: '来自 slash command 的 Session' })
+    await waitFor(() => expect(requestedButton.closest('.session-launcher__session-item')).toHaveClass('is-selected'))
+    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('来自 slash command 的 Session')
+    expect(screen.queryByText('我们应该在meee2-workspace中做些什么？')).not.toBeInTheDocument()
+  })
+
   it('auto-restores a stored stale session selection on first entry', async () => {
     localStorage.setItem(lastSelectionKey, JSON.stringify({
       kind: 'session',
@@ -1050,8 +1075,28 @@ describe('SessionLauncherView', () => {
       latestRecap: { content: '已经完成 session 标题与终端显示修复', timestamp: new Date().toISOString() },
     })])} />)
 
-    await screen.findByText('已经完成 session 标题与终端显示修复')
+    await screen.findByText('session 标题与终端显示修复')
     expect(screen.queryByText('用户发起的问题会在没有 recap 时使用')).not.toBeInTheDocument()
+  })
+
+  it('does not let a Codex context compaction signal override the active task title', async () => {
+    renderWithI18n(<SessionLauncherView state={makeState([makeSession({
+      currentTask: '优化 Artifact tab',
+      recentMessages: [{ role: 'user', text: '不好看，而且 promote 为什么不能点击' }],
+      latestRecap: null,
+      providerRecapSignals: [{
+        id: 'codex-compact-1',
+        provider: 'codex',
+        sessionId: 'session-a',
+        intent: 'context_compaction',
+        content: 'Summary: 已修改多个文件，下一步继续跑测试。',
+        timestamp: new Date().toISOString(),
+        confidence: 'medium',
+      }],
+    })])} />)
+
+    await screen.findByText('优化 Artifact tab')
+    expect(screen.queryByText(/已修改多个文件/)).not.toBeInTheDocument()
   })
 
   it('marks session rows that need input or are done', async () => {
@@ -1097,7 +1142,7 @@ describe('SessionLauncherView', () => {
     expect(localStorage.getItem('meee2.session.titleOverrides.v1')).toContain('Session 标题修复')
   })
 
-  it('opens session artifacts from the context menu', async () => {
+  it('switches to the artifact tab from the context menu', async () => {
     const session = makeSession()
     const onOpenSessionArtifacts = vi.fn()
     renderWithI18n(<SessionLauncherView state={makeState([session])} onOpenSessionArtifacts={onOpenSessionArtifacts} />)
@@ -1109,16 +1154,13 @@ describe('SessionLauncherView', () => {
     const menu = await screen.findByRole('menu', { name: '新增 Session 原生 Terminal 的会话操作' })
     fireEvent.click(within(menu).getByRole('menuitem', { name: '查看产物' }))
 
-    expect(onOpenSessionArtifacts).toHaveBeenCalledWith(session, '新增 Session 原生 Terminal', expect.objectContaining({
-      sessionId: 'session-a',
-      providerResumeSessionId,
-      surfaceId: 'surface-a',
-      project: '/Users/kai/Code/meee2-workspace',
-      projectName: 'meee2-workspace',
-    }))
+    const artifactTab = await screen.findByRole('tab', { name: 'Artifact' })
+    expect(artifactTab).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('heading', { name: '产物' })).toBeInTheDocument()
+    expect(onOpenSessionArtifacts).not.toHaveBeenCalled()
   })
 
-  it('opens session artifacts from the terminal header action', async () => {
+  it('renders artifacts inline without a details button in the artifact tab', async () => {
     const session = makeSession({
       currentTask: '修复 Session 标题',
       recentMessages: [],
@@ -1129,13 +1171,10 @@ describe('SessionLauncherView', () => {
     await screen.findByText('修复 Session 标题')
     fireEvent.click(screen.getByRole('button', { name: '修复 Session 标题' }))
 
-    fireEvent.click(await screen.findByRole('button', { name: '查看 修复 Session 标题 的产物' }))
-    expect(onOpenSessionArtifacts).toHaveBeenCalledWith(session, '修复 Session 标题', expect.objectContaining({
-      sessionId: 'session-a',
-      providerResumeSessionId,
-      surfaceId: 'surface-a',
-      projectName: 'meee2-workspace',
-    }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Artifact' }))
+    expect(await screen.findByRole('heading', { name: '产物' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '查看详情页' })).not.toBeInTheDocument()
+    expect(onOpenSessionArtifacts).not.toHaveBeenCalled()
   })
 
   it('pins and archives from the session context menu', async () => {

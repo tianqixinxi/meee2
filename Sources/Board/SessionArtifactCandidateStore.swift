@@ -60,7 +60,6 @@ struct ArtifactCandidateMutationEnvelope: Encodable {
 enum SessionArtifactCandidateStoreError: LocalizedError {
     case missingSession
     case candidateNotFound(String)
-    case attachTargetRequired([SessionArtifactAttachTarget])
     case attachTargetNotFound
     case artifactAttachFailed
 
@@ -70,8 +69,6 @@ enum SessionArtifactCandidateStoreError: LocalizedError {
             return "missing session id"
         case .candidateNotFound(let id):
             return "artifact candidate not found: \(id)"
-        case .attachTargetRequired:
-            return "multiple or no attach targets; choose canvasId and nodeId"
         case .attachTargetNotFound:
             return "attach target not found for this session"
         case .artifactAttachFailed:
@@ -173,8 +170,8 @@ final class SessionArtifactCandidateStore {
 
     func markPromoted(
         candidateId: String,
-        canvasId: String,
-        nodeId: String,
+        canvasId: String?,
+        nodeId: String?,
         artifactId: String
     ) throws -> SessionArtifactCandidate {
         try update(candidateId: candidateId) { candidate in
@@ -201,13 +198,42 @@ final class SessionArtifactCandidateStore {
         backfillCodexTranscripts(sessionIds: aliases)
         let snapshot = BoardLayoutStore.shared.snapshot()
         let formal = formalArtifactsAndTargets(sessionIds: aliases, snapshot: snapshot)
-        let candidates = list(sessionIds: aliases)
+        let allCandidates = list(sessionIds: aliases, includeDiscarded: true)
+        let candidates = allCandidates.filter { $0.status == .candidate }
+        let sessionScopedArtifacts = allCandidates
+            .filter { $0.status == .promoted && $0.promotedCanvasId == nil }
+            .map { sessionScopedArtifact(for: $0) }
+            .sorted { $0.createdAt > $1.createdAt }
+        let artifacts = (sessionScopedArtifacts + formal.artifacts).sorted { $0.createdAt > $1.createdAt }
         return SessionArtifactsEnvelope(
             sessionId: sid,
             candidates: candidates,
-            artifacts: formal.artifacts,
-            totalCount: candidates.count + formal.artifacts.count,
+            artifacts: artifacts,
+            totalCount: candidates.count + artifacts.count,
             attachTargets: formal.targets
+        )
+    }
+
+    func sessionScopedArtifact(
+        for candidate: SessionArtifactCandidate,
+        kind: PlannerArtifactKind? = nil,
+        title: String? = nil,
+        reference: String? = nil,
+        status: String? = nil
+    ) -> PlannerArtifact {
+        let artifactId = candidate.promotedArtifactId ?? "session-artifact-\(candidate.id)"
+        return PlannerArtifact(
+            id: artifactId,
+            canvasId: "session:\(candidate.sessionId)",
+            nodeId: candidate.sessionId,
+            kind: kind ?? Self.plannerArtifactKind(forCandidateKind: candidate.kind),
+            title: title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? candidate.title,
+            reference: reference?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? candidate.references.first?.value ?? candidate.id,
+            status: status?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "promoted",
+            createdAt: candidate.updatedAt,
+            payload: Self.artifactPayload(for: candidate),
+            producedBy: .agent,
+            reviewStatus: "approved"
         )
     }
 
@@ -321,7 +347,40 @@ final class SessionArtifactCandidateStore {
         _ items: [SessionArtifactCandidate],
         includeDiscarded: Bool
     ) -> [SessionArtifactCandidate] {
-        items.filter { includeDiscarded || $0.status != .discarded }
+        items.filter { includeDiscarded || $0.status == .candidate }
+    }
+
+    private static func artifactPayload(for candidate: SessionArtifactCandidate) -> BoardJSONValue {
+        let refs = candidate.references.map { reference in
+            BoardJSONValue.object([
+                "kind": .string(reference.kind),
+                "value": .string(reference.value),
+                "label": reference.label.map(BoardJSONValue.string) ?? .null
+            ])
+        }
+        return .object([
+            "type": .string(PlannerArtifactPayloadType.text.rawValue),
+            "text": .string(candidate.summary),
+            "source": .string("artifact-candidate"),
+            "candidateId": .string(candidate.id),
+            "candidateKind": .string(candidate.kind),
+            "references": .array(refs)
+        ])
+    }
+
+    private static func plannerArtifactKind(forCandidateKind kind: String) -> PlannerArtifactKind {
+        switch kind {
+        case "impl-pr":
+            return .implPR
+        case "check-result":
+            return .checkResult
+        case "prd":
+            return .prd
+        case "kanban":
+            return .kanban
+        default:
+            return .generic
+        }
     }
 
     private func uniqueCandidates(_ items: [SessionArtifactCandidate]) -> [SessionArtifactCandidate] {
