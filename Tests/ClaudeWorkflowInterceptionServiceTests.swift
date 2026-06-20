@@ -2,11 +2,16 @@ import XCTest
 @testable import meee2Kit
 
 final class ClaudeWorkflowInterceptionServiceTests: XCTestCase {
+    private static let boardStoreLock = NSLock()
+
     private var tempRoot: URL!
     private var plannerStoreURL: URL!
     private var createdCanvasIds: [String] = []
+    private var didLockBoardStore = false
 
     override func setUpWithError() throws {
+        Self.boardStoreLock.lock()
+        didLockBoardStore = true
         tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("claude-workflow-interception-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
@@ -23,6 +28,10 @@ final class ClaudeWorkflowInterceptionServiceTests: XCTestCase {
         tempRoot = nil
         plannerStoreURL = nil
         createdCanvasIds = []
+        if didLockBoardStore {
+            didLockBoardStore = false
+            Self.boardStoreLock.unlock()
+        }
     }
 
     func testKnownWorkflowCommandInAskModeRequiresSecondPromptBeforeCreatingCanvas() throws {
@@ -100,6 +109,10 @@ final class ClaudeWorkflowInterceptionServiceTests: XCTestCase {
 
     func testNativeWorkflowPromptRequiresConfirmationBeforeCreatingCanvas() throws {
         let service = try makeService(mode: .ask, workflowName: "ship-feature")
+        let canvasName = "Workflow: explore last five commits"
+        let matchingCanvasCountBefore = BoardLayoutStore.shared.snapshot().canvases
+            .filter { $0.name == canvasName }
+            .count
 
         let outcome = service.intercept(
             sessionId: "sid-native",
@@ -113,7 +126,10 @@ final class ClaudeWorkflowInterceptionServiceTests: XCTestCase {
         XCTAssertEqual(commandName, "workflow explore last five commits")
         XCTAssertEqual(meee2Prompt, "workflow explore last five commits --meee2")
         XCTAssertEqual(claudePrompt, "workflow explore last five commits --claude")
-        XCTAssertFalse(BoardLayoutStore.shared.snapshot().canvases.contains { $0.name == "Workflow: explore last five commits" })
+        let matchingCanvasCountAfter = BoardLayoutStore.shared.snapshot().canvases
+            .filter { $0.name == canvasName }
+            .count
+        XCTAssertEqual(matchingCanvasCountAfter, matchingCanvasCountBefore)
     }
 
     func testConfirmedNativeWorkflowPromptCreatesCanvasAndStartsRun() throws {

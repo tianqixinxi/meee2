@@ -32,13 +32,24 @@ struct Meee2AgentRuntimeInstallResult: Encodable {
 }
 
 enum Meee2AgentRuntimeInstaller {
+    struct ClaudePluginInstallStatus: Equatable {
+        var installed: Bool
+        var enabled: Bool
+
+        static let missing = ClaudePluginInstallStatus(installed: false, enabled: false)
+
+        var active: Bool { installed && enabled }
+    }
+
     private static let marketplaceName = "meee2-official"
     private static let pluginName = "meee2"
+    private static let workflowBridgePluginName = "meee2-workflow-bridge"
     private static let diagnoseCacheTTL: TimeInterval = 30
     private static let diagnoseLock = NSLock()
     private static var diagnoseCache: Meee2AgentRuntimeStatus?
     private static var diagnoseInFlight: DispatchGroup?
     private static var pluginSelector: String { "\(pluginName)@\(marketplaceName)" }
+    private static var workflowBridgePluginSelector: String { "\(workflowBridgePluginName)@\(marketplaceName)" }
 
     static func diagnose(forceRefresh: Bool = false) -> Meee2AgentRuntimeStatus {
         if !forceRefresh,
@@ -133,10 +144,21 @@ enum Meee2AgentRuntimeInstaller {
         let claudeCLIAvailable = claudeCliPath != nil
         let claudeAppAvailable = claudeAppPath != nil
         let claudeAvailable = claudeCLIAvailable || claudeAppAvailable
-        let claudePreferredInstalled = claudeCLIAvailable && claudePluginInstalledFor(marketplaceName)
+        let claudeMainPluginStatus = claudeCLIAvailable ? claudePluginStatusFor(marketplaceName, plugin: pluginName) : .missing
+        let claudeWorkflowBridgeStatus = claudeCLIAvailable ? claudePluginStatusFor(marketplaceName, plugin: workflowBridgePluginName) : .missing
+        let claudeMainPluginInstalled = claudeMainPluginStatus.installed
+        let claudeWorkflowBridgeInstalled = claudeWorkflowBridgeStatus.installed
+        let claudePreferredInstalled = claudeMainPluginInstalled && claudeWorkflowBridgeInstalled
+        let claudePreferredEnabled = claudeMainPluginStatus.active && claudeWorkflowBridgeStatus.active
         let claudeInstalled = claudePreferredInstalled
         let claudeMarketplace = claudeAvailable && claudeMarketplaceConfigured()
-        let claudeConfigured = claudeCLIAvailable && claudePreferredInstalled && stagedExists
+        let claudeConfigured = claudeCLIAvailable && claudePreferredEnabled && stagedExists
+        let claudeSetupCommand = [
+            "claude plugin install \(pluginSelector) --scope user",
+            "claude plugin install \(workflowBridgePluginSelector) --scope user",
+            "claude plugin enable \(pluginSelector) --scope user",
+            "claude plugin enable \(workflowBridgePluginSelector) --scope user"
+        ].joined(separator: " && ")
 
         let codexPathOnPATH = commandPath("codex")
         let codexAppBinaryPath = fallbackCodexPath()
@@ -170,11 +192,13 @@ enum Meee2AgentRuntimeInstaller {
                 installed: claudeInstalled,
                 configured: claudeConfigured,
                 detail: claudeCLIAvailable
-                    ? (claudePreferredInstalled
-                        ? (stagedExists ? "Claude Code CLI plugin is installed. Claude.app \(claudeAppAvailable ? "is installed too" : "was not found")." : "Plugin installed; staged MCP server is missing.")
-                        : (claudeMarketplace ? "Meee2 marketplace is added; plugin is not installed." : "Claude Code CLI is available; Meee2 plugin is not installed."))
+                    ? (claudePreferredEnabled
+                        ? (stagedExists ? "Claude Code plugins are installed, including Workflow bridge. Claude.app \(claudeAppAvailable ? "is installed too" : "was not found")." : "Plugins installed; staged MCP server is missing.")
+                        : (claudePreferredInstalled
+                            ? "Claude Code plugins are installed, but one or more are disabled."
+                            : (claudeMarketplace ? "Meee2 marketplace is added; Claude Code plugin or Workflow bridge is not installed." : "Claude Code CLI is available; Meee2 plugins are not installed.")))
                     : (claudeAppAvailable ? "Claude.app is installed, but Claude Code CLI was not found on PATH." : "Claude Code CLI and Claude.app were not found."),
-                command: "claude plugin install \(pluginName)@\(marketplaceName) --scope user"
+                command: claudeSetupCommand
             ),
             codex: AgentRuntimeComponentStatus(
                 available: codexAvailable,
@@ -287,18 +311,50 @@ enum Meee2AgentRuntimeInstaller {
             }
         }
 
-        if claudePluginInstalledFor(marketplaceName) {
-            messages.append("Installed Meee2 Claude Code plugin.")
-            log(&logs, "Skipping plugin install; \(pluginName)@\(marketplaceName) is already installed")
-        } else {
-            let install = runCommand("claude", ["plugin", "install", "--scope", "user", "\(pluginName)@\(marketplaceName)"], timeoutSeconds: 60, logs: &logs)
-            if install.exitCode == 0 || claudePluginInstalledFor(marketplaceName) {
-                messages.append("Installed Meee2 Claude Code plugin.")
-            } else {
-                messages.append("Failed to install Meee2 Claude Code plugin: \(install.combinedOutput)")
-            }
-        }
+        installClaudeMarketplacePlugin(
+            name: pluginName,
+            displayName: "Meee2 Claude Code plugin",
+            messages: &messages,
+            logs: &logs
+        )
+        installClaudeMarketplacePlugin(
+            name: workflowBridgePluginName,
+            displayName: "Meee2 Workflow Bridge plugin",
+            messages: &messages,
+            logs: &logs
+        )
         return (messages, logs)
+    }
+
+    private static func installClaudeMarketplacePlugin(
+        name: String,
+        displayName: String,
+        messages: inout [String],
+        logs: inout [String]
+    ) {
+        let selector = "\(name)@\(marketplaceName)"
+        let status = claudePluginStatusFor(marketplaceName, plugin: name)
+        if status.active {
+            messages.append("Installed \(displayName).")
+            log(&logs, "Skipping plugin install; \(selector) is already installed and enabled")
+            return
+        }
+        if status.installed {
+            let enable = runCommand("claude", ["plugin", "enable", "--scope", "user", selector], timeoutSeconds: 60, logs: &logs)
+            if enable.exitCode == 0 || claudePluginStatusFor(marketplaceName, plugin: name).active {
+                messages.append("Enabled \(displayName).")
+            } else {
+                messages.append("Failed to enable \(displayName): \(enable.combinedOutput)")
+            }
+            return
+        }
+
+        let install = runCommand("claude", ["plugin", "install", "--scope", "user", selector], timeoutSeconds: 60, logs: &logs)
+        if install.exitCode == 0 || claudePluginStatusFor(marketplaceName, plugin: name).active {
+            messages.append("Installed \(displayName).")
+        } else {
+            messages.append("Failed to install \(displayName): \(install.combinedOutput)")
+        }
     }
 
     private static func installCodexRuntime() -> (messages: [String], logs: [String]) {
@@ -436,10 +492,11 @@ enum Meee2AgentRuntimeInstaller {
     /// (Codex 侧不在此合并范围 —— readiness 的 codexMCPConfigured() 依赖自注册的
     ///  [mcp_servers.meee2] 块,故 Codex 继续自注册,保持现状。)
     static func meee2ClaudePluginActive() -> Bool {
-        claudePluginActiveFromState()
+        claudePluginActiveFromState(marketplace: marketplaceName, plugin: pluginName)
     }
 
-    private static func claudePluginActiveFromState() -> Bool {
+    private static func claudePluginActiveFromState(marketplace: String, plugin name: String) -> Bool {
+        let selector = "\(name)@\(marketplace)"
         let home = URL(fileURLWithPath: NSHomeDirectory())
         let installed = home
             .appendingPathComponent(".claude", isDirectory: true)
@@ -449,23 +506,31 @@ enum Meee2AgentRuntimeInstaller {
             let data = try? Data(contentsOf: installed),
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let plugins = root["plugins"] as? [String: Any],
-            let records = plugins[pluginSelector] as? [[String: Any]],
+            let records = plugins[selector] as? [[String: Any]],
             !records.isEmpty
         else {
             return false
         }
-        // 已装。再看启用状态:enabledPlugins[selector] 显式为 false 才算禁用,缺省启用。
+        return claudePluginEnabledInSettings(selector: selector)
+    }
+
+    private static func claudePluginEnabledInSettings(selector: String) -> Bool {
+        let home = URL(fileURLWithPath: NSHomeDirectory())
         let settings = home
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("settings.json")
         if let sdata = try? Data(contentsOf: settings),
            let sroot = try? JSONSerialization.jsonObject(with: sdata) as? [String: Any],
            let enabled = sroot["enabledPlugins"] as? [String: Any],
-           let flag = enabled[pluginSelector] as? Bool,
-           flag == false {
-            return false
+           let flag = claudePluginEnabledInSettings(enabledPlugins: enabled, selector: selector) {
+            return flag
         }
-        return true
+        return claudePluginEnabledInSettings(enabledPlugins: nil, selector: selector) ?? true
+    }
+
+    static func claudePluginEnabledInSettings(enabledPlugins: [String: Any]?, selector: String) -> Bool? {
+        guard let flag = enabledPlugins?[selector] as? Bool else { return true }
+        return flag
     }
 
     private static func codexPluginInstalled() -> Bool {
@@ -476,25 +541,37 @@ enum Meee2AgentRuntimeInstaller {
     }
 
     private static func claudePluginInstalled() -> Bool {
-        claudePluginInstalledFor(marketplaceName)
+        claudePluginInstalledFor(marketplaceName, plugin: pluginName)
     }
 
-    private static func claudePluginInstalledFor(_ marketplace: String) -> Bool {
+    private static func claudePluginInstalledFor(_ marketplace: String, plugin name: String = pluginName) -> Bool {
+        claudePluginStatusFor(marketplace, plugin: name).installed
+    }
+
+    private static func claudePluginStatusFor(_ marketplace: String, plugin name: String = pluginName) -> ClaudePluginInstallStatus {
+        let selector = "\(name)@\(marketplace)"
         let result = runCommand("claude", ["plugin", "list", "--json"], timeoutSeconds: 3)
         if result.exitCode == 0,
-           claudePluginList(result.stdout, containsPlugin: pluginName, marketplace: marketplace) {
-            return true
+           let listed = claudePluginListStatus(result.stdout, containsPlugin: name, marketplace: marketplace) {
+            return ClaudePluginInstallStatus(
+                installed: listed.installed,
+                enabled: listed.enabled && claudePluginEnabledInSettings(selector: selector)
+            )
         }
-        return claudePluginCacheExists(marketplace: marketplace)
+        let cacheInstalled = claudePluginCacheExists(marketplace: marketplace, plugin: name)
+        return ClaudePluginInstallStatus(
+            installed: cacheInstalled,
+            enabled: cacheInstalled && claudePluginEnabledInSettings(selector: selector)
+        )
     }
 
-    private static func claudePluginCacheExists(marketplace: String) -> Bool {
+    private static func claudePluginCacheExists(marketplace: String, plugin name: String = pluginName) -> Bool {
         let cacheRoot = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("plugins", isDirectory: true)
             .appendingPathComponent("cache", isDirectory: true)
             .appendingPathComponent(marketplace, isDirectory: true)
-            .appendingPathComponent(pluginName, isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
         guard let versions = try? FileManager.default.contentsOfDirectory(atPath: cacheRoot.path) else {
             return false
         }
@@ -515,15 +592,19 @@ enum Meee2AgentRuntimeInstaller {
             || result.stdout.contains("\"name\": \"\(marketplace)\"")
     }
 
-    private static func claudePluginList(_ stdout: String, containsPlugin name: String, marketplace: String) -> Bool {
-        if pluginListText(stdout, containsQualifiedPlugin: "\(name)@\(marketplace)") { return true }
-        guard
-            let data = stdout.data(using: .utf8),
-            let json = try? JSONSerialization.jsonObject(with: data)
-        else {
-            return false
+    static func claudePluginListStatus(
+        _ stdout: String,
+        containsPlugin name: String,
+        marketplace: String
+    ) -> ClaudePluginInstallStatus? {
+        if let data = stdout.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) {
+            return jsonClaudePluginStatus(json, name: name, marketplace: marketplace)
         }
-        return jsonContainsClaudePlugin(json, name: name, marketplace: marketplace)
+        guard pluginListText(stdout, containsQualifiedPlugin: "\(name)@\(marketplace)") else {
+            return nil
+        }
+        return ClaudePluginInstallStatus(installed: true, enabled: true)
     }
 
     private static func pluginListText(_ stdout: String, containsQualifiedPlugin qualified: String) -> Bool {
@@ -534,17 +615,22 @@ enum Meee2AgentRuntimeInstaller {
             .contains(qualified)
     }
 
-    private static func jsonContainsClaudePlugin(_ value: Any, name: String, marketplace: String) -> Bool {
+    private static func jsonClaudePluginStatus(_ value: Any, name: String, marketplace: String) -> ClaudePluginInstallStatus? {
         if let array = value as? [Any] {
-            return array.contains { jsonContainsClaudePlugin($0, name: name, marketplace: marketplace) }
+            for item in array {
+                if let status = jsonClaudePluginStatus(item, name: name, marketplace: marketplace) {
+                    return status
+                }
+            }
+            return nil
         }
-        guard let dict = value as? [String: Any] else { return false }
+        guard let dict = value as? [String: Any] else { return nil }
 
         let strings = dict.compactMapValues { $0 as? String }
         let qualified = "\(name)@\(marketplace)"
         let qualifiedKeys = ["id", "identifier", "ref", "plugin", "pluginRef", "qualifiedName"]
         if qualifiedKeys.contains(where: { strings[$0] == qualified }) {
-            return true
+            return ClaudePluginInstallStatus(installed: true, enabled: dict["enabled"] as? Bool ?? true)
         }
 
         let nameMatches = strings["name"] == name || strings["pluginName"] == name
@@ -553,10 +639,15 @@ enum Meee2AgentRuntimeInstaller {
             || strings["marketplaceName"] == marketplace
             || strings["sourceMarketplace"] == marketplace
         if nameMatches && marketplaceMatches {
-            return true
+            return ClaudePluginInstallStatus(installed: true, enabled: dict["enabled"] as? Bool ?? true)
         }
 
-        return dict.values.contains { jsonContainsClaudePlugin($0, name: name, marketplace: marketplace) }
+        for nested in dict.values {
+            if let status = jsonClaudePluginStatus(nested, name: name, marketplace: marketplace) {
+                return status
+            }
+        }
+        return nil
     }
 
     private static func commandPath(_ command: String) -> String? {

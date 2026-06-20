@@ -1,4 +1,5 @@
 import XCTest
+import Meee2PluginKit
 @testable import meee2Kit
 
 final class BoardSessionSnapshotProviderTests: XCTestCase {
@@ -53,21 +54,65 @@ final class BoardSessionSnapshotProviderTests: XCTestCase {
         XCTAssertEqual(e2eMode.map(\.sessionId), [e2e.sessionId, real.sessionId])
     }
 
+    func testCurrentBoardSessionsHidesCliSessionAlreadyAdoptedByManagedSurface() {
+        let store = SessionStore.shared
+        let backup = store.sessions
+        defer { store.sessions = backup }
+
+        let cwd = "/tmp/meee2-board-session-provider-\(UUID().uuidString)"
+        let providerSessionId = UUID().uuidString
+        let surfaceId = "claude-ghostty-\(UUID().uuidString)"
+        store.sessions = [
+            makeSession(
+                id: surfaceId,
+                project: cwd,
+                providerResumeSessionId: providerSessionId,
+                terminalInfo: PluginTerminalInfo(
+                    termProgram: "meee2-ghostty-surface",
+                    termBundleId: "meee2-ghostty-surface"
+                )
+            ),
+            makeSession(
+                id: providerSessionId,
+                project: cwd,
+                terminalInfo: PluginTerminalInfo(
+                    termProgram: "ghostty",
+                    termBundleId: "com.mitchellh.ghostty"
+                )
+            )
+        ]
+
+        let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
+
+        XCTAssertTrue(
+            sessions.contains { $0.id == surfaceId && $0.providerResumeSessionId == providerSessionId },
+            "The managed surface remains the visible session and carries the provider resume id."
+        )
+        XCTAssertFalse(
+            sessions.contains { $0.id == providerSessionId },
+            "The adopted provider CLI session must not appear as a duplicate Session launcher row."
+        )
+    }
+
     private func makeSession(
         id: String,
         project: String,
         currentTool: String? = nil,
-        currentTask: String? = nil
+        currentTask: String? = nil,
+        providerResumeSessionId: String? = nil,
+        terminalInfo: PluginTerminalInfo? = nil
     ) -> SessionData {
         SessionData(
             sessionId: id,
             project: project,
             cwd: project,
+            providerResumeSessionId: providerResumeSessionId,
             startedAt: Date(),
             lastActivity: Date(),
             status: .active,
             currentTool: currentTool,
-            currentTask: currentTask
+            currentTask: currentTask,
+            terminalInfo: terminalInfo
         )
     }
 }
