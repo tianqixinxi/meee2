@@ -232,6 +232,7 @@ if [ -S "$PEER_ISLAND_SOCKET" ]; then
 
     # 发送 JSON 数据并根据事件类型决定是否等待响应
     # PermissionRequest: 长超时，等待用户决定
+    # UserPromptSubmit: 等待 workflow 接管响应；未知命令服务端会立即关闭并放行
     # Stop: 短超时，等待 A2A inbox drain 响应 (可能返回 {decision:"block",reason:...})
     # 其他: 不等待响应
     # DEBUG opt-in: 设 MEEE2_BRIDGE_DEBUG_PAYLOAD=1 把 Stop / UserPromptSubmit
@@ -244,6 +245,10 @@ if [ -S "$PEER_ISLAND_SOCKET" ]; then
     case "$HOOK_EVENT" in
         PermissionRequest)
             RESPONSE=$(echo "$INPUT" | nc -U -w 60 "$PEER_ISLAND_SOCKET" 2>/dev/null)
+            [ -n "$RESPONSE" ] && echo "$RESPONSE"
+            ;;
+        UserPromptSubmit)
+            RESPONSE=$(echo "$INPUT" | nc -U -w 125 "$PEER_ISLAND_SOCKET" 2>/dev/null)
             [ -n "$RESPONSE" ] && echo "$RESPONSE"
             ;;
         Stop)

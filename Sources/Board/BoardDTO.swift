@@ -271,6 +271,7 @@ struct AppSettingsDTO: Encodable {
     let quickOpenShortcut: String
     let quickOpenShortcutLabel: String
     let quickOpenShortcutConflict: String?
+    let claudeWorkflowCanvasMode: String
 }
 
 /// One identity in the team member directory — the authoritative source the

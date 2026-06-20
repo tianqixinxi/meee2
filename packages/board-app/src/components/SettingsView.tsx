@@ -111,6 +111,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   quickOpenShortcut: 'cmd+option+KeyP',
   quickOpenShortcutLabel: '⌘⌥P',
   quickOpenShortcutConflict: null,
+  claudeWorkflowCanvasMode: 'ask',
 }
 
 const MODIFIER_CODES = new Set([
@@ -1337,6 +1338,36 @@ export function SettingsView({
           </button>
         </section>
 
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <div>
+              <div className="settings-section-title">{t('settings.claudeWorkflowCanvas')}</div>
+              <div className="settings-section-caption">{t('settings.claudeWorkflowCanvasCaption')}</div>
+            </div>
+          </div>
+          <div className="settings-panel">
+            <div className="segment">
+              {(['off', 'ask', 'auto'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={effectiveAppSettings.claudeWorkflowCanvasMode === value ? 'active' : ''}
+                  onClick={() => void applyAppSettingsPatch({ claudeWorkflowCanvasMode: value })}
+                >
+                  {value === 'off'
+                    ? t('settings.claudeWorkflowCanvasOff')
+                    : value === 'ask'
+                      ? t('settings.claudeWorkflowCanvasAsk')
+                      : t('settings.claudeWorkflowCanvasAuto')}
+                </button>
+              ))}
+            </div>
+            <small className="muted" style={{ lineHeight: 1.5 }}>
+              {t('settings.claudeWorkflowCanvasHelp')}
+            </small>
+          </div>
+        </section>
+
           </>
         )}
 
@@ -1435,6 +1466,11 @@ export function SettingsView({
 
 function normalizeAppSettings(settings: AppSettings | null | undefined): AppSettings {
   if (!settings || typeof settings !== 'object') return DEFAULT_APP_SETTINGS
+  const claudeWorkflowCanvasMode = (
+    settings.claudeWorkflowCanvasMode === 'off'
+    || settings.claudeWorkflowCanvasMode === 'ask'
+    || settings.claudeWorkflowCanvasMode === 'auto'
+  ) ? settings.claudeWorkflowCanvasMode : DEFAULT_APP_SETTINGS.claudeWorkflowCanvasMode
   return {
     ...DEFAULT_APP_SETTINGS,
     ...settings,
@@ -1442,6 +1478,7 @@ function normalizeAppSettings(settings: AppSettings | null | undefined): AppSett
     availableScreens: Array.isArray(settings.availableScreens) && settings.availableScreens.length > 0
       ? settings.availableScreens
       : DEFAULT_APP_SETTINGS.availableScreens,
+    claudeWorkflowCanvasMode,
   }
 }
 

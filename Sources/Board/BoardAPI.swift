@@ -5819,6 +5819,12 @@ enum BoardAPI {
             }
             QuickOpenShortcut.current = shortcut
         }
+        if let mode = json["claudeWorkflowCanvasMode"] as? String {
+            guard let parsed = ClaudeWorkflowCanvasMode(rawValue: mode) else {
+                return errorResponse("invalid_claude_workflow_mode", "claudeWorkflowCanvasMode must be off, ask, or auto", status: 400)
+            }
+            defaults.set(parsed.rawValue, forKey: ClaudeWorkflowCanvasMode.defaultsKey)
+        }
 
         DispatchQueue.main.async {
             if didChangeIslandVisibility {
@@ -6005,7 +6011,8 @@ enum BoardAPI {
             carouselInterval: storedDouble(defaults, key: "carouselInterval", fallback: 10),
             quickOpenShortcut: QuickOpenShortcut.current.rawValue,
             quickOpenShortcutLabel: QuickOpenShortcut.current.menuDisplayName,
-            quickOpenShortcutConflict: QuickOpenShortcut.currentConflictWarning
+            quickOpenShortcutConflict: QuickOpenShortcut.currentConflictWarning,
+            claudeWorkflowCanvasMode: ClaudeWorkflowCanvasMode.current(defaults: defaults).rawValue
         )
     }
 

@@ -538,6 +538,7 @@ struct ClaudeWorkflowImporter {
         }
 
         _ = try store.record(for: planningCanvas, seedNodes: [])
+        _ = try store.setCanvasContext(planningCanvas.plannerContext, canvasId: canvasId)
         _ = try store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: nodes)
         return snapshot
     }
@@ -587,7 +588,7 @@ struct ClaudeWorkflowImporter {
     ) -> [PlanningNode] {
         let phases = Array(workflow.phases.prefix(7))
         let phaseIds = phases.indices.map { "\(canvasId)-claude-workflow-phase-\($0)" }
-        var nodes = phases.enumerated().map { index, phase in
+        return phases.enumerated().map { index, phase in
             workflowNode(
                 id: phaseIds[index],
                 canvasId: canvasId,
@@ -602,23 +603,6 @@ struct ClaudeWorkflowImporter {
                 blockedReason: nil
             )
         }
-
-        if nodes.count < 8 {
-            nodes.append(workflowNode(
-                id: "\(canvasId)-claude-workflow-report",
-                canvasId: canvasId,
-                title: "Collect report",
-                goal: "Collect the workflow result, artifacts, and follow-up decisions back into this canvas. meee2 has not executed this workflow.",
-                ownerId: ownerId,
-                workflow: workflow,
-                x: Double(nodes.count % 4) * 340,
-                y: Double(nodes.count / 4) * 220,
-                dependsOnNodeIds: phaseIds.last.map { [$0] } ?? [],
-                needsReview: true,
-                blockedReason: nil
-            ))
-        }
-        return nodes
     }
 
     private func materialize(
@@ -669,7 +653,7 @@ struct ClaudeWorkflowImporter {
         let specs: [(String, String, Bool)] = [
             ("Workflow source", "Review the saved Claude Code workflow source at \(workflow.path).", false),
             ("Review orchestration", "Manually identify phases, agents, handoffs, artifacts, and approval gates. AI parse failed: \(reason)", true),
-            ("Run in Claude Code", "Run \(workflow.commandName) in Claude Code when ready; meee2 has not executed this workflow.", false),
+            ("Run workflow node", "Dispatch \(workflow.commandName) from this meee2 canvas when ready.", false),
             ("Collect report", "Collect generated report, artifacts, and follow-up decisions back into this canvas.", true)
         ]
         return specs.enumerated().map { index, spec in
