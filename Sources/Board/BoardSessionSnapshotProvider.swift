@@ -97,6 +97,7 @@ enum BoardSessionSnapshotProvider {
         session.id == sessionId
             || session.id.hasSuffix("-\(sessionId)")
             || session.surfaceId == sessionId
+            || session.providerResumeSessionId == sessionId
     }
 
     private static func pluginId(for session: SessionData, terminalInfo: SessionTerminalInfo?) -> String {

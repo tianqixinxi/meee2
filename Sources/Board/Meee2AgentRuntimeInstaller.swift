@@ -34,11 +34,13 @@ struct Meee2AgentRuntimeInstallResult: Encodable {
 enum Meee2AgentRuntimeInstaller {
     private static let marketplaceName = "meee2-official"
     private static let pluginName = "meee2"
+    private static let workflowBridgePluginName = "meee2-workflow-bridge"
     private static let diagnoseCacheTTL: TimeInterval = 30
     private static let diagnoseLock = NSLock()
     private static var diagnoseCache: Meee2AgentRuntimeStatus?
     private static var diagnoseInFlight: DispatchGroup?
     private static var pluginSelector: String { "\(pluginName)@\(marketplaceName)" }
+    private static var workflowBridgePluginSelector: String { "\(workflowBridgePluginName)@\(marketplaceName)" }
 
     static func diagnose(forceRefresh: Bool = false) -> Meee2AgentRuntimeStatus {
         if !forceRefresh,
@@ -133,7 +135,9 @@ enum Meee2AgentRuntimeInstaller {
         let claudeCLIAvailable = claudeCliPath != nil
         let claudeAppAvailable = claudeAppPath != nil
         let claudeAvailable = claudeCLIAvailable || claudeAppAvailable
-        let claudePreferredInstalled = claudeCLIAvailable && claudePluginInstalledFor(marketplaceName)
+        let claudeMainPluginInstalled = claudeCLIAvailable && claudePluginInstalledFor(marketplaceName, plugin: pluginName)
+        let claudeWorkflowBridgeInstalled = claudeCLIAvailable && claudePluginInstalledFor(marketplaceName, plugin: workflowBridgePluginName)
+        let claudePreferredInstalled = claudeMainPluginInstalled && claudeWorkflowBridgeInstalled
         let claudeInstalled = claudePreferredInstalled
         let claudeMarketplace = claudeAvailable && claudeMarketplaceConfigured()
         let claudeConfigured = claudeCLIAvailable && claudePreferredInstalled && stagedExists
@@ -171,10 +175,10 @@ enum Meee2AgentRuntimeInstaller {
                 configured: claudeConfigured,
                 detail: claudeCLIAvailable
                     ? (claudePreferredInstalled
-                        ? (stagedExists ? "Claude Code CLI plugin is installed. Claude.app \(claudeAppAvailable ? "is installed too" : "was not found")." : "Plugin installed; staged MCP server is missing.")
-                        : (claudeMarketplace ? "Meee2 marketplace is added; plugin is not installed." : "Claude Code CLI is available; Meee2 plugin is not installed."))
+                        ? (stagedExists ? "Claude Code plugins are installed, including Workflow bridge. Claude.app \(claudeAppAvailable ? "is installed too" : "was not found")." : "Plugins installed; staged MCP server is missing.")
+                        : (claudeMarketplace ? "Meee2 marketplace is added; Claude Code plugin or Workflow bridge is not installed." : "Claude Code CLI is available; Meee2 plugins are not installed."))
                     : (claudeAppAvailable ? "Claude.app is installed, but Claude Code CLI was not found on PATH." : "Claude Code CLI and Claude.app were not found."),
-                command: "claude plugin install \(pluginName)@\(marketplaceName) --scope user"
+                command: "claude plugin install \(pluginSelector) --scope user && claude plugin install \(workflowBridgePluginSelector) --scope user"
             ),
             codex: AgentRuntimeComponentStatus(
                 available: codexAvailable,
@@ -287,18 +291,39 @@ enum Meee2AgentRuntimeInstaller {
             }
         }
 
-        if claudePluginInstalledFor(marketplaceName) {
-            messages.append("Installed Meee2 Claude Code plugin.")
-            log(&logs, "Skipping plugin install; \(pluginName)@\(marketplaceName) is already installed")
-        } else {
-            let install = runCommand("claude", ["plugin", "install", "--scope", "user", "\(pluginName)@\(marketplaceName)"], timeoutSeconds: 60, logs: &logs)
-            if install.exitCode == 0 || claudePluginInstalledFor(marketplaceName) {
-                messages.append("Installed Meee2 Claude Code plugin.")
-            } else {
-                messages.append("Failed to install Meee2 Claude Code plugin: \(install.combinedOutput)")
-            }
-        }
+        installClaudeMarketplacePlugin(
+            name: pluginName,
+            displayName: "Meee2 Claude Code plugin",
+            messages: &messages,
+            logs: &logs
+        )
+        installClaudeMarketplacePlugin(
+            name: workflowBridgePluginName,
+            displayName: "Meee2 Workflow Bridge plugin",
+            messages: &messages,
+            logs: &logs
+        )
         return (messages, logs)
+    }
+
+    private static func installClaudeMarketplacePlugin(
+        name: String,
+        displayName: String,
+        messages: inout [String],
+        logs: inout [String]
+    ) {
+        let selector = "\(name)@\(marketplaceName)"
+        if claudePluginInstalledFor(marketplaceName, plugin: name) {
+            messages.append("Installed \(displayName).")
+            log(&logs, "Skipping plugin install; \(selector) is already installed")
+            return
+        }
+        let install = runCommand("claude", ["plugin", "install", "--scope", "user", selector], timeoutSeconds: 60, logs: &logs)
+        if install.exitCode == 0 || claudePluginInstalledFor(marketplaceName, plugin: name) {
+            messages.append("Installed \(displayName).")
+        } else {
+            messages.append("Failed to install \(displayName): \(install.combinedOutput)")
+        }
     }
 
     private static func installCodexRuntime() -> (messages: [String], logs: [String]) {
@@ -476,25 +501,25 @@ enum Meee2AgentRuntimeInstaller {
     }
 
     private static func claudePluginInstalled() -> Bool {
-        claudePluginInstalledFor(marketplaceName)
+        claudePluginInstalledFor(marketplaceName, plugin: pluginName)
     }
 
-    private static func claudePluginInstalledFor(_ marketplace: String) -> Bool {
+    private static func claudePluginInstalledFor(_ marketplace: String, plugin name: String = pluginName) -> Bool {
         let result = runCommand("claude", ["plugin", "list", "--json"], timeoutSeconds: 3)
         if result.exitCode == 0,
-           claudePluginList(result.stdout, containsPlugin: pluginName, marketplace: marketplace) {
+           claudePluginList(result.stdout, containsPlugin: name, marketplace: marketplace) {
             return true
         }
-        return claudePluginCacheExists(marketplace: marketplace)
+        return claudePluginCacheExists(marketplace: marketplace, plugin: name)
     }
 
-    private static func claudePluginCacheExists(marketplace: String) -> Bool {
+    private static func claudePluginCacheExists(marketplace: String, plugin name: String = pluginName) -> Bool {
         let cacheRoot = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("plugins", isDirectory: true)
             .appendingPathComponent("cache", isDirectory: true)
             .appendingPathComponent(marketplace, isDirectory: true)
-            .appendingPathComponent(pluginName, isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
         guard let versions = try? FileManager.default.contentsOfDirectory(atPath: cacheRoot.path) else {
             return false
         }

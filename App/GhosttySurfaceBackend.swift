@@ -618,6 +618,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         let embeddedLightTheme = TerminalConfiguration { builder in
             builder.withBackground("#ffffff")
             builder.withForeground("#1a1c1f")
+            applyPalette(Self.lightAnsiPalette, to: &builder)
             builder.withCursorStyle(.block)
             builder.withCursorStyleBlink(true)
             builder.withCursorColor("#2563eb")
@@ -631,6 +632,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         let embeddedDarkTheme = TerminalConfiguration { builder in
             builder.withBackground("#101214")
             builder.withForeground("#f4f7fb")
+            applyPalette(Self.darkAnsiPalette, to: &builder)
             builder.withCursorStyle(.block)
             builder.withCursorStyleBlink(true)
             builder.withCursorColor("#60a5fa")
@@ -644,6 +646,26 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         return GhosttyTerminal.TerminalController(
             theme: TerminalTheme(light: embeddedLightTheme, dark: embeddedDarkTheme)
         )
+    }
+
+    private static let lightAnsiPalette = [
+        "#1f2937", "#dc2626", "#16a34a", "#d97706",
+        "#2563eb", "#9333ea", "#0891b2", "#e5e7eb",
+        "#6b7280", "#ef4444", "#22c55e", "#f59e0b",
+        "#3b82f6", "#a855f7", "#06b6d4", "#ffffff"
+    ]
+
+    private static let darkAnsiPalette = [
+        "#0b0f14", "#ff6b6b", "#7ddc8f", "#ffd166",
+        "#7ab7ff", "#d38cff", "#5eead4", "#d8dee9",
+        "#6b7280", "#ff8a8a", "#9af2aa", "#ffe08a",
+        "#9dccff", "#e0aaff", "#8cf7e7", "#ffffff"
+    ]
+
+    private static func applyPalette(_ palette: [String], to builder: inout TerminalConfiguration.Builder) {
+        for (index, color) in palette.enumerated() {
+            builder.withPalette(index, color: color)
+        }
     }
 
     private static func normalizedPromptForPaste(_ raw: String?) -> String? {
