@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { WorkspaceRail } from './WorkspaceRail'
 import type { CanvasInfo } from '../types'
+import type { UserProfile } from '../api'
 
 const canvases: CanvasInfo[] = [{
   id: 'monitor',
@@ -12,6 +13,19 @@ const canvases: CanvasInfo[] = [{
   isDefault: true,
   workspacePath: '',
 }]
+
+const connectedProfile: UserProfile = {
+  connected: true,
+  userId: 'user-1',
+  displayName: 'Kai User',
+  userName: 'kai',
+  userEmail: 'kai@example.com',
+  userAvatarUrl: '',
+  initials: 'KU',
+  dashboardUrl: '',
+  connectUrl: '',
+  teams: [],
+}
 
 describe('WorkspaceRail', () => {
   it('exposes Session as the default top-level workspace', () => {
@@ -33,7 +47,7 @@ describe('WorkspaceRail', () => {
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
   })
 
-  it('uses the avatar as a settings shortcut and removes the collapse control', () => {
+  it('omits the avatar shortcut when the user is not connected', () => {
     const onModeChange = vi.fn()
     render(
       <I18nProvider>
@@ -49,8 +63,24 @@ describe('WorkspaceRail', () => {
 
     expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'User' })).not.toBeInTheDocument()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: 'User' }))
+  it('uses the avatar as a settings shortcut when the user is connected', () => {
+    const onModeChange = vi.fn()
+    render(
+      <I18nProvider>
+        <WorkspaceRail
+          canvases={canvases}
+          activeCanvasId="monitor"
+          mode="planner"
+          userProfile={connectedProfile}
+          onModeChange={onModeChange}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kai User' }))
 
     expect(onModeChange).toHaveBeenCalledWith('settings')
   })

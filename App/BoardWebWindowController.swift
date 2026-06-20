@@ -23,11 +23,11 @@ final class DragRegionWebView: WKWebView {
     /// both in points (= CSS px since we don't scale).
     var clickThroughRects: [CGRect] = [
         // Sidebar toggle icon — sits to the right of macOS traffic lights
-        // (which end around x≈72) so it visually shares the title-bar row
+        // (which end around x≈64 after compact-rail positioning) so it visually shares the title-bar row
         // but does NOT trigger a window drag. The CSS positions the
-        // button at left:80, top:4, 20×20; this rect adds ~4px slack on
+        // button at left:~72, top:4, 20×20; this rect adds ~4px slack on
         // each side so the user doesn't have to hit the exact pixel edge.
-        CGRect(x: 76, y: 0, width: 28, height: 28)
+        CGRect(x: 68, y: 0, width: 32, height: 28)
     ]
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -210,6 +210,7 @@ private final class NativeTerminalHostView: NSView {
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static let frameAutosaveName = "meee2.board.window"
     private static let maxEmbeddedTerminalCacheCount = 6
+    private static let compactRailWindowButtonX: CGFloat = 8
 
     private let rootView = NSView()
     private let terminalHostView = NativeTerminalHostView()
@@ -346,6 +347,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             terminalHostView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
         ])
         window.contentView = rootView
+        positionTrafficLightsForCompactRail()
         webView.navigationDelegate = self
         webView.uiDelegate = self
         // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
@@ -1170,7 +1172,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     /// document root style 上的两个 CSS 变量。这样 webui 那边的对齐 button
     /// 不再硬编码 top:Xpx 猜测，直接用：
     ///   top: calc(var(--titlebar-btn-center-y) - 10px);  // 10 = 自身高/2
-    ///   left: calc(var(--titlebar-btn-right-edge) + 8px); // lights 右边 + 间距
+    ///   left: calc(var(--titlebar-lights-right) + 8px); // lights 右边 + 间距
     ///
     /// 触发时机：webView didFinish 一次（页面 mount 后）+ window resize / state
     /// 变化（didResize / didEnterFullScreen 等）每次。fullscreen 进出和 zoom
@@ -1178,7 +1180,32 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     /// 还是有效但实际不显示——CSS variable 会更新成 0/0，sidebar 那侧的
     /// `--titlebar-btn-center-y: 0` 不影响布局，按钮会顶到 top:0 自然 hidden
     /// 在 fullscreen UI 下也合理）。
+    private func positionTrafficLightsForCompactRail() {
+        guard let window = window,
+              let close = window.standardWindowButton(.closeButton),
+              let minimize = window.standardWindowButton(.miniaturizeButton),
+              let zoom = window.standardWindowButton(.zoomButton) else {
+            return
+        }
+
+        let rawSpacing = minimize.frame.minX - close.frame.minX
+        let spacing: CGFloat
+        if rawSpacing.isFinite && rawSpacing > 12 && rawSpacing < 32 {
+            spacing = rawSpacing
+        } else {
+            spacing = 20
+        }
+        for (index, button) in [close, minimize, zoom].enumerated() {
+            button.isHidden = false
+            var origin = button.frame.origin
+            origin.x = Self.compactRailWindowButtonX + CGFloat(index) * spacing
+            button.setFrameOrigin(origin)
+        }
+    }
+
     func injectTitlebarMetrics() {
+        positionTrafficLightsForCompactRail()
+
         guard let window = window,
               let close = window.standardWindowButton(.closeButton),
               let zoom = window.standardWindowButton(.zoomButton) else {
