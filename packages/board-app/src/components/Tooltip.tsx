@@ -25,8 +25,8 @@ interface TooltipProps {
   label: string
   /** 可选键盘快捷键，渲染成右侧小 pill（如 "⌘B" / "Esc" / "P"）。 */
   shortcut?: string
-  /** 默认 'bottom'。视口边缘自动 fallback 到 'top'。 */
-  placement?: 'top' | 'bottom'
+  /** 默认 'bottom'。视口边缘自动 fallback 到可见方向。 */
+  placement?: 'top' | 'bottom' | 'left' | 'right'
   /** Hover 多久后显示，毫秒。默认 400。 */
   delay?: number
   /** 传 false 临时禁用（比如 disabled state 下不弹）。 */
@@ -47,7 +47,7 @@ export function Tooltip({
   children,
 }: TooltipProps) {
   const [open, setOpen] = useState(false)
-  const [resolvedPlacement, setResolvedPlacement] = useState<'top' | 'bottom'>(placement)
+  const [resolvedPlacement, setResolvedPlacement] = useState<'top' | 'bottom' | 'left' | 'right'>(placement)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const timerRef = useRef<number | null>(null)
   const anchorRef = useRef<HTMLElement | null>(null)
@@ -59,14 +59,27 @@ export function Tooltip({
     const r = el.getBoundingClientRect()
     const margin = 8
     const cx = r.left + r.width / 2
+    const cy = r.top + r.height / 2
+    const vw = window.innerWidth
     const vh = window.innerHeight
     // 默认按 placement，但超出视口边缘时翻转
-    let p: 'top' | 'bottom' = placement
+    let p: 'top' | 'bottom' | 'left' | 'right' = placement
     if (placement === 'bottom' && r.bottom + 56 > vh) p = 'top'
     if (placement === 'top' && r.top - 56 < 0) p = 'bottom'
-    const top = p === 'top' ? r.top - margin : r.bottom + margin
+    if (placement === 'right' && r.right + 180 > vw) p = 'left'
+    if (placement === 'left' && r.left - 180 < 0) p = 'right'
+    const top = p === 'top'
+      ? r.top - margin
+      : p === 'bottom'
+        ? r.bottom + margin
+        : cy
+    const left = p === 'right'
+      ? r.right + margin
+      : p === 'left'
+        ? r.left - margin
+        : cx
     setResolvedPlacement(p)
-    setPos({ top, left: cx })
+    setPos({ top, left })
   }, [placement])
 
   const show = useCallback(() => {

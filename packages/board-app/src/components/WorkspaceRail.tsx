@@ -5,13 +5,13 @@ import {
   Network,
   Settings,
   Terminal,
-  User,
   UsersRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo } from 'react'
 import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
+import { Tooltip } from './Tooltip'
 
 export type WorkspaceMode = 'session' | 'planner' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
 
@@ -23,7 +23,7 @@ interface WorkspaceRailProps {
   onModeChange: (mode: WorkspaceMode) => void
 }
 
-const RAIL_WIDTH = 176
+const RAIL_WIDTH = 72
 
 export function WorkspaceRail({
   mode,
@@ -41,6 +41,7 @@ export function WorkspaceRail({
   }, [])
 
   const showTeam = Boolean(userProfile?.connected)
+  const showAvatarShortcut = Boolean(userProfile?.connected)
 
   useEffect(() => {
     if (mode === 'team' && !showTeam) {
@@ -48,9 +49,7 @@ export function WorkspaceRail({
     }
   }, [mode, showTeam, onModeChange])
 
-  const avatarLabel = userProfile?.connected
-    ? userProfile.displayName
-    : t('rail.user')
+  const avatarLabel = userProfile?.displayName || t('rail.settings')
   const avatarInitials = userProfile?.connected
     ? userProfile.initials || initialsFor(userProfile.displayName)
     : ''
@@ -61,17 +60,20 @@ export function WorkspaceRail({
 
   return (
     <nav className="workspace-rail" aria-label={t('rail.workspace')}>
-      <div className="workspace-rail__top">
-        <button
-          type="button"
-          className={`workspace-rail__avatar${avatarUrl ? ' has-image' : ''}${showFallbackUserIcon ? ' has-user-icon' : ''}`}
-          title={t('rail.settings')}
-          aria-label={avatarLabel}
-          onClick={() => onModeChange('settings')}
-        >
-          {avatarUrl ? <img src={avatarUrl} alt="" /> : showFallbackUserIcon ? <User size={20} /> : avatarInitials}
-        </button>
-      </div>
+      {showAvatarShortcut && (
+        <div className="workspace-rail__top">
+          <Tooltip label={t('rail.settings')} placement="right" delay={120}>
+            <button
+              type="button"
+              className={`workspace-rail__avatar${avatarUrl ? ' has-image' : ''}${showFallbackUserIcon ? ' has-user-icon' : ''}`}
+              aria-label={avatarLabel}
+              onClick={() => onModeChange('settings')}
+            >
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : avatarInitials}
+            </button>
+          </Tooltip>
+        </div>
+      )}
 
       <div className="workspace-rail__group">
         <RailButton
@@ -152,17 +154,18 @@ function RailButton({
   children,
 }: RailButtonProps) {
   return (
-    <button
-      type="button"
-      className={`workspace-rail__button${active ? ' is-active' : ''}`}
-      data-tone={tone}
-      title={label}
-      aria-label={label}
-      aria-current={active ? 'page' : undefined}
-      onClick={onClick}
-    >
-      {children}
-      <span className="workspace-rail__label">{label}</span>
-    </button>
+    <Tooltip label={label} placement="right" delay={120}>
+      <button
+        type="button"
+        className={`workspace-rail__button${active ? ' is-active' : ''}`}
+        data-tone={tone}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        onClick={onClick}
+      >
+        {children}
+        <span className="workspace-rail__label">{label}</span>
+      </button>
+    </Tooltip>
   )
 }
