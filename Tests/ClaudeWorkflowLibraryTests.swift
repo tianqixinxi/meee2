@@ -149,7 +149,7 @@ final class ClaudeWorkflowLibraryTests: XCTestCase {
         let graph = try PlannerBoardBridge.graphState(for: snapshot.activeCanvasId, snapshot: snapshot)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: tempRoot.appendingPathComponent("should-not-exist").path))
-        XCTAssertEqual(graph.nodes.map(\.title), ["Workflow source", "Review orchestration", "Run in Claude Code", "Collect report"])
+        XCTAssertEqual(graph.nodes.map(\.title), ["Workflow source", "Review orchestration", "Run workflow node", "Collect report"])
         XCTAssertTrue(graph.nodes.contains { $0.blockedReason?.contains("AI parse failed") == true })
     }
 
@@ -184,11 +184,11 @@ final class ClaudeWorkflowLibraryTests: XCTestCase {
         let graph = try PlannerBoardBridge.graphState(for: snapshot.activeCanvasId, snapshot: snapshot)
 
         XCTAssertEqual(graph.canvas.title, "structured-workflow")
-        XCTAssertEqual(graph.nodes.map(\.title), ["Scan structure", "Deep-dive services", "Summarize", "Collect report"])
+        XCTAssertEqual(graph.nodes.map(\.title), ["Scan structure", "Deep-dive services", "Summarize"])
         XCTAssertEqual(graph.nodes[0].schema.goal, "identify top-level modules")
         XCTAssertEqual(graph.nodes[0].executorType, .claude)
-        XCTAssertEqual(graph.nodes[3].executionMode, .human)
         XCTAssertEqual(graph.nodes[1].dependsOnNodeIds, [graph.nodes[0].id])
+        XCTAssertEqual(graph.nodes[2].dependsOnNodeIds, [graph.nodes[1].id])
     }
 
     func testUploadedWorkflowFallsBackWithoutExecutingSource() throws {
@@ -215,7 +215,7 @@ final class ClaudeWorkflowLibraryTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
         XCTAssertEqual(graph.canvas.title, "uploaded-research")
-        XCTAssertEqual(graph.nodes.map(\.title), ["Workflow source", "Review orchestration", "Run in Claude Code", "Collect report"])
+        XCTAssertEqual(graph.nodes.map(\.title), ["Workflow source", "Review orchestration", "Run workflow node", "Collect report"])
         XCTAssertTrue(graph.nodes[0].contextSources.contains { $0.reference == "uploaded:uploaded-research.js" })
     }
 

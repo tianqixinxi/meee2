@@ -2,14 +2,17 @@ import Foundation
 import Meee2PluginKit
 
 enum BoardSessionSnapshotProvider {
+    private static let syntheticE2ESessionPrefix = "e2e-session-"
+
     static func currentBoardSessions() -> [SessionDTO] {
         let snapshots = TerminalSessionBackendRegistry.shared.listSnapshots()
         SessionTerminalStore.shared.reconcileManagedSurfaceStatuses(liveSnapshots: snapshots)
         let terminalInfos = SessionTerminalStore.shared.getAll()
+        let storedSessions = visibleStoredSessions(SessionStore.shared.listAll())
         let internalSessions = snapshots
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
-        let staleInternalSessions = SessionStore.shared.listAll()
+        let staleInternalSessions = storedSessions
             .filter { !$0.status.isHistorical }
             .filter { BoardDTOBuilder.isInternalTerminalProgram($0.terminalInfo?.termProgram) }
             .filter { session in
@@ -20,7 +23,7 @@ enum BoardSessionSnapshotProvider {
             .map { session in
                 BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
             }
-        let cliCorrelationCandidates = SessionStore.shared.listAll()
+        let cliCorrelationCandidates = storedSessions
         let cliCorrelationIndex = InternalSessionIdentity.makeCliCorrelationIndex(candidates: cliCorrelationCandidates)
         let iso8601 = ISO8601DateFormatter()
         let enrichedInternalSessions = (internalSessions + staleInternalSessions).map { dto -> SessionDTO in
@@ -68,7 +71,7 @@ enum BoardSessionSnapshotProvider {
             }
             return BoardDTOBuilder.surfaceDTOAdoptingCliSession(dto, cli: cli)
         }
-        let externalStoredSessions = SessionStore.shared.listAll()
+        let externalStoredSessions = storedSessions
             .filter { !$0.status.isHistorical }
             .filter { !BoardDTOBuilder.isInternalTerminalProgram($0.terminalInfo?.termProgram) }
             .filter { session in
@@ -80,6 +83,14 @@ enum BoardSessionSnapshotProvider {
                 return BoardDTOBuilder.sessionDTO(session.toPluginSession(pluginId: pluginId))
             }
         return enrichedInternalSessions + externalStoredSessions
+    }
+
+    static func visibleStoredSessions(
+        _ sessions: [SessionData],
+        includeSyntheticE2ESessions: Bool = ProcessInfo.processInfo.environment["MEEE2_E2E"] == "1"
+    ) -> [SessionData] {
+        guard !includeSyntheticE2ESessions else { return sessions }
+        return sessions.filter { !$0.sessionId.hasPrefix(syntheticE2ESessionPrefix) }
     }
 
     private static func boardSession(_ session: SessionDTO, matches sessionId: String) -> Bool {

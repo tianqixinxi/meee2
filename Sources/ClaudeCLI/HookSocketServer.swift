@@ -348,7 +348,12 @@ public class HookSocketServer {
             // Desktop 子进程没 tty 推不进去，唯一可靠的注入路径是 hook
             // decision=block + reason，让 Claude 把 reason 当下一轮 prompt
             // 消化。CLI / SDK / 其它 session 都走原 close 路径，不响应。
-            if event.event == .stop, let sid = event.sessionId,
+            var skipNormalEventHandling = false
+            if event.event == .userPromptSubmit,
+               let response = ClaudeWorkflowInterceptionService.shared.controlResponse(for: event) {
+                writeRawResponse(response, to: clientSocket)
+                skipNormalEventHandling = response.decision == "block"
+            } else if event.event == .stop, let sid = event.sessionId,
                let response = drainResponseForDesktopStop(sessionId: sid) {
                 // NSLog("[HookSocketServer] Event Stop with desktop drain, writing decision=block then closing")
                 writeRawResponse(response, to: clientSocket)
@@ -356,6 +361,9 @@ public class HookSocketServer {
                 // NSLog("[HookSocketServer] Event does NOT expect response, closing socket")
             }
             close(clientSocket)
+            if skipNormalEventHandling {
+                return
+            }
         }
 
         eventHandler?(event)

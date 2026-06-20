@@ -34,6 +34,9 @@ public struct SettingsView: View {
     /// 自动收起时间 (秒)
     @AppStorage("autoCloseInterval") private var autoCloseInterval: Double = 8
 
+    /// Claude Code workflow commands are imported into meee2 Canvas.
+    @AppStorage("meee2.claudeWorkflowCanvasMode") private var claudeWorkflowCanvasMode: String = ClaudeWorkflowCanvasMode.ask.rawValue
+
     // MARK: - meee2 Settings
 
     /// meee2 是否已连接
@@ -216,6 +219,17 @@ public struct SettingsView: View {
                         .frame(width: 40)
                 }
                 .disabled(!showIsland)
+            }
+
+            Section("Claude Code") {
+                Picker("Claude workflows in meee2 Canvas", selection: $claudeWorkflowCanvasMode) {
+                    Text("Off").tag(ClaudeWorkflowCanvasMode.off.rawValue)
+                    Text("Ask").tag(ClaudeWorkflowCanvasMode.ask.rawValue)
+                    Text("Auto").tag(ClaudeWorkflowCanvasMode.auto.rawValue)
+                }
+                Text("Ask blocks known workflow commands and asks you to resubmit with --meee2 or --claude. Auto starts the planner run immediately.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section("Sound Notifications") {

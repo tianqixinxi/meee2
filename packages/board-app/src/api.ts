@@ -2697,6 +2697,7 @@ export interface AppSettings {
   quickOpenShortcut: string
   quickOpenShortcutLabel?: string
   quickOpenShortcutConflict?: string | null
+  claudeWorkflowCanvasMode: 'off' | 'ask' | 'auto'
 }
 
 export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
@@ -2735,6 +2736,7 @@ export function fetchAppSettings(): Promise<AppSettings> {
       quickOpenShortcut: 'cmd+option+KeyP',
       quickOpenShortcutLabel: '⌘⌥P',
       quickOpenShortcutConflict: null,
+      claudeWorkflowCanvasMode: 'ask',
     })
   }
   return jsonRequest<AppSettings>('/api/app-settings')

@@ -4250,6 +4250,10 @@ final class PlannerStore {
                 incoming.edges = existing.canvas.edges
                 incoming.monitorSpec = existing.canvas.monitorSpec
                 incoming.sceneSpec = incoming.sceneSpec ?? existing.canvas.sceneSpec
+                if incoming.plannerContext == "canvas:\(incoming.id)",
+                   !existing.canvas.plannerContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    incoming.plannerContext = existing.canvas.plannerContext
+                }
                 if existing.canvas == incoming {
                     return existing
                 }
