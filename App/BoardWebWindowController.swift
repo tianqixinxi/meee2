@@ -727,26 +727,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     }
 
     private func makeEmbeddedTerminal(surfaceId: String, sessionId: String?) -> NativeTerminalPaneControlling? {
-        if let ghostty = GhosttySurfaceBackend.shared.paneController(id: surfaceId)
-            ?? sessionId.flatMap({ GhosttySurfaceBackend.shared.paneController(id: $0) }) {
-            return ghostty
-        }
-        return nil
+        NativeTerminalSurfaceCoordinator.controller(surfaceId: surfaceId, sessionId: sessionId)
     }
 
     private func hostEmbeddedTerminalView(_ controller: NativeTerminalPaneControlling, frame: NSRect, hidden: Bool) {
         let initialFrame = frame.width >= 8 && frame.height >= 8 ? frame : defaultHiddenTerminalFrame()
-        let view = controller.paneView
-        if view.superview == nil {
-            view.frame = initialFrame
-            view.autoresizingMask = []
-            terminalHostView.addSubview(view)
-        } else if view.superview !== terminalHostView {
-            view.removeFromSuperview()
-            view.frame = initialFrame
-            terminalHostView.addSubview(view)
-        }
-        controller.layout(in: hidden && (frame.width < 8 || frame.height < 8) ? initialFrame : frame, hidden: hidden)
+        NativeTerminalSurfaceCoordinator.host(
+            controller,
+            in: terminalHostView,
+            frame: hidden && (frame.width < 8 || frame.height < 8) ? initialFrame : frame,
+            hidden: hidden,
+            autoresizingMask: []
+        )
     }
 
     private func defaultHiddenTerminalFrame() -> NSRect {
@@ -775,7 +767,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     private func detachAllEmbeddedTerminals() {
         for controller in embeddedTerminals.values {
-            controller.detach()
+            NativeTerminalSurfaceCoordinator.releaseFromHost(controller)
         }
         embeddedTerminals.removeAll()
         embeddedTerminalLRU.removeAll()
@@ -796,7 +788,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                     cacheHit: false,
                     reason: "removed"
                 )
-                removed.detach()
+                NativeTerminalSurfaceCoordinator.releaseFromHost(removed)
             }
             embeddedTerminalLRU.removeAll { $0 == key }
             if activeEmbeddedTerminalKey == key {
@@ -826,7 +818,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                     cacheHit: false,
                     reason: "evicted"
                 )
-                evicted.detach()
+                NativeTerminalSurfaceCoordinator.releaseFromHost(evicted)
             }
         }
     }

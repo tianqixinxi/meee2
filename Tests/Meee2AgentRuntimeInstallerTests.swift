@@ -43,4 +43,27 @@ final class Meee2AgentRuntimeInstallerTests: XCTestCase {
             false
         )
     }
+
+    func testCodexSetupCommandIncludesMarketplacePathBeforePluginAdd() {
+        let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
+            marketplacePath: "/Applications/meee2.app/Contents/Resources/meee2-agent-plugin-marketplace"
+        )
+
+        XCTAssertEqual(
+            command,
+            "codex plugin marketplace add /Applications/meee2.app/Contents/Resources/meee2-agent-plugin-marketplace && codex plugin add meee2@meee2-official"
+        )
+    }
+
+    func testCodexSetupCommandQuotesMarketplacePathWithSpaces() {
+        let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
+            marketplacePath: "/Users/kai/Application Support/meee2-agent-plugin-marketplace",
+            codexCommand: "/Applications/Codex.app/Contents/Resources/codex"
+        )
+
+        XCTAssertEqual(
+            command,
+            "/Applications/Codex.app/Contents/Resources/codex plugin marketplace add '/Users/kai/Application Support/meee2-agent-plugin-marketplace' && /Applications/Codex.app/Contents/Resources/codex plugin add meee2@meee2-official"
+        )
+    }
 }

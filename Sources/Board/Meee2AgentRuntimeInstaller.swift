@@ -51,6 +51,13 @@ enum Meee2AgentRuntimeInstaller {
     private static var pluginSelector: String { "\(pluginName)@\(marketplaceName)" }
     private static var workflowBridgePluginSelector: String { "\(workflowBridgePluginName)@\(marketplaceName)" }
 
+    static func codexSetupCommand(marketplacePath: String, codexCommand: String = "codex") -> String {
+        [
+            shellCommand(codexCommand, ["plugin", "marketplace", "add", marketplacePath]),
+            shellCommand(codexCommand, ["plugin", "add", pluginSelector])
+        ].joined(separator: " && ")
+    }
+
     static func diagnose(forceRefresh: Bool = false) -> Meee2AgentRuntimeStatus {
         if !forceRefresh,
            let cached = cachedDiagnoseStatus() {
@@ -217,7 +224,10 @@ enum Meee2AgentRuntimeInstaller {
                             ? "Codex.app binary was found outside PATH; Meee2 MCP or local skill is missing."
                             : (codexMarketplace ? "Meee2 Codex marketplace is added; plugin, MCP, or local skill is missing." : "Codex was found; Meee2 marketplace, MCP, or local skill is missing.")))
                     : (codexAppAvailable ? "Codex.app is installed, but no Codex CLI binary was found." : "Codex CLI and Codex.app were not found."),
-                command: "codex plugin add \(pluginSelector)"
+                command: codexSetupCommand(
+                    marketplacePath: marketplacePath.path,
+                    codexCommand: codexPath ?? "codex"
+                )
             ),
             needsAttention: needsAttention,
             checkedAt: Date()

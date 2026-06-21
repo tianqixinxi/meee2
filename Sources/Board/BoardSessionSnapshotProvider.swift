@@ -10,6 +10,7 @@ enum BoardSessionSnapshotProvider {
         let terminalInfos = SessionTerminalStore.shared.getAll()
         let storedSessions = visibleStoredSessions(SessionStore.shared.listAll())
         let internalSessions = snapshots
+            .filter { $0.backend == .ghosttySurface }
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
         let staleInternalSessions = storedSessions
