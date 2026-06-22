@@ -113,8 +113,12 @@ A default monitoring surface that shows sessions still relevant to current work.
 _Avoid_: History list as monitor, delete-to-hide
 
 **Session Terminal Overlay**:
-A Canvas-scoped modal that opens one meee2-managed local session terminal in place. A Session Terminal Overlay is not a global session list, not a separate workspace mode, and not the home for session search or bulk session controls.
-_Avoid_: Sessions page, terminal workspace, session list modal
+A Canvas-scoped modal that opens one meee2-managed local session terminal in place while preserving the current Canvas Workspace context. A Session Terminal Overlay is not the global surface for browsing, comparing, or managing many sessions.
+_Avoid_: Sessions Workspace, global session list, bulk session controls
+
+**Sessions Workspace**:
+The global Web Board workspace for browsing, searching, switching, and operating across local sessions. Sessions Workspace may host meee2-managed native terminal surfaces, but it does not replace Canvas Workspace as the organizing model for workflow nodes, subcanvases, or Artifacts.
+_Avoid_: Canvas Workspace, temporary diagnostic page, provider session identity
 
 **Session Project**:
 A user-selected local folder used as the working directory and grouping context for starting or reopening local AI sessions. A Session Project is not a Canvas Workspace; it names where the agent runs, not where meee2 organizes visual workflow state.

@@ -1017,6 +1017,7 @@ describe('SessionLauncherView', () => {
       }))
     })
     expect(api.syncNativeSessionsWorkspace.mock.calls.some(([payload]) => payload.phase === 'hide')).toBe(false)
+    expect(api.syncNativeSessionsWorkspace.mock.calls.some(([payload]) => payload.phase === 'detach')).toBe(false)
   })
 
   it('forces native terminal show when an artifact modal restore event fires', async () => {

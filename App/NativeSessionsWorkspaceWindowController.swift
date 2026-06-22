@@ -67,6 +67,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private var pendingReloadWorkItem: DispatchWorkItem?
     private var terminalOnlyMode = false
     private var terminalTheme = "dark"
+    private var terminalBackgroundColor = NativeTerminalTheme.backgroundColor(theme: "dark")
 
     init() {
         registry = TerminalPaneRegistry(hostView: terminalHostView)
@@ -102,6 +103,8 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     func applyTerminalTheme(_ theme: String) {
         let normalized = theme == "light" ? "light" : "dark"
         terminalTheme = normalized
+        terminalBackgroundColor = NativeTerminalTheme.backgroundColor(theme: normalized)
+        applyTerminalBackground()
         registry.applyTheme(normalized)
     }
 
@@ -231,12 +234,12 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         let terminalShell = NSView()
         terminalShell.translatesAutoresizingMaskIntoConstraints = false
         terminalShell.wantsLayer = true
-        terminalShell.layer?.backgroundColor = NSColor.black.cgColor
+        terminalShell.layer?.backgroundColor = terminalBackgroundColor.cgColor
         split.addArrangedSubview(terminalShell)
 
         terminalHostView.translatesAutoresizingMaskIntoConstraints = false
         terminalHostView.wantsLayer = true
-        terminalHostView.layer?.backgroundColor = NSColor.black.cgColor
+        terminalHostView.layer?.backgroundColor = terminalBackgroundColor.cgColor
         terminalHostView.onLayout = { [weak self] in
             self?.registry.layoutActive()
         }
@@ -280,6 +283,13 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
             emptyTerminalLabel.centerXAnchor.constraint(equalTo: terminalShell.centerXAnchor),
             emptyTerminalLabel.centerYAnchor.constraint(equalTo: terminalShell.centerYAnchor)
         ])
+        applyTerminalBackground()
+    }
+
+    private func applyTerminalBackground() {
+        let background = terminalBackgroundColor.cgColor
+        terminalHostView.layer?.backgroundColor = background
+        terminalHostView.superview?.layer?.backgroundColor = background
     }
 
     private func bindState() {
@@ -500,6 +510,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
 
     private func internalSessions() -> [TerminalSessionSnapshot] {
         TerminalSessionBackendRegistry.shared.listSnapshots()
+            .filter { $0.backend == .ghosttySurface }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -695,8 +706,7 @@ private final class TerminalPaneRegistry {
             let created: NativeTerminalPaneControlling?
             switch surface.backend {
             case .ghosttySurface:
-                created = GhosttySurfaceBackend.shared.paneController(id: surface.surfaceId)
-                    ?? GhosttySurfaceBackend.shared.paneController(id: surface.sessionId)
+                created = NativeTerminalSurfaceCoordinator.controller(for: surface)
             case .external:
                 created = nil
             }
@@ -795,15 +805,13 @@ private final class TerminalPaneRegistry {
 
     private func attach(_ controller: NativeTerminalPaneControlling) {
         guard let hostView else { return }
-        if controller.paneView.superview !== hostView {
-            controller.paneView.removeFromSuperview()
-            controller.paneView.autoresizingMask = [.width, .height]
-            hostView.addSubview(controller.paneView)
-        } else if hostView.subviews.last !== controller.paneView {
-            controller.paneView.removeFromSuperview()
-            hostView.addSubview(controller.paneView)
-        }
-        controller.layout(in: hostView.bounds, hidden: false)
+        NativeTerminalSurfaceCoordinator.host(
+            controller,
+            in: hostView,
+            frame: hostView.bounds,
+            hidden: false,
+            autoresizingMask: [.width, .height]
+        )
     }
 
     private func retire(controller: NativeTerminalPaneControlling?, key: String?) {
@@ -839,14 +847,14 @@ private final class TerminalPaneRegistry {
             guard let evictedKey = lru.first(where: { $0 != activeKey }) else { break }
             lru.removeAll { $0 == evictedKey }
             if let evicted = controllers.removeValue(forKey: evictedKey) {
-                evicted.detach()
+                NativeTerminalSurfaceCoordinator.releaseFromHost(evicted)
             }
         }
     }
 
     private func remove(surfaceId: String) {
         if let removed = controllers.removeValue(forKey: surfaceId) {
-            removed.detach()
+            NativeTerminalSurfaceCoordinator.releaseFromHost(removed)
         }
         lru.removeAll { $0 == surfaceId }
         if activeKey == surfaceId {
@@ -902,6 +910,7 @@ protocol NativeTerminalPaneControlling: AnyObject {
     func focus()
     func stabilizeLayout()
     func hide()
+    func releaseFromHost()
     func detach()
     func matches(surfaceId: String, sessionId: String?) -> Bool
     func scrollWheel(with event: NSEvent)
@@ -910,6 +919,11 @@ protocol NativeTerminalPaneControlling: AnyObject {
 
 extension NativeTerminalPaneControlling {
     func stabilizeLayout() {}
+
+    func releaseFromHost() {
+        hide()
+        paneView.removeFromSuperview()
+    }
 
     func matches(surfaceId rawSurfaceId: String, sessionId rawSessionId: String?) -> Bool {
         if !rawSurfaceId.isEmpty, rawSurfaceId == terminalSurfaceId { return true }

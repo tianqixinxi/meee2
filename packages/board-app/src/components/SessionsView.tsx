@@ -47,6 +47,10 @@ type SessionKindTab = 'internal' | 'external'
 type SessionControlFilter = 'active' | 'hidden' | 'archived'
 type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
+const SESSION_TERMINAL_RELEASE_DELAY_MS = 120
+let activeSessionsNativeSurface: { surfaceId: string; generation: number } | null = null
+let activeSessionsNativeSurfaceGeneration = 0
+
 export function SessionsView({
   state,
   canvases = [],
@@ -88,7 +92,7 @@ export function SessionsView({
   }), [sessions])
   const visibleSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    return sessions
+    return uniqueSessionsByDisplayIdentity(sessions
       .filter(isInternalSession)
       .filter((session) => sessionControlState(session) === controlFilter)
       .filter((session) => sessionMatchesQuery(session, normalized))
@@ -96,7 +100,7 @@ export function SessionsView({
         if (filter === 'attention') return sessionNeedsAttention(session) || unreadSids.has(session.id)
         if (filter === 'unread') return unreadSids.has(session.id)
         return true
-      })
+      }))
       .sort((a, b) => compareSessions(a, b, unreadSids))
   }, [controlFilter, filter, query, sessions, unreadSids])
   const selectedSession = useMemo(() => {
@@ -109,12 +113,8 @@ export function SessionsView({
     ? selectedSessionId.trim()
     : null
   const internalSessions = useMemo(() => {
-    const list = visibleSessions.filter(isInternalSession)
-    if (selectedSession && isInternalSession(selectedSession) && !list.some((session) => session.id === selectedSession.id)) {
-      return [selectedSession, ...list]
-    }
-    return list
-  }, [selectedSession, visibleSessions])
+    return visibleSessions.filter(isInternalSession)
+  }, [visibleSessions])
   const selectedSessionOnActiveTab = useMemo(() => {
     if (!selectedSession) return null
     return isInternalSession(selectedSession) ? selectedSession : null
@@ -157,7 +157,6 @@ export function SessionsView({
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
-    if (isNativeWorkspaceSession(session)) return false
     if (reason === 'react.idleTabPrewarm') return false
     const criticalInteraction = reason.startsWith('react.rowSelect') || reason.startsWith('react.rowOpen')
     if (!criticalInteraction && prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) return true
@@ -224,7 +223,6 @@ export function SessionsView({
     const traceId = `switch-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     switchStartedAtRef.current[session.id] = startedAt
     switchTraceIdRef.current[session.id] = traceId
-    prewarmInternalSession(session, `${phase}.prewarm`)
     console.debug('[TerminalSwitchPerf]', {
       traceId,
       phase,
@@ -232,7 +230,7 @@ export function SessionsView({
       surfaceId: session.surfaceId,
     })
     onSelectedSessionChange?.(session.id)
-  }, [onSelectedSessionChange, prewarmInternalSession])
+  }, [onSelectedSessionChange])
 
   const prewarmSessionRow = useCallback((session: Session) => {
     if (isInternalSession(session)) prewarmInternalSession(session, 'react.rowHoverPrewarm')
@@ -687,7 +685,6 @@ function SessionDetail({
   }
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
-  const nativeWorkspaceSession = internal && isNativeWorkspaceSession(session)
   const desktopSession = session.clientKind === 'desktop' && !internal
   const controlState = sessionControlState(session)
   const hasPermissionAction = Boolean(session.pendingPermissionTool || session.pendingPermissionMessage)
@@ -905,16 +902,7 @@ function SessionDetail({
         </div>
       )}
       <section className="sessions-terminal-stage">
-        {nativeWorkspaceSession && liveInternal ? (
-          <div className="sessions-external">
-            <TerminalIcon size={18} aria-hidden />
-            <span>{t('sessions.nativeWorkspaceSummary')}</span>
-            <button type="button" onClick={onOpen} disabled={opening}>
-              <ExternalLink size={13} aria-hidden />
-              {opening ? t('common.opening') : t('sessions.openSession')}
-            </button>
-          </div>
-        ) : internal && session.surfaceId && liveInternal ? (
+        {internal && session.surfaceId && liveInternal ? (
           <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
         ) : internal ? (
           <div className="sessions-external">
@@ -1398,6 +1386,12 @@ function NativeTerminalPanel({
       webPhase: type,
       rect: nativeRect,
     })
+    if (ok && type === 'attach') {
+      activeSessionsNativeSurface = {
+        surfaceId: session.surfaceId,
+        generation: ++activeSessionsNativeSurfaceGeneration,
+      }
+    }
     if (ok) lastSentRectRef.current = nativeRect
     setOpenError(!ok)
     return ok
@@ -1456,7 +1450,18 @@ function NativeTerminalPanel({
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleLayout)
       window.removeEventListener('meee2:layout-native-terminal', scheduleLayout)
-      openNativeTerminalSurface({ type: 'hide', surfaceId, sessionId, theme: resolvedTheme })
+      const releasedGeneration = activeSessionsNativeSurface?.surfaceId === surfaceId
+        ? activeSessionsNativeSurface.generation
+        : null
+      window.setTimeout(() => {
+        if (
+          activeSessionsNativeSurface?.surfaceId === surfaceId
+          && activeSessionsNativeSurface.generation === releasedGeneration
+        ) {
+          activeSessionsNativeSurface = null
+          openNativeTerminalSurface({ type: 'hide', surfaceId, sessionId, theme: resolvedTheme })
+        }
+      }, SESSION_TERMINAL_RELEASE_DELAY_MS)
     }
   }, [resolvedTheme, scheduleLayout, scheduleStabilizedLayouts, session.id, session.surfaceId, syncNative])
 
@@ -1522,10 +1527,6 @@ function sameNativeRect(a: NativeTerminalRect | null, b: NativeTerminalRect): bo
 
 function isInternalSession(session: Session): boolean {
   return session.terminalKind === 'internal' || Boolean(session.surfaceId)
-}
-
-function isNativeWorkspaceSession(session: Session): boolean {
-  return session.openTarget === 'native-workspace' || session.nativeWorkspaceAvailable === true
 }
 
 function isLiveInternalSession(session: Session): boolean {
@@ -1612,6 +1613,24 @@ function uniqueSessionsById(sessions: Session[]): Session[] {
   for (const session of sessions) {
     if (seen.has(session.id)) continue
     seen.add(session.id)
+    result.push(session)
+  }
+  return result
+}
+
+function uniqueSessionsByDisplayIdentity(sessions: Session[]): Session[] {
+  const seen = new Set<string>()
+  const result: Session[] = []
+  for (const session of sessions) {
+    const aliases = [
+      session.id,
+      session.surfaceId,
+      session.providerResumeSessionId,
+    ]
+      .map((value) => value?.trim())
+      .filter((value): value is string => Boolean(value))
+    if (aliases.some((alias) => seen.has(alias))) continue
+    aliases.forEach((alias) => seen.add(alias))
     result.push(session)
   }
   return result

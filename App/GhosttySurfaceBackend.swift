@@ -363,7 +363,9 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
 
     func applyTheme(_ theme: String) {
         let scheme: TerminalColorScheme = theme == "light" ? .light : .dark
+        terminalController.setTheme(NativeTerminalTheme.terminalTheme())
         terminalController.setColorScheme(scheme)
+        terminalView.layer?.backgroundColor = NativeTerminalTheme.backgroundColor(theme: theme).cgColor
         terminalView.needsDisplay = true
     }
 
@@ -382,6 +384,12 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         guard !detached else { return }
         terminalView.setSurfaceVisible(false)
         terminalView.isHidden = true
+    }
+
+    func releaseFromHost() {
+        guard !detached else { return }
+        hide()
+        terminalView.removeFromSuperview()
     }
 
     func detach() {
@@ -615,57 +623,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     }
 
     private static func makeTerminalController() -> GhosttyTerminal.TerminalController {
-        let embeddedLightTheme = TerminalConfiguration { builder in
-            builder.withBackground("#ffffff")
-            builder.withForeground("#1a1c1f")
-            applyPalette(Self.lightAnsiPalette, to: &builder)
-            builder.withCursorStyle(.block)
-            builder.withCursorStyleBlink(true)
-            builder.withCursorColor("#2563eb")
-            builder.withSelectionBackground("#cfe3ff")
-            builder.withSelectionForeground("#111827")
-            builder.withFontSize(14)
-            builder.withFontThicken(true)
-            builder.withWindowPaddingX(10)
-            builder.withWindowPaddingY(8)
-        }
-        let embeddedDarkTheme = TerminalConfiguration { builder in
-            builder.withBackground("#101214")
-            builder.withForeground("#f4f7fb")
-            applyPalette(Self.darkAnsiPalette, to: &builder)
-            builder.withCursorStyle(.block)
-            builder.withCursorStyleBlink(true)
-            builder.withCursorColor("#60a5fa")
-            builder.withSelectionBackground("#334155")
-            builder.withSelectionForeground("#ffffff")
-            builder.withFontSize(14)
-            builder.withFontThicken(true)
-            builder.withWindowPaddingX(10)
-            builder.withWindowPaddingY(8)
-        }
-        return GhosttyTerminal.TerminalController(
-            theme: TerminalTheme(light: embeddedLightTheme, dark: embeddedDarkTheme)
-        )
-    }
-
-    private static let lightAnsiPalette = [
-        "#1f2937", "#dc2626", "#16a34a", "#d97706",
-        "#2563eb", "#9333ea", "#0891b2", "#e5e7eb",
-        "#6b7280", "#ef4444", "#22c55e", "#f59e0b",
-        "#3b82f6", "#a855f7", "#06b6d4", "#ffffff"
-    ]
-
-    private static let darkAnsiPalette = [
-        "#0b0f14", "#ff6b6b", "#7ddc8f", "#ffd166",
-        "#7ab7ff", "#d38cff", "#5eead4", "#d8dee9",
-        "#6b7280", "#ff8a8a", "#9af2aa", "#ffe08a",
-        "#9dccff", "#e0aaff", "#8cf7e7", "#ffffff"
-    ]
-
-    private static func applyPalette(_ palette: [String], to builder: inout TerminalConfiguration.Builder) {
-        for (index, color) in palette.enumerated() {
-            builder.withPalette(index, color: color)
-        }
+        GhosttyTerminal.TerminalController(theme: NativeTerminalTheme.terminalTheme())
     }
 
     private static func normalizedPromptForPaste(_ raw: String?) -> String? {
@@ -694,7 +652,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         // Keep the surface id in the shell environment for provider hooks, but
         // do not prepend meee2 internals to the visible Codex/Claude command.
         // The leading space avoids shell history in common HISTCONTROL setups.
-        " export CMUX_SURFACE_ID=\(shellQuote(surfaceId)); printf '\\033[2J\\033[H'\n"
+        " export CMUX_SURFACE_ID=\(shellQuote(surfaceId)); export TERM=\"${TERM:-xterm-256color}\" COLORTERM=\"${COLORTERM:-truecolor}\"; if [ -z \"${NO_COLOR:-}\" ]; then export CLICOLOR=1 FORCE_COLOR=\"${FORCE_COLOR:-1}\"; fi; printf '\\033[2J\\033[H'\n"
     }
 
     private static func configureGhosttyResourcesIfNeeded() {
