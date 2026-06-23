@@ -1971,9 +1971,13 @@ enum BoardAPI {
         guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
             return errorResponse("not_found", "canvas not found", status: 404)
         }
-        guard boardCanvas.scope == .team else {
-            return errorResponse("conflict", "publish this canvas to Team before assigning nodes", status: 409)
-        }
+        // NOTE: do NOT gate on `boardCanvas.scope == .team` here. This endpoint
+        // IS the publish/unpublish action — requiring the canvas to already be
+        // team-scoped made it impossible to ever flip a personal canvas to
+        // public (deadlock; the prior 409 "...before assigning nodes" message
+        // was mis-copied from a node-assignment precondition). Ownership is
+        // enforced below by `PlannerBoardBridge.setCanvasVisibility` (owner-only),
+        // and the not-default / teamId guards remain.
         guard !boardCanvas.isDefault else {
             return errorResponse("forbidden", "default canvas cannot be published", status: 403)
         }
