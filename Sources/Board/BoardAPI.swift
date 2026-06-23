@@ -1981,6 +1981,18 @@ enum BoardAPI {
         guard !boardCanvas.isDefault else {
             return errorResponse("forbidden", "default canvas cannot be published", status: 403)
         }
+        // Owner-only — validate the STORED owner here. `planningCanvas(from:)`
+        // re-derives ownerId from the actor for PERSONAL canvases (ownerId =
+        // current actor when actor == currentActorId), so the downstream access
+        // check in `PlannerBoardBridge.setCanvasVisibility` cannot see a foreign
+        // stored owner. Without this, a user could publish another account's
+        // personal canvas — e.g. one created under a pre-login local identity —
+        // into their own team. (Codex P2 on #180.)
+        let storedOwner = (boardCanvas.ownerUserId ?? boardCanvas.createdBy)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let storedOwner, !storedOwner.isEmpty, storedOwner != actorUserId {
+            return errorResponse("forbidden", "only the canvas owner can change its visibility", status: 403)
+        }
         if nextScope == .team && settings.teamId.isEmpty {
             return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
         }
