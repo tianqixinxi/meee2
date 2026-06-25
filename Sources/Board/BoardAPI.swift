@@ -1971,11 +1971,27 @@ enum BoardAPI {
         guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
             return errorResponse("not_found", "canvas not found", status: 404)
         }
-        guard boardCanvas.scope == .team else {
-            return errorResponse("conflict", "publish this canvas to Team before assigning nodes", status: 409)
-        }
+        // NOTE: do NOT gate on `boardCanvas.scope == .team` here. This endpoint
+        // IS the publish/unpublish action — requiring the canvas to already be
+        // team-scoped made it impossible to ever flip a personal canvas to
+        // public (deadlock; the prior 409 "...before assigning nodes" message
+        // was mis-copied from a node-assignment precondition). Ownership is
+        // enforced below by `PlannerBoardBridge.setCanvasVisibility` (owner-only),
+        // and the not-default / teamId guards remain.
         guard !boardCanvas.isDefault else {
             return errorResponse("forbidden", "default canvas cannot be published", status: 403)
+        }
+        // Owner-only — validate the STORED owner here. `planningCanvas(from:)`
+        // re-derives ownerId from the actor for PERSONAL canvases (ownerId =
+        // current actor when actor == currentActorId), so the downstream access
+        // check in `PlannerBoardBridge.setCanvasVisibility` cannot see a foreign
+        // stored owner. Without this, a user could publish another account's
+        // personal canvas — e.g. one created under a pre-login local identity —
+        // into their own team. (Codex P2 on #180.)
+        let storedOwner = (boardCanvas.ownerUserId ?? boardCanvas.createdBy)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let storedOwner, !storedOwner.isEmpty, storedOwner != actorUserId {
+            return errorResponse("forbidden", "only the canvas owner can change its visibility", status: 403)
         }
         if nextScope == .team && settings.teamId.isEmpty {
             return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
