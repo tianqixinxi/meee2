@@ -8538,7 +8538,11 @@ html.board-empty-omni .canvas-toolbar__panel {
   position: fixed;
   left: 16px;
   bottom: 16px;
-  z-index: 9000;
+  /* Sit below the modal/dialog stack (.modal-backdrop 1000, dialogs --z-dialog
+     10000) so an available-update banner never floats over an open modal or
+     intercepts lower-left clicks. A modal backdrop covers it while open; it
+     re-appears once the modal closes. (Codex P2 on #182.) */
+  z-index: var(--z-notice-overlay);
   display: flex;
   flex-direction: column;
   gap: 8px;
