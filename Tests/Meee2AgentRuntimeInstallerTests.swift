@@ -44,26 +44,28 @@ final class Meee2AgentRuntimeInstallerTests: XCTestCase {
         )
     }
 
-    func testCodexSetupCommandIncludesMarketplacePathBeforePluginAdd() {
+    func testCodexSetupCommandUsesOfficialGitMarketplaceBeforePluginAdd() {
         let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
-            marketplacePath: "/Applications/meee2.app/Contents/Resources/meee2-agent-plugin-marketplace"
+            marketplaceSource: "tianqixinxi/meee2",
+            marketplaceRef: "codex-plugin-marketplace"
         )
 
         XCTAssertEqual(
             command,
-            "codex plugin marketplace add /Applications/meee2.app/Contents/Resources/meee2-agent-plugin-marketplace && codex plugin add meee2@meee2-official"
+            "codex plugin marketplace add tianqixinxi/meee2 --ref codex-plugin-marketplace && codex plugin add meee2@meee2-official"
         )
     }
 
-    func testCodexSetupCommandQuotesMarketplacePathWithSpaces() {
+    func testCodexSetupCommandQuotesMarketplaceSourceWithSpaces() {
         let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
-            marketplacePath: "/Users/kai/Application Support/meee2-agent-plugin-marketplace",
+            marketplaceSource: "https://github.com/acme/meee2 marketplace.git",
+            marketplaceRef: "release channel",
             codexCommand: "/Applications/Codex.app/Contents/Resources/codex"
         )
 
         XCTAssertEqual(
             command,
-            "/Applications/Codex.app/Contents/Resources/codex plugin marketplace add '/Users/kai/Application Support/meee2-agent-plugin-marketplace' && /Applications/Codex.app/Contents/Resources/codex plugin add meee2@meee2-official"
+            "/Applications/Codex.app/Contents/Resources/codex plugin marketplace add 'https://github.com/acme/meee2 marketplace.git' --ref 'release channel' && /Applications/Codex.app/Contents/Resources/codex plugin add meee2@meee2-official"
         )
     }
 }

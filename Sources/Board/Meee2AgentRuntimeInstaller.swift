@@ -14,6 +14,8 @@ struct AgentRuntimeComponentStatus: Encodable {
 
 struct Meee2AgentRuntimeStatus: Encodable {
     var marketplacePath: String
+    var marketplaceSource: String
+    var marketplaceRef: String?
     var pluginPath: String
     var mcpServerPath: String
     var stagedMCPServerPath: String?
@@ -44,6 +46,8 @@ enum Meee2AgentRuntimeInstaller {
     private static let marketplaceName = "meee2-official"
     private static let pluginName = "meee2"
     private static let workflowBridgePluginName = "meee2-workflow-bridge"
+    private static let defaultCodexMarketplaceSource = "tianqixinxi/meee2"
+    private static let defaultCodexMarketplaceRef = "codex-plugin-marketplace"
     private static let diagnoseCacheTTL: TimeInterval = 30
     private static let diagnoseLock = NSLock()
     private static var diagnoseCache: Meee2AgentRuntimeStatus?
@@ -51,9 +55,13 @@ enum Meee2AgentRuntimeInstaller {
     private static var pluginSelector: String { "\(pluginName)@\(marketplaceName)" }
     private static var workflowBridgePluginSelector: String { "\(workflowBridgePluginName)@\(marketplaceName)" }
 
-    static func codexSetupCommand(marketplacePath: String, codexCommand: String = "codex") -> String {
+    static func codexSetupCommand(
+        marketplaceSource: String = codexMarketplaceSource(),
+        marketplaceRef: String? = codexMarketplaceRef(),
+        codexCommand: String = "codex"
+    ) -> String {
         [
-            shellCommand(codexCommand, ["plugin", "marketplace", "add", marketplacePath]),
+            shellCommand(codexCommand, codexMarketplaceAddArgs(source: marketplaceSource, ref: marketplaceRef)),
             shellCommand(codexCommand, ["plugin", "add", pluginSelector])
         ].joined(separator: " && ")
     }
@@ -187,6 +195,8 @@ enum Meee2AgentRuntimeInstaller {
 
         return Meee2AgentRuntimeStatus(
             marketplacePath: marketplacePath.path,
+            marketplaceSource: codexMarketplaceSource(),
+            marketplaceRef: codexMarketplaceRef(),
             pluginPath: pluginPath.path,
             mcpServerPath: mcpServerPath,
             stagedMCPServerPath: stagedExists ? stagedPath : nil,
@@ -225,7 +235,6 @@ enum Meee2AgentRuntimeInstaller {
                             : (codexMarketplace ? "Meee2 Codex marketplace is added; plugin, MCP, or local skill is missing." : "Codex was found; Meee2 marketplace, MCP, or local skill is missing.")))
                     : (codexAppAvailable ? "Codex.app is installed, but no Codex CLI binary was found." : "Codex CLI and Codex.app were not found."),
                 command: codexSetupCommand(
-                    marketplacePath: marketplacePath.path,
                     codexCommand: codexPath ?? "codex"
                 )
             ),
@@ -416,11 +425,23 @@ enum Meee2AgentRuntimeInstaller {
             messages.append("Meee2 Codex marketplace is already configured.")
             log(&logs, "Skipping Codex marketplace add; \(marketplaceName) is already configured")
         } else {
-            let add = runCommand(codexCommand, ["plugin", "marketplace", "add", marketplacePath], timeoutSeconds: 60, logs: &logs)
+            let add = runCommand(
+                codexCommand,
+                codexMarketplaceAddArgs(source: codexMarketplaceSource(), ref: codexMarketplaceRef()),
+                timeoutSeconds: 60,
+                logs: &logs
+            )
             if add.exitCode == 0 || codexMarketplaceConfigured() {
                 messages.append("Added Meee2 Codex marketplace.")
             } else {
-                messages.append("Failed to add Codex marketplace: \(add.combinedOutput)")
+                messages.append("Official Codex marketplace was unavailable; trying bundled fallback.")
+                log(&logs, "Official Codex marketplace add failed: \(add.combinedOutput)")
+                let fallbackAdd = runCommand(codexCommand, ["plugin", "marketplace", "add", marketplacePath], timeoutSeconds: 60, logs: &logs)
+                if fallbackAdd.exitCode == 0 || codexMarketplaceConfigured() {
+                    messages.append("Added bundled Meee2 Codex marketplace fallback.")
+                } else {
+                    messages.append("Failed to add Codex marketplace: \(fallbackAdd.combinedOutput)")
+                }
             }
         }
 
@@ -432,9 +453,67 @@ enum Meee2AgentRuntimeInstaller {
             if install.exitCode == 0 || codexPluginInstalled() {
                 messages.append("Installed Meee2 Codex plugin.")
             } else {
-                messages.append("Failed to install Meee2 Codex plugin: \(install.combinedOutput)")
+                messages.append("Codex plugin install failed; refreshing the Meee2 marketplace.")
+                log(&logs, "Codex plugin add failed before marketplace refresh: \(install.combinedOutput)")
+                if refreshCodexMarketplace(codexCommand: codexCommand, marketplacePath: marketplacePath, logs: &logs) {
+                    let retry = runCommand(codexCommand, ["plugin", "add", pluginSelector], timeoutSeconds: 60, logs: &logs)
+                    if retry.exitCode == 0 || codexPluginInstalled() {
+                        messages.append("Installed Meee2 Codex plugin.")
+                    } else {
+                        messages.append("Failed to install Meee2 Codex plugin: \(retry.combinedOutput)")
+                    }
+                } else {
+                    messages.append("Failed to install Meee2 Codex plugin: \(install.combinedOutput)")
+                }
             }
         }
+    }
+
+    private static func refreshCodexMarketplace(
+        codexCommand: String,
+        marketplacePath: String,
+        logs: inout [String]
+    ) -> Bool {
+        let remove = runCommand(codexCommand, ["plugin", "marketplace", "remove", marketplaceName], timeoutSeconds: 60, logs: &logs)
+        if remove.exitCode != 0 {
+            log(&logs, "Codex marketplace remove returned \(remove.exitCode): \(remove.combinedOutput)")
+        }
+        let add = runCommand(
+            codexCommand,
+            codexMarketplaceAddArgs(source: codexMarketplaceSource(), ref: codexMarketplaceRef()),
+            timeoutSeconds: 60,
+            logs: &logs
+        )
+        if add.exitCode == 0 || codexMarketplaceConfigured() {
+            return true
+        }
+        log(&logs, "Official Codex marketplace refresh failed: \(add.combinedOutput)")
+        let fallbackAdd = runCommand(codexCommand, ["plugin", "marketplace", "add", marketplacePath], timeoutSeconds: 60, logs: &logs)
+        return fallbackAdd.exitCode == 0 || codexMarketplaceConfigured()
+    }
+
+    private static func codexMarketplaceSource() -> String {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["MEEE2_CODEX_MARKETPLACE_SOURCE"], !raw.isEmpty {
+            return raw
+        }
+        return defaultCodexMarketplaceSource
+    }
+
+    private static func codexMarketplaceRef() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["MEEE2_CODEX_MARKETPLACE_REF"] {
+            return raw.isEmpty ? nil : raw
+        }
+        return defaultCodexMarketplaceRef
+    }
+
+    private static func codexMarketplaceAddArgs(source: String, ref: String?) -> [String] {
+        var args = ["plugin", "marketplace", "add", source]
+        if let ref, !ref.isEmpty {
+            args += ["--ref", ref]
+        }
+        return args
     }
 
     private static func resolveMarketplacePath() -> URL {
