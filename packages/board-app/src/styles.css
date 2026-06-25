@@ -8533,6 +8533,116 @@ html.board-empty-omni .canvas-toolbar__panel {
   color: var(--text, #e8eaed);
 }
 
+/* ─── Update banner —— 左下角"有新版本"主动提示浮层(UpdateBanner.tsx)──── */
+.update-banner {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  /* Sit below the modal/dialog stack (.modal-backdrop 1000, dialogs --z-dialog
+     10000) so an available-update banner never floats over an open modal or
+     intercepts lower-left clicks. A modal backdrop covers it while open; it
+     re-appears once the modal closes. (Codex P2 on #182.) */
+  z-index: var(--z-notice-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 13px 15px 14px;
+  background: var(--panel-bg, rgba(35, 34, 31, 0.92));
+  -webkit-backdrop-filter: saturate(150%) blur(18px);
+  backdrop-filter: saturate(150%) blur(18px);
+  border: 1px solid var(--border-strong, #4B4A47);
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34), 0 2px 8px rgba(0, 0, 0, 0.22);
+  color: var(--text, #F5F4EF);
+  animation: update-banner-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes update-banner-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.update-banner__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-right: 20px; /* 给右上角 × 留位 */
+}
+.update-banner__icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-subtle, rgba(204, 120, 92, 0.14));
+  color: var(--accent, #CC785C);
+}
+.update-banner__title {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.update-banner__hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim, #A8A59B);
+}
+.update-banner__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+}
+.update-banner__version {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint, #6B6862);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-banner__cta {
+  flex: 0 0 auto;
+  appearance: none;
+  border: none;
+  background: var(--accent, #CC785C);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 13px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, transform 80ms ease, opacity 120ms ease;
+}
+.update-banner__cta:hover { background: var(--accent-hover, #D6896E); }
+.update-banner__cta:active { transform: translateY(0.5px); }
+.update-banner__cta.is-busy { opacity: 0.7; cursor: progress; }
+.update-banner__close {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-faint, #6B6862);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.update-banner__close:hover {
+  color: var(--text, #F5F4EF);
+  background: var(--panel-bg-hover, rgba(204, 120, 92, 0.08));
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-banner { animation: none; }
+}
+
 /* ─── Sidebar: project-grouped session list ──────────────────────────────
    借鉴 Claude Code app 的 sidebar：每个 project (cwd basename) 一个 section，
    header 是淡色小字 + count，session 行紧凑。点击 session 行 → select；
