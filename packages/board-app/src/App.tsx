@@ -22,6 +22,7 @@ import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
 import { GuideOverlay } from './components/GuideOverlay'
+import { UpdateBanner } from './components/UpdateBanner'
 import { Notice } from './components/feedback/Notice'
 import { ToastViewport, type ToastMessage } from './components/feedback/ToastViewport'
 import { useI18n } from './lib/i18n'
@@ -873,6 +874,32 @@ export default function App() {
     }, 50)
   }, [activeCanvasId, handleSetActiveCanvas, openSessionTerminalOverlay])
 
+  // Reveal a session on its canvas: resolve which canvas the session lives on
+  // (membership → bound planner node → monitor/fallback), then jump to that
+  // canvas — selecting the bound node when it is on the currently-loaded canvas.
+  const handleJumpSessionToCanvas = useCallback((session: Session) => {
+    const target = { sessionId: session.id, surfaceId: session.surfaceId ?? undefined }
+    const targetCanvasId = resolveSessionCanvasId({
+      target,
+      session,
+      memberships: canvasList?.memberships ?? [],
+      canvases: workspaceCanvases,
+      activePlannerState: currentPlannerState,
+      fallbackCanvasId: activeWorkspaceCanvasId,
+    })
+    const boundNodeId = currentPlannerState?.canvas?.id === targetCanvasId
+      ? currentPlannerState?.nodes.find((node) => {
+        const sid = node.sessionId?.trim()
+        return Boolean(sid) && (sid === session.id || sid === session.surfaceId)
+      })?.id ?? null
+      : null
+    if (boundNodeId) {
+      requestBoardTarget({ kind: 'planner-node', canvasId: targetCanvasId, nodeId: boundNodeId })
+    } else {
+      requestBoardTarget({ kind: 'canvas', canvasId: targetCanvasId })
+    }
+  }, [canvasList?.memberships, workspaceCanvases, currentPlannerState, activeWorkspaceCanvasId])
+
   const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
     if (item.kind === 'session' && item.sessionId?.trim()) {
       requestBoardTarget({
@@ -1283,6 +1310,7 @@ export default function App() {
               openTarget={sessionsWorkspaceTarget}
               onSessionCreated={() => boardState.forceRefresh()}
               onOpenSessionArtifacts={handleOpenSessionArtifacts}
+              onJumpToCanvas={handleJumpSessionToCanvas}
               onToast={pushToast}
             />
           ) : workspaceMode === 'planner' ? (
@@ -1455,6 +1483,7 @@ export default function App() {
           onOpenSession={handlePaletteOpenSession}
         />
         <GuideOverlay />
+        <UpdateBanner />
         <ToastViewport toasts={toasts} />
       </div>
     </ToastContext.Provider>

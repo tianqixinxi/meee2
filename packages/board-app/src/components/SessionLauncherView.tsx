@@ -12,6 +12,7 @@ import {
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
@@ -65,6 +66,7 @@ interface Props {
   openTarget?: { sessionId?: string; surfaceId?: string; nonce?: number } | null
   onSessionCreated?: () => void
   onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
+  onJumpToCanvas?: (session: Session) => void
   onToast?: (kind: 'success' | 'error', text: string) => void
 }
 
@@ -236,6 +238,7 @@ export function SessionLauncherView({
   openTarget,
   onSessionCreated,
   onOpenSessionArtifacts,
+  onJumpToCanvas,
   onToast,
 }: Props) {
   const { t } = useI18n()
@@ -1183,6 +1186,11 @@ export function SessionLauncherView({
         onOpenArtifacts={() => {
           handleOpenSessionArtifactsTab(sessionMenu.session)
         }}
+        onJumpToCanvas={onJumpToCanvas ? () => {
+          const session = sessionMenu.session
+          setSessionMenu(null)
+          onJumpToCanvas(session)
+        } : undefined}
       />,
       document.body,
     )}
@@ -1246,6 +1254,7 @@ function SessionContextMenuView({
   onRename,
   onArchive,
   onOpenArtifacts,
+  onJumpToCanvas,
 }: {
   title: string
   pinned: boolean
@@ -1255,6 +1264,7 @@ function SessionContextMenuView({
   onRename: () => void
   onArchive: () => void
   onOpenArtifacts: () => void
+  onJumpToCanvas?: () => void
 }) {
   const { t } = useI18n()
   return (
@@ -1274,6 +1284,12 @@ function SessionContextMenuView({
         <FileText size={13} aria-hidden />
         <span>{t('sessions.launcher.openArtifacts')}</span>
       </button>
+      {onJumpToCanvas && (
+        <button type="button" role="menuitem" onClick={onJumpToCanvas}>
+          <Network size={13} aria-hidden />
+          <span>{t('sessions.launcher.jumpToCanvas')}</span>
+        </button>
+      )}
       <button type="button" role="menuitem" onClick={onTogglePinned}>
         {pinned ? <PinOff size={13} aria-hidden /> : <Pin size={13} aria-hidden />}
         <span>{pinned ? t('sessions.launcher.unpin') : t('sessions.launcher.pin')}</span>
