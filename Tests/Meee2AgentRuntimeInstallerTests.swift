@@ -46,13 +46,22 @@ final class Meee2AgentRuntimeInstallerTests: XCTestCase {
 
     func testCodexSetupCommandUsesOfficialGitMarketplaceBeforePluginAdd() {
         let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
-            marketplaceSource: "tianqixinxi/meee2",
-            marketplaceRef: "codex-plugin-marketplace"
+            marketplaceSource: "tianqixinxi/meee2-marketplace",
+            marketplaceRef: nil
         )
 
         XCTAssertEqual(
             command,
-            "codex plugin marketplace add tianqixinxi/meee2 --ref codex-plugin-marketplace && codex plugin add meee2@meee2-official"
+            "codex plugin marketplace add tianqixinxi/meee2-marketplace && codex plugin add meee2@meee2-official"
+        )
+    }
+
+    func testClaudeSetupCommandUsesOfficialGitMarketplaceBeforePlugins() {
+        let command = Meee2AgentRuntimeInstaller.claudeSetupCommand()
+
+        XCTAssertEqual(
+            command,
+            "claude plugin marketplace add tianqixinxi/meee2-marketplace --scope user && claude plugin install meee2@meee2-official --scope user && claude plugin install meee2-workflow-bridge@meee2-official --scope user && claude plugin enable meee2@meee2-official --scope user && claude plugin enable meee2-workflow-bridge@meee2-official --scope user"
         )
     }
 
