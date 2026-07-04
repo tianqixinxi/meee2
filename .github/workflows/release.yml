@@ -214,11 +214,15 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
           APP_SPECIFIC_PWD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
-          xcrun notarytool store-credentials meee2-notary \
+          if xcrun notarytool store-credentials meee2-notary \
               --apple-id "$APPLE_ID" \
               --team-id "$TEAM_ID" \
-              --password "$APP_SPECIFIC_PWD"
-          echo "configured=1" >> "$GITHUB_OUTPUT"
+              --password "$APP_SPECIFIC_PWD"; then
+              echo "configured=1" >> "$GITHUB_OUTPUT"
+          else
+              echo "::warning title=Notarization disabled::notarytool credential validation failed; continuing without notarization."
+              echo "configured=0" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build release + package DMG
         env:
