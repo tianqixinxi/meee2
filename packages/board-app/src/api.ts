@@ -3045,7 +3045,7 @@ export type AssistantEvent =
 
 /** Settings payload sent with each chat request — mirrors Swift `AssistantSettings`. */
 export interface AssistantChatSettings {
-  provider: 'openai' | 'anthropic' | 'local'
+  provider: 'openai' | 'anthropic' | 'local' | 'localCodex'
   apiKey?: string
   baseUrl?: string
   model?: string

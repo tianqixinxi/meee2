@@ -154,11 +154,60 @@ final class AssistantProviderTests: XCTestCase {
         XCTAssertFalse(args.contains("--no-session-persistence"))
     }
 
+    // MARK: - codex CLI args
+
+    func testLocalCodexArgsStartReadOnlyExecSession() {
+        let provider = LocalCodexProvider()
+        let args = provider.codexArguments(
+            model: "gpt-5-codex",
+            workspacePath: "/tmp/meee2-canvas"
+        )
+        XCTAssertEqual(args.first, "exec")
+        XCTAssertTrue(args.contains("--json"))
+        XCTAssertTrue(args.contains("--sandbox"))
+        XCTAssertTrue(args.contains("read-only"))
+        XCTAssertTrue(args.contains("--skip-git-repo-check"))
+        XCTAssertTrue(args.contains("--model"))
+        XCTAssertTrue(args.contains("gpt-5-codex"))
+        XCTAssertTrue(args.contains("--cd"))
+        XCTAssertTrue(args.contains("/tmp/meee2-canvas"))
+        XCTAssertEqual(args.last, "-")
+    }
+
+    func testLocalCodexArgsResumeExistingThread() {
+        let provider = LocalCodexProvider()
+        let args = provider.codexArguments(existingThreadId: "019f2c54-4123-7ac1-81db-3589b0e24726")
+        XCTAssertEqual(Array(args.prefix(3)), ["exec", "resume", "--json"])
+        XCTAssertTrue(args.contains("--skip-git-repo-check"))
+        XCTAssertTrue(args.contains("019f2c54-4123-7ac1-81db-3589b0e24726"))
+        XCTAssertEqual(args.last, "-")
+        XCTAssertFalse(args.contains("--sandbox"))
+        XCTAssertFalse(args.contains("--cd"))
+    }
+
+    func testLocalCodexPromptIncludesSystemAndConversation() {
+        let provider = LocalCodexProvider()
+        let prompt = provider.codexPrompt(
+            systemPrompt: "BASE",
+            messages: [
+                ChatMessage(role: .user, content: "Hello"),
+                ChatMessage(role: .assistant, content: "Hi"),
+                ChatMessage(role: .tool, content: "{\"ok\":true}", toolCallId: "tool-1"),
+            ]
+        )
+        XCTAssertTrue(prompt.contains("System:\nBASE"))
+        XCTAssertTrue(prompt.contains("User: Hello"))
+        XCTAssertTrue(prompt.contains("Assistant: Hi"))
+        XCTAssertTrue(prompt.contains("ToolResult(tool-1): {\"ok\":true}"))
+        XCTAssertTrue(prompt.hasSuffix("Assistant:"))
+    }
+
     // MARK: - Provider factory
 
     func testFactoryReturnsCorrectProviderForEachKind() {
         XCTAssertTrue(AssistantProviderFactory.make(.openai) is OpenAIProvider)
         XCTAssertTrue(AssistantProviderFactory.make(.anthropic) is AnthropicProvider)
         XCTAssertTrue(AssistantProviderFactory.make(.local) is LocalClaudeProvider)
+        XCTAssertTrue(AssistantProviderFactory.make(.localCodex) is LocalCodexProvider)
     }
 }
