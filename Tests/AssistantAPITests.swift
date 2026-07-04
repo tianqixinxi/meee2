@@ -19,7 +19,7 @@ final class AssistantAPITests: XCTestCase {
     }
 
     func testParseSettingsAcceptsAllProviders() {
-        for raw in ["openai", "anthropic", "local"] {
+        for raw in ["openai", "anthropic", "local", "localCodex"] {
             let s = AssistantAPI.parseSettings(["provider": raw])
             XCTAssertEqual(s.provider.rawValue, raw)
         }
@@ -134,7 +134,7 @@ final class AssistantAPITests: XCTestCase {
     func testBuildSystemPromptDoesNotCrashWithDifferentProviders() {
         // The prompt builder is provider-agnostic right now, but be defensive:
         // it should produce a non-empty string for any settings shape.
-        for kind in [AssistantSettings.Provider.local, .openai, .anthropic] {
+        for kind in [AssistantSettings.Provider.local, .localCodex, .openai, .anthropic] {
             let s = AssistantSettings(
                 provider: kind,
                 apiKey: "",

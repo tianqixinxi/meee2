@@ -20,6 +20,7 @@ import type { Meee2AgentRuntimeStatus, ReadinessReport, SpawnProvider } from '..
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
+  isHostedLlmProvider,
   providerLabel,
   readLlmSettings,
   writeLlmSettings,
@@ -1380,13 +1381,13 @@ export function SettingsView({
             </div>
           </div>
           <div className="segment">
-            {(['local', 'openai', 'anthropic'] as LlmProvider[]).map((p) => (
+            {(['local', 'localCodex', 'openai', 'anthropic'] as LlmProvider[]).map((p) => (
               <button key={p} className={p === llm.provider ? 'active' : ''} onClick={() => applyLlmProvider(p)} type="button">
                 {providerLabel(p)}
               </button>
             ))}
           </div>
-          {llm.provider !== 'local' && (
+          {isHostedLlmProvider(llm.provider) && (
             <div className="col" style={{ gap: 6 }}>
               <SettingsTextInput label={t('settings.apiKey')} type="password" value={llm.apiKey} placeholder={llm.provider === 'openai' ? 'sk-...' : 'sk-ant-...'} onChange={(value) => updateLlmDraft({ apiKey: value })} onBlur={() => saveLlmDraft(llm)} />
               <SettingsTextInput label={`${t('settings.baseUrl')} (${t('settings.blankDefault')})`} value={llm.baseUrl} placeholder={DEFAULT_BASE_URL[llm.provider]} onChange={(value) => updateLlmDraft({ baseUrl: value })} onBlur={() => saveLlmDraft(llm)} />
@@ -1396,6 +1397,11 @@ export function SettingsView({
           {llm.provider === 'local' && (
             <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
               {t('settings.localModeHelp')}
+            </div>
+          )}
+          {llm.provider === 'localCodex' && (
+            <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
+              {t('settings.localCodexModeHelp')}
             </div>
           )}
         </section>

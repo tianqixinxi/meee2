@@ -48,15 +48,16 @@ enum ProviderEvent {
 
 struct AssistantSettings {
     enum Provider: String {
-        case openai     // OpenAI-compatible /v1/chat/completions
-        case anthropic  // Anthropic /v1/messages
-        case local      // claude -p
+        case openai      // OpenAI-compatible /v1/chat/completions
+        case anthropic   // Anthropic /v1/messages
+        case local       // claude -p
+        case localCodex  // codex exec --json
     }
 
     let provider: Provider
     let apiKey: String        // empty for local
     let baseUrl: String       // empty for local
-    let model: String         // empty for local → claude default
+    let model: String         // empty for local providers → CLI default
     let enabledTools: Set<String>?  // nil = all
     let scope: String         // "this-mac" or a meee2 team id
     let canvasId: String      // current canvas id for canvas-aware tools
@@ -108,7 +109,7 @@ struct AssistantSelectedElement {
     let height: Double
 }
 
-/// Common interface across hosted (OpenAI / Anthropic) and local (claude -p)
+/// Common interface across hosted (OpenAI / Anthropic) and local CLI
 /// providers. Each implementation streams `ProviderEvent` values as the LLM
 /// produces output; the orchestrator on top of this protocol handles the
 /// tool-use loop + SSE relay.
@@ -132,6 +133,7 @@ enum AssistantProviderFactory {
         case .openai: return OpenAIProvider()
         case .anthropic: return AnthropicProvider()
         case .local: return LocalClaudeProvider()
+        case .localCodex: return LocalCodexProvider()
         }
     }
 }
@@ -500,6 +502,49 @@ struct AnthropicProvider: AssistantProvider {
     }
 }
 
+// MARK: - Local CLI provider helpers
+
+struct LocalToolFence: Equatable {
+    let id: String
+    let name: String
+    let args: String
+}
+
+enum LocalAssistantToolProtocol {
+    static func augmentedSystemPrompt(_ base: String, tools: [ToolDef]) -> String {
+        guard !tools.isEmpty else { return base }
+        var s = base
+        s += "\n\nYou have these tools available. To call one, output exactly one fenced block like:\n\n"
+        s += "```tool\n{\"name\": \"<tool_name>\", \"args\": { ... }}\n```\n\n"
+        s += "After you emit the fence, stop. The runtime will execute the tool "
+        s += "and reply with the result, then you continue. "
+        s += "If you don't need a tool, just answer normally.\n\n"
+        s += "Tools:\n"
+        for t in tools {
+            let schemaJSON = (try? JSONSerialization.data(withJSONObject: t.inputSchema, options: [.sortedKeys]))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            s += "- `\(t.name)` — \(t.description) (schema: \(schemaJSON))\n"
+        }
+        return s
+    }
+
+    static func parseToolFence(_ text: String, idPrefix: String) -> LocalToolFence? {
+        let pattern = #"```tool\s*\n([\s\S]*?)\n```"#
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              m.numberOfRanges >= 2,
+              let r = Range(m.range(at: 1), in: text) else { return nil }
+        let json = String(text[r])
+        guard let obj = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let name = obj["name"] as? String, !name.isEmpty,
+              let argsObj = obj["args"] as? [String: Any] else { return nil }
+        let argsData = (try? JSONSerialization.data(withJSONObject: argsObj)) ?? Data("{}".utf8)
+        let argsJSON = String(data: argsData, encoding: .utf8) ?? "{}"
+        let id = "\(idPrefix)-\(UUID().uuidString.prefix(8))"
+        return LocalToolFence(id: String(id), name: name, args: argsJSON)
+    }
+}
+
 // MARK: - Local claude -p provider
 
 /// Spawns a local `claude -p --output-format stream-json --print` and parses
@@ -536,7 +581,11 @@ struct LocalClaudeProvider: AssistantProvider {
                 case .acquired(let acquiredLease):
                     lease = acquiredLease
                 case .rejected(let reason):
-                    MLog("[AssistantLocalRunGate] rejected canvas=\(settings.canvasId.isEmpty ? "global" : settings.canvasId) purpose=\(settings.localRunPurpose.rawValue) reason=\(reason.description)")
+                    let canvas = settings.canvasId.isEmpty ? "global" : settings.canvasId
+                    MLog(
+                        "[AssistantLocalRunGate] rejected canvas=\(canvas) "
+                            + "purpose=\(settings.localRunPurpose.rawValue) reason=\(reason.description)"
+                    )
                     continuation.yield(.error("local assistant busy for this canvas (\(reason.description))"))
                     continuation.finish()
                     return
@@ -585,21 +634,7 @@ struct LocalClaudeProvider: AssistantProvider {
     }
 
     func augmentedSystemPrompt(_ base: String, tools: [ToolDef]) -> String {
-        guard !tools.isEmpty else { return base }
-        // Describe the tools and the fenced-JSON protocol so claude -p can
-        // request them. Keep it terse — claude is good at following this
-        // pattern from minimal instructions.
-        var s = base
-        s += "\n\nYou have these tools available. To call one, output exactly one fenced block like:\n\n"
-        s += "```tool\n{\"name\": \"<tool_name>\", \"args\": { ... }}\n```\n\n"
-        s += "After you emit the fence, stop. The runtime will execute the tool and reply with the result, then you continue. If you don't need a tool, just answer normally.\n\n"
-        s += "Tools:\n"
-        for t in tools {
-            let schemaJSON = (try? JSONSerialization.data(withJSONObject: t.inputSchema, options: [.sortedKeys]))
-                .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-            s += "- `\(t.name)` — \(t.description) (schema: \(schemaJSON))\n"
-        }
-        return s
+        LocalAssistantToolProtocol.augmentedSystemPrompt(base, tools: tools)
     }
 
     private func runProcess(
@@ -774,25 +809,11 @@ struct LocalClaudeProvider: AssistantProvider {
         }
     }
 
-    struct ParsedToolFence: Equatable { let id: String; let name: String; let args: String }
+    typealias ParsedToolFence = LocalToolFence
 
     /// Exposed for tests — pure parser, no side effects.
     func parseToolFence(_ text: String) -> ParsedToolFence? {
-        // Match ```tool\n{...}\n``` (greedy across newlines)
-        let pattern = #"```tool\s*\n([\s\S]*?)\n```"#
-        guard let re = try? NSRegularExpression(pattern: pattern),
-              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              m.numberOfRanges >= 2,
-              let r = Range(m.range(at: 1), in: text) else { return nil }
-        let json = String(text[r])
-        guard let obj = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let name = obj["name"] as? String, !name.isEmpty,
-              let argsObj = obj["args"] as? [String: Any] else { return nil }
-        let argsData = (try? JSONSerialization.data(withJSONObject: argsObj)) ?? Data("{}".utf8)
-        let argsJSON = String(data: argsData, encoding: .utf8) ?? "{}"
-        // Synthesize a tool-call id since claude -p doesn't issue one.
-        let id = "local-\(UUID().uuidString.prefix(8))"
-        return ParsedToolFence(id: String(id), name: name, args: argsJSON)
+        LocalAssistantToolProtocol.parseToolFence(text, idPrefix: "local")
     }
 
     private func resolveClaudeBinary() -> String? {
@@ -805,5 +826,377 @@ struct LocalClaudeProvider: AssistantProvider {
             return p
         }
         return nil
+    }
+}
+
+// MARK: - Local codex exec provider
+
+/// Spawns local `codex exec --json` and adapts Codex JSONL events to the same
+/// assistant provider contract. Codex emits complete `agent_message` items
+/// rather than token deltas, so the provider yields each completed message as a
+/// single text delta.
+struct LocalCodexProvider: AssistantProvider {
+    func runTurn(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings
+    ) -> AsyncThrowingStream<ProviderEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task.detached {
+                let gateResult = AssistantLocalRunGate.shared.acquireDetailed(
+                    key: "codex:\(settings.canvasId)",
+                    completionCooldown: settings.localRunPurpose.appliesCompletionCooldown
+                )
+                let lease: AssistantLocalRunGate.Lease
+                switch gateResult {
+                case .acquired(let acquiredLease):
+                    lease = acquiredLease
+                case .rejected(let reason):
+                    let canvas = settings.canvasId.isEmpty ? "global" : settings.canvasId
+                    MLog(
+                        "[AssistantLocalRunGate] rejected localCodex canvas=\(canvas) "
+                            + "purpose=\(settings.localRunPurpose.rawValue) reason=\(reason.description)"
+                    )
+                    continuation.yield(.error("local Codex assistant busy for this canvas (\(reason.description))"))
+                    continuation.finish()
+                    return
+                }
+                var mutableLease = lease
+                defer { mutableLease.release() }
+
+                let store = AssistantLocalCodexSessionStore.shared
+                let existingThreadId = store.sessionId(forCanvasId: settings.canvasId)
+                do {
+                    try runProcess(
+                        systemPrompt: LocalAssistantToolProtocol.augmentedSystemPrompt(systemPrompt, tools: tools),
+                        messages: messages,
+                        workspacePath: settings.workspacePath,
+                        model: settings.model,
+                        existingThreadId: existingThreadId,
+                        canvasId: settings.canvasId,
+                        continuation: continuation
+                    )
+                } catch let error as LocalCodexExitError where error.isSessionIdError && existingThreadId != nil {
+                    store.resetSessionId(forCanvasId: settings.canvasId)
+                    do {
+                        try runProcess(
+                            systemPrompt: LocalAssistantToolProtocol.augmentedSystemPrompt(systemPrompt, tools: tools),
+                            messages: messages,
+                            workspacePath: settings.workspacePath,
+                            model: settings.model,
+                            existingThreadId: nil,
+                            canvasId: settings.canvasId,
+                            continuation: continuation
+                        )
+                    } catch {
+                        continuation.yield(.error(error.localizedDescription))
+                        continuation.finish()
+                    }
+                } catch {
+                    continuation.yield(.error(error.localizedDescription))
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    private func runProcess(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        workspacePath rawWorkspacePath: String,
+        model: String,
+        existingThreadId: String?,
+        canvasId: String,
+        continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
+    ) throws {
+        let codexPath = resolveCodexBinary()
+        let process = Process()
+        let stdin = Pipe()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        let workspacePath = (rawWorkspacePath as NSString).standardizingPath
+        let args = codexArguments(
+            model: model,
+            workspacePath: workspacePath,
+            existingThreadId: existingThreadId
+        )
+
+        if let p = codexPath {
+            process.executableURL = URL(fileURLWithPath: p)
+            process.arguments = args
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["codex"] + args
+        }
+        var environment = ProcessInfo.processInfo.environment
+        environment["MEEE2_ASSISTANT_SESSION"] = "1"
+        process.environment = environment
+        if !workspacePath.isEmpty {
+            try FileManager.default.createDirectory(
+                atPath: workspacePath,
+                withIntermediateDirectories: true
+            )
+            process.currentDirectoryURL = URL(fileURLWithPath: workspacePath, isDirectory: true)
+        }
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+        defer {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+
+        if let data = codexPrompt(systemPrompt: systemPrompt, messages: messages).data(using: .utf8) {
+            stdin.fileHandleForWriting.write(data)
+        }
+        try? stdin.fileHandleForWriting.close()
+
+        var buf = Data()
+        var fullText = ""
+        let handle = stdout.fileHandleForReading
+        while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                if !process.isRunning { break }
+                Thread.sleep(forTimeInterval: 0.02)
+                continue
+            }
+            buf.append(chunk)
+            while let nl = buf.firstIndex(of: 0x0A) {
+                let line = buf.subdata(in: 0..<nl)
+                buf.removeSubrange(0...nl)
+                guard let s = String(data: line, encoding: .utf8), !s.isEmpty else { continue }
+                try handleCodexJSONLine(
+                    s,
+                    canvasId: canvasId,
+                    fullText: &fullText,
+                    continuation: continuation
+                )
+            }
+        }
+
+        while process.isRunning {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.terminationStatus != 0 {
+            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+            let err = String(data: errData, encoding: .utf8) ?? ""
+            throw LocalCodexExitError(status: process.terminationStatus, stderr: String(err.prefix(800)))
+        }
+
+        if let call = LocalAssistantToolProtocol.parseToolFence(fullText, idPrefix: "codex-local") {
+            continuation.yield(.toolCall(id: call.id, name: call.name, argsJSON: call.args))
+        }
+        continuation.yield(.turnDone(stopReason: nil))
+        continuation.finish()
+    }
+
+    func codexArguments(
+        model: String = "",
+        workspacePath rawWorkspacePath: String = "",
+        existingThreadId: String? = nil
+    ) -> [String] {
+        let workspacePath = rawWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var args: [String]
+        if let existingThreadId, !existingThreadId.isEmpty {
+            args = ["exec", "resume", "--json", "--skip-git-repo-check"]
+            if !model.isEmpty {
+                args += ["--model", model]
+            }
+            args += [existingThreadId, "-"]
+        } else {
+            args = ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check"]
+            if !model.isEmpty {
+                args += ["--model", model]
+            }
+            if !workspacePath.isEmpty {
+                args += ["--cd", workspacePath]
+            }
+            args.append("-")
+        }
+        return args
+    }
+
+    func codexPrompt(systemPrompt: String, messages: [ChatMessage]) -> String {
+        var rendered = ["System:\n\(systemPrompt)"]
+        for m in messages {
+            let role: String
+            switch m.role {
+            case .system: role = "System"
+            case .user: role = "User"
+            case .assistant: role = "Assistant"
+            case .tool: role = "ToolResult(\(m.toolCallId ?? ""))"
+            }
+            rendered.append("\(role): \(m.content)")
+        }
+        rendered.append("Assistant:")
+        return rendered.joined(separator: "\n\n")
+    }
+
+    private func handleCodexJSONLine(
+        _ line: String,
+        canvasId: String,
+        fullText: inout String,
+        continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
+    ) throws {
+        guard let obj = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+              let type = obj["type"] as? String else { return }
+
+        switch type {
+        case "thread.started":
+            if let threadId = obj["thread_id"] as? String, !threadId.isEmpty {
+                AssistantLocalCodexSessionStore.shared.setSessionId(threadId, forCanvasId: canvasId)
+            }
+        case "item.completed":
+            guard let item = obj["item"] as? [String: Any],
+                  item["type"] as? String == "agent_message",
+                  let text = item["text"] as? String,
+                  !text.isEmpty else { return }
+            if !fullText.isEmpty { fullText += "\n\n" }
+            fullText += text
+            continuation.yield(.textDelta(text))
+        case "turn.failed", "error":
+            throw LocalCodexExitError(status: 1, stderr: codexErrorMessage(from: obj))
+        default:
+            break
+        }
+    }
+
+    private func codexErrorMessage(from obj: [String: Any]) -> String {
+        if let message = obj["message"] as? String, !message.isEmpty {
+            return message
+        }
+        if let error = obj["error"] as? [String: Any] {
+            if let message = error["message"] as? String, !message.isEmpty {
+                return message
+            }
+            if let code = error["code"] as? String, !code.isEmpty {
+                return code
+            }
+        }
+        return "codex JSON event reported failure"
+    }
+
+    struct LocalCodexExitError: LocalizedError, Equatable {
+        let status: Int32
+        let stderr: String
+
+        var errorDescription: String? {
+            "codex exited \(status): \(stderr)"
+        }
+
+        var isSessionIdError: Bool {
+            let lower = stderr.lowercased()
+            return lower.contains("session") || lower.contains("thread")
+        }
+    }
+
+    private func resolveCodexBinary() -> String? {
+        let candidates = [
+            (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin/codex"),
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
+        ]
+        for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return nil
+    }
+}
+
+private struct AssistantLocalCodexSessionRecord: Codable {
+    var sessionId: String
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+final class AssistantLocalCodexSessionStore {
+    static let shared = AssistantLocalCodexSessionStore()
+
+    private let fileURL: URL
+    private let lock = NSLock()
+    private var records: [String: AssistantLocalCodexSessionRecord]?
+
+    init(fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            self.fileURL = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".meee2/assistant/codex-sessions.json")
+        }
+    }
+
+    func sessionId(forCanvasId canvasId: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = AssistantLocalSessionStore.key(canvasId: canvasId)
+        let current = loadRecords()
+        guard var record = current[key], !record.sessionId.isEmpty else { return nil }
+        var next = current
+        record.updatedAt = Date()
+        next[key] = record
+        records = next
+        saveRecords(next)
+        return record.sessionId
+    }
+
+    func setSessionId(_ sessionId: String, forCanvasId canvasId: String) {
+        let trimmed = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        let key = AssistantLocalSessionStore.key(canvasId: canvasId)
+        var current = loadRecords()
+        let createdAt = current[key]?.createdAt ?? Date()
+        current[key] = AssistantLocalCodexSessionRecord(
+            sessionId: trimmed,
+            createdAt: createdAt,
+            updatedAt: Date()
+        )
+        records = current
+        saveRecords(current)
+    }
+
+    func resetSessionId(forCanvasId canvasId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = AssistantLocalSessionStore.key(canvasId: canvasId)
+        var current = loadRecords()
+        current.removeValue(forKey: key)
+        records = current
+        saveRecords(current)
+    }
+
+    private func loadRecords() -> [String: AssistantLocalCodexSessionRecord] {
+        if let records { return records }
+        guard let data = try? Data(contentsOf: fileURL) else {
+            records = [:]
+            return [:]
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = (try? decoder.decode([String: AssistantLocalCodexSessionRecord].self, from: data)) ?? [:]
+        records = decoded
+        return decoded
+    }
+
+    private func saveRecords(_ records: [String: AssistantLocalCodexSessionRecord]) {
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(records)
+            try data.write(to: fileURL, options: [.atomic])
+        } catch {
+            MLog("[AssistantLocalCodexSessionStore] failed to save session map: \(error.localizedDescription)")
+        }
     }
 }

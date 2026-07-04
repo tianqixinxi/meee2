@@ -4,10 +4,11 @@
 //
 // Defaults are tuned so the assistant works *out of the box* with no key:
 // `provider: 'local'` shells out to `claude -p` using the user's existing
-// `~/.claude/` OAuth with a stable local session, and all tools are enabled. Setting an `apiKey` and
-// switching `provider` to `openai` / `anthropic` swaps in a hosted LLM.
+// `~/.claude/` OAuth with a stable local session. `provider: 'localCodex'`
+// shells out to `codex exec --json` using the user's existing Codex login.
+// Setting an `apiKey` and switching to `openai` / `anthropic` swaps in a hosted LLM.
 
-export type LlmProvider = 'openai' | 'anthropic' | 'local'
+export type LlmProvider = 'openai' | 'anthropic' | 'local' | 'localCodex'
 
 export type ToolName =
   | 'get_canvas_context'
@@ -48,11 +49,11 @@ export const ALL_TOOLS: ToolName[] = [
 
 export interface LlmSettings {
   provider: LlmProvider
-  /** Required for openai / anthropic. Ignored for local. */
+  /** Required for openai / anthropic. Ignored for local CLI providers. */
   apiKey: string
   /** Override for hosted endpoints. Empty = provider default. */
   baseUrl: string
-  /** Empty = provider default (gpt-4o-mini, claude-haiku-4-5, local Claude CLI default). */
+  /** Empty = provider default (gpt-4o-mini, claude-haiku-4-5, local CLI default). */
   model: string
   /** Per-tool enable flag. Default: all true. */
   enabledTools: Record<ToolName, boolean>
@@ -65,12 +66,14 @@ export const DEFAULT_BASE_URL: Record<LlmProvider, string> = {
   openai: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
   local: '',
+  localCodex: '',
 }
 
 export const DEFAULT_MODEL: Record<LlmProvider, string> = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-haiku-4-5-20251001',
   local: '',
+  localCodex: '',
 }
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
@@ -105,7 +108,10 @@ export function readLlmSettings(): LlmSettings {
   try {
     const parsed = JSON.parse(raw) as Partial<LlmSettings>
     const provider: LlmProvider =
-      parsed.provider === 'openai' || parsed.provider === 'anthropic' || parsed.provider === 'local'
+      parsed.provider === 'openai'
+        || parsed.provider === 'anthropic'
+        || parsed.provider === 'local'
+        || parsed.provider === 'localCodex'
         ? parsed.provider
         : 'local'
     const enabledTools = { ...DEFAULT_LLM_SETTINGS.enabledTools }
@@ -144,5 +150,10 @@ export function providerLabel(p: LlmProvider): string {
     case 'openai': return 'OpenAI-compatible'
     case 'anthropic': return 'Anthropic'
     case 'local': return 'Local Claude session'
+    case 'localCodex': return 'Local Codex session'
   }
+}
+
+export function isHostedLlmProvider(p: LlmProvider): p is 'openai' | 'anthropic' {
+  return p === 'openai' || p === 'anthropic'
 }
