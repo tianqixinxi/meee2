@@ -693,4 +693,96 @@ final class SessionCorrelationTests: XCTestCase {
         f.formatOptions = [.withInternetDateTime]
         return f.date(from: raw)
     }
+
+    // MARK: - providerResumeSessionId dedup (session-list-cleanup req1)
+
+    /// A meee2-launched terminal leaves TWO DTOs sharing one
+    /// `providerResumeSessionId`: a live ghostty surface (native-workspace) and
+    /// its CLI half (web-fallback). The id-based dedup misses them — only the
+    /// resume id ties them. `dedupByProviderResumeSessionId` must collapse the
+    /// pair to ONE card, keeping the openable live surface.
+    func testDedupCollapsesSurfaceAndCliSharingResumeId() {
+        let surface = makeDedupDTO(
+            id: "claude-ghostty-AAA", status: .active,
+            openTarget: "native-workspace", surfaceId: "surf-1",
+            resumeId: "cli-1", lastActivity: "2026-06-18T23:00:00Z"
+        )
+        let cliHalf = makeDedupDTO(
+            id: "cli-1", status: .idle,
+            openTarget: "web-fallback", surfaceId: nil,
+            resumeId: "cli-1", lastActivity: "2026-06-18T20:00:00Z"
+        )
+        let unrelated = makeDedupDTO(
+            id: "other", status: .active,
+            openTarget: "native-workspace", surfaceId: "surf-2",
+            resumeId: "cli-2", lastActivity: "2026-06-18T22:00:00Z"
+        )
+
+        let deduped = BoardSessionSnapshotProvider.dedupByProviderResumeSessionId([surface, cliHalf, unrelated])
+
+        XCTAssertEqual(deduped.count, 2, "the surface+CLI pair must collapse to one card")
+        let kept = deduped.first { $0.providerResumeSessionId == "cli-1" }
+        XCTAssertEqual(kept?.id, "claude-ghostty-AAA", "keep the live native-workspace surface, not the web-fallback CLI half")
+        XCTAssertNotNil(deduped.first { $0.id == "other" }, "an unrelated resume id is untouched")
+    }
+
+    /// Cards with an empty/absent providerResumeSessionId are never merged —
+    /// distinct sessions that happen to lack a resume id must all survive.
+    func testDedupKeepsAllCardsWithoutResumeId() {
+        let a = makeDedupDTO(id: "a", status: .active, openTarget: "external", surfaceId: nil, resumeId: nil, lastActivity: nil)
+        let b = makeDedupDTO(id: "b", status: .idle, openTarget: "external", surfaceId: nil, resumeId: "", lastActivity: nil)
+        let deduped = BoardSessionSnapshotProvider.dedupByProviderResumeSessionId([a, b])
+        XCTAssertEqual(Set(deduped.map(\.id)), ["a", "b"])
+    }
+
+    private func makeDedupDTO(
+        id: String,
+        status: SessionStatus,
+        openTarget: String,
+        surfaceId: String?,
+        resumeId: String?,
+        lastActivity: String?
+    ) -> SessionDTO {
+        SessionDTO(
+            id: id,
+            title: id,
+            project: "/tmp/fake-project",
+            pluginId: "com.meee2.plugin.claude",
+            pluginDisplayName: "Claude Code",
+            pluginColor: "#FF9500",
+            status: status.rawValue,
+            inboxPending: 0,
+            recentMessages: [],
+            currentTool: nil,
+            startedAt: lastActivity,
+            lastActivity: lastActivity,
+            usageStats: nil,
+            tasks: [],
+            currentTask: nil,
+            pendingPermissionTool: nil,
+            pendingPermissionMessage: nil,
+            pendingChoiceTool: nil,
+            pendingChoiceMessage: nil,
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: nil,
+            terminalKind: surfaceId == nil ? "external" : "internal",
+            surfaceId: surfaceId,
+            providerResumeSessionId: resumeId,
+            surfaceStatus: nil,
+            canOpenExternal: true,
+            terminalBackend: "external",
+            nativeWorkspaceAvailable: false,
+            openTarget: openTarget,
+            controlState: "active",
+            sessionScope: surfaceId == nil ? "external" : "meee2",
+            backgroundAgents: [],
+            latestRecap: nil,
+            providerRecapSignals: [],
+            clientKind: "cli",
+            syncEnabled: false,
+            syncTeamId: nil,
+            syncTeamName: nil
+        )
+    }
 }

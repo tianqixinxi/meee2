@@ -21,6 +21,11 @@ enum BoardSessionSnapshotProvider {
                     boardSession(internalSession, matches: session.sessionId)
                 }
             }
+            // req3: a LOCAL (non-managed-workspace) record that is no longer in the
+            // live surface registry only belongs in the list if its process is still
+            // alive. Otherwise it is a dead surface leftover (its CLI half, if still
+            // running, surfaces under its own UUID record and is kept below).
+            .filter { isLiveLocalSession($0) }
             .map { session in
                 BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
             }
@@ -78,12 +83,77 @@ enum BoardSessionSnapshotProvider {
             .filter { session in
                 !enrichedInternalSessions.contains { boardSession($0, matches: session.sessionId) }
             }
+            // req3: an external native session is a LOCAL terminal — keep it only
+            // while its process lives (a dead native terminal can no longer be
+            // jumped to). Managed-workspace (canvas/node) sessions are exempt: their
+            // lifecycle is owned by the canvas, not a live local PID.
+            .filter { isLiveLocalSession($0) }
             .map { session in
                 let terminalInfo = terminalInfos[session.sessionId]
                 let pluginId = pluginId(for: session, terminalInfo: terminalInfo)
                 return BoardDTOBuilder.sessionDTO(session.toPluginSession(pluginId: pluginId))
             }
-        return enrichedInternalSessions + externalStoredSessions
+        // req1: collapse cards that represent the SAME CLI session. A meee2-launched
+        // terminal leaves both a surface record (claude-ghostty-*) and the real
+        // `claude` CLI record (UUID), tied only by providerResumeSessionId — the
+        // id-based dedup above misses them. Keep the most openable/live card per id.
+        return dedupByProviderResumeSessionId(enrichedInternalSessions + externalStoredSessions)
+    }
+
+    /// A LOCAL (non-managed-workspace) session is shown only while its process is
+    /// alive. Canvas/node sessions live under `~/.meee2/workspaces` and keep their
+    /// own lifecycle (no live local PID requirement).
+    private static func isLiveLocalSession(_ session: SessionData) -> Bool {
+        let path = session.cwd ?? session.project
+        if InternalSessionIdentity.isMeee2ManagedWorkspace(path) { return true }
+        return SessionStore.processAlive(session.pid)
+    }
+
+    /// Collapse SessionDTOs that share a non-empty `providerResumeSessionId` (they
+    /// are the surface + CLI halves of one terminal). Keeps the highest-ranked card.
+    static func dedupByProviderResumeSessionId(_ sessions: [SessionDTO]) -> [SessionDTO] {
+        var indexByResumeId: [String: Int] = [:]
+        var result: [SessionDTO] = []
+        for session in sessions {
+            let resumeId = session.providerResumeSessionId?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !resumeId.isEmpty else {
+                result.append(session)
+                continue
+            }
+            if let existing = indexByResumeId[resumeId] {
+                if shouldPreferResumeDuplicate(session, over: result[existing]) {
+                    result[existing] = session
+                }
+            } else {
+                indexByResumeId[resumeId] = result.count
+                result.append(session)
+            }
+        }
+        return result
+    }
+
+    /// Within a `providerResumeSessionId` group prefer the card backed by a live
+    /// openable surface (native-workspace), then a non-historical status, then the
+    /// most recent activity.
+    private static func shouldPreferResumeDuplicate(_ candidate: SessionDTO, over current: SessionDTO) -> Bool {
+        let candidateRank = resumeDuplicateRank(candidate)
+        let currentRank = resumeDuplicateRank(current)
+        if candidateRank != currentRank { return candidateRank > currentRank }
+        return resumeDuplicateActivity(candidate) > resumeDuplicateActivity(current)
+    }
+
+    private static func resumeDuplicateRank(_ session: SessionDTO) -> Int {
+        var rank = 0
+        if session.openTarget == "native-workspace" { rank += 4 }
+        if session.surfaceId != nil { rank += 2 }
+        if !SessionStatus.from(rawString: session.status).isHistorical { rank += 1 }
+        return rank
+    }
+
+    private static func resumeDuplicateActivity(_ session: SessionDTO) -> Date {
+        guard let raw = session.lastActivity ?? session.startedAt else { return .distantPast }
+        return ISO8601DateFormatter().date(from: raw) ?? .distantPast
     }
 
     static func visibleStoredSessions(
