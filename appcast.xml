@@ -7,6 +7,77 @@
         <description>meee2 release feed</description>
         <language>en</language>
         <item>
+            <title>meee2 v0.6.1</title>
+            <description><![CDATA[## What's Changed
+* chore(mcp): defer Claude MCP registration to the official plugin by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/132
+* fix(planner): make dead-session demotion idempotent to stop event-log bloat by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/133
+* feat(integrations): Google Sheets view schema + data-driven preview details by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/134
+* feat(planner): tabular visualization for json/file artifact cards by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/135
+* fix(planner): stop canvas edges jittering on every poll rebuild by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/136
+* feat(planner): sheet-style Google Sheets view + artifact card resize/sticky fixes by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/137
+* feat(planner): direct artifact-layer read/write — ledger updates without node sessions by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/138
+* fix(onboarding): 首次启动自动弹引导 + CLI 全缺给安装指引 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/131
+* Add artifact views and runtime readiness gates by @rsgok in https://github.com/tianqixinxi/meee2/pull/139
+* fix(views): integration + payload projections for the artifact views system by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/141
+* fix(deploy): sync the MCP bridge server into the app bundle by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/142
+* feat(planner): manual sync affordance for integration artifacts by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/143
+* feat(planner): auto-revive dead sessions on artifact sync by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/144
+* fix(planner): type the sync instruction into revived sessions by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/145
+* fix(terminal): configurable settle ceiling for initial-prompt delivery by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/146
+* feat(planner): redesign the artifact inspector around 数据源 → 视图 → 预览 → 版本 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/147
+* feat(planner): dedicate artifact sync to its own lightweight session by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/148
+* feat(inspector): 版本回放 + snapshot 成因;删卡片样式;卡片视图 tab 点击不再开 inspector by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/149
+* fix(terminal): submit reused-pane prompts with a real Return key by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/150
+* feat(planner): propose_add_node MCP — 节点会话提议新增 step,走 proposal 审批落图 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/154
+* fix(online): token 刷新 single-flight + 凭证收敛 settings.json 单一真相 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/153
+* Unify Web Board feedback surfaces by @rsgok in https://github.com/tianqixinxi/meee2/pull/140
+* [codex] Polish artifact previews and spacing by @rsgok in https://github.com/tianqixinxi/meee2/pull/155
+* [codex] Update meee2 app icon by @rsgok in https://github.com/tianqixinxi/meee2/pull/156
+* [codex] Brand app as Meee2 by @rsgok in https://github.com/tianqixinxi/meee2/pull/157
+* Session launcher grouping, recovery, and project actions by @rsgok in https://github.com/tianqixinxi/meee2/pull/158
+* Improve Session launcher permissions by @rsgok in https://github.com/tianqixinxi/meee2/pull/159
+* Web Board theme profiles and session scope by @rsgok in https://github.com/tianqixinxi/meee2/pull/160
+* Polish session launcher workflows by @rsgok in https://github.com/tianqixinxi/meee2/pull/161
+* [codex] Fix session resume identity and artifacts handoff by @rsgok in https://github.com/tianqixinxi/meee2/pull/162
+* Fix Codex session resume recovery by @rsgok in https://github.com/tianqixinxi/meee2/pull/163
+* Support session launcher attachments by @rsgok in https://github.com/tianqixinxi/meee2/pull/164
+* [codex] Add session artifact candidates modal by @rsgok in https://github.com/tianqixinxi/meee2/pull/165
+* feat(planner): external-first writeback — 写穿外部对象 + 门控后自动对账镜像 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/166
+* feat(app): Board window as primary surface (demote Island to accessory) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/168
+* fix(board+app): drag any file into composer, About build info, dedup restored sessions by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/170
+* feat(integrations): meee2 包掉 localStdio connector 安装 — 首发 Google Sheets by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/167
+* fix(integrations): sheet 快照渲染真实行值(fields.values) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/152
+* feat(teams): node-level multi-user contribution ledger (collect-list steps) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/151
+* [codex] Improve session artifacts and recap titles by @rsgok in https://github.com/tianqixinxi/meee2/pull/171
+* Open CLI sessions in Sessions workspace by @rsgok in https://github.com/tianqixinxi/meee2/pull/172
+* feat(status): 区分「需要权限」与「需要做选择」会话态 + 左侧列表分别提示 by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/173
+* build: vendor agent plugin marketplace + bundle it into meee2.app by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/174
+* [codex] Route Claude workflows into Canvas and hide E2E sessions by @rsgok in https://github.com/tianqixinxi/meee2/pull/176
+* Fix Claude session workflow bridge by @rsgok in https://github.com/tianqixinxi/meee2/pull/177
+* Compact workspace rail by @rsgok in https://github.com/tianqixinxi/meee2/pull/178
+* Unify Sessions Workspace terminal lifecycle by @rsgok in https://github.com/tianqixinxi/meee2/pull/179
+* fix(board): allow publishing a personal canvas to Team (visibility endpoint deadlock) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/180
+* feat(board): reveal session on canvas + update-available banner by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/182
+* fix(board): dark-mode contrast for canvas node/object cards (UI feedback #8) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/183
+* [codex] Add local Codex assistant provider by @rsgok in https://github.com/tianqixinxi/meee2/pull/184
+* [codex] Allow release build without notarization by @rsgok in https://github.com/tianqixinxi/meee2/pull/185
+
+
+**Full Changelog**: https://github.com/tianqixinxi/meee2/compare/v0.5.0...v0.6.1]]></description>
+            <pubDate>Thu, 09 Jul 2026 21:41:39 +0000</pubDate>
+            <sparkle:version>0.6.1</sparkle:version>
+            <sparkle:shortVersionString>0.6.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/tianqixinxi/meee2/releases/download/v0.6.1/meee2-v0.6.1.dmg"
+                sparkle:version="0.6.1"
+                sparkle:shortVersionString="0.6.1"
+                type="application/octet-stream"
+                sparkle:edSignature="ukxj6odkGYqPg47CIUiWVfXHiLasfC18Va877a+qm6fsXN/NSUXj9moceALoI/PV/5HiBwuRROQR1vL3rCgDCA=="
+                length="25191664" />
+        </item>
+
+        <item>
             <title>meee2 v0.5.0</title>
             <description><![CDATA[## What's Changed
 * [codex] Default production online URL to meee2.com by @rsgok in https://github.com/tianqixinxi/meee2/pull/46
