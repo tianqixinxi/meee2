@@ -1,6 +1,6 @@
 # meee2
 
-macOS menu bar app that monitors Claude Code (and other AI) sessions via a Dynamic Island overlay + web board + ncurses TUI + CLI.
+macOS menu bar app that monitors Claude Code (and other AI) sessions via a Dynamic Island overlay + web board + CLI.
 
 Deeper references: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (+ §6 for hook → state → UI flow and ESC handling), [`docs/SCHEMAS.md`](docs/SCHEMAS.md).
 
@@ -28,7 +28,7 @@ Hook flow:
 ```
 Claude CLI hook → Bridge/claude-hook-bridge.sh → /tmp/meee2.sock
                → HookSocketServer → ClaudePlugin → SessionStore
-               → StatusManager / BoardServer → Island / TUI / Web
+               → StatusManager / BoardServer → Island / CLI / Web
 ```
 
 Core runtime services (`Sources/Services/`) — the authoritative state layer:
@@ -37,14 +37,13 @@ Core runtime services (`Sources/Services/`) — the authoritative state layer:
 |---|---|
 | `SessionStore` | Single source of truth, `@Published`, persists to `~/.meee2/sessions/<sid>.json` |
 | `HookSocketServer` | `/tmp/meee2.sock` + pending permissions (`permissionTimeoutSeconds`) |
-| `TranscriptStatusResolver` | Canonical `SessionStatus` — Island / TUI / Board all read through this |
+| `TranscriptStatusResolver` | Canonical `SessionStatus` — Island / CLI / Board all read through this |
 | `MessageRouter` | A2A message store + per-session inbox queue |
 | `ChannelRegistry` | A2A channels |
 | `PluginManager` | Dynamic plugin loader (`~/.meee2/plugins/<id>/*.dylib`) |
 
 Surfaces:
 - **Island** — SwiftUI `IslandView`, menubar overlay
-- **TUI** — `meee2 dashboard`, ncurses
 - **CLI** — `meee2 list / send / jump / note / channel / msg / board / whoami`
 - **Web Board** — React + Vite @ `localhost:5002` (dev) or `localhost:9876` (served by `BoardServer`)
 
@@ -260,7 +259,7 @@ For UI changes, **hard-refresh** `localhost:5002` before evaluating (Vite HMR so
 
 - `.regular` activation policy — Dock icon + App Switcher; the Board window is the **primary surface** and opens automatically on launch. The menu bar item + Island are secondary accessories. Closing the Board window keeps the app alive (Dock icon stays); `applicationShouldHandleReopen` re-opens it via `openBoardMenu()`.
 - `HookSocketServer` holds the permission socket open until user responds or `permissionTimeoutSeconds` (default 300s) expires. Don't close early.
-- `meee2Kit` is imported by CLI/TUI/GUI — code in `Sources/` must not assume `NSApplication` is running.
+- `meee2Kit` is imported by CLI/GUI — code in `Sources/` must not assume `NSApplication` is running.
 - `DynamicIslandWindow`'s `NSHostingView` must have `sizingOptions = []` (prevents infinite constraint update loops).
 - Entitlements disable sandbox + library validation — required for plugin dylib loading. Document any new code path that executes user-provided code in [`SECURITY.md`](SECURITY.md).
 - **Ghostty tab jumping**: `focus (terminal id X)` per its sdef only raises the window, doesn't switch tab. Must walk `windows → tabs → terminals`, `select tab`, then `focus`. See `TerminalJumper.focusGhosttyTerminal`.

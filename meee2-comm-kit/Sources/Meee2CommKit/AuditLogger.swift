@@ -51,6 +51,27 @@ public struct AuditEvent: Codable, Sendable {
     }
 }
 
+/// Bounds the append-only audit trail without requiring callers to schedule
+/// maintenance. The logger compacts once on startup, periodically before
+/// appends, and whenever the next record would exceed the byte ceiling.
+public struct AuditRetentionPolicy: Sendable, Equatable {
+    public let maxAge: TimeInterval
+    public let maxBytes: Int
+    public let pruneInterval: TimeInterval
+
+    public init(
+        maxAge: TimeInterval = 30 * 24 * 60 * 60,
+        maxBytes: Int = 25 * 1_024 * 1_024,
+        pruneInterval: TimeInterval = 60 * 60
+    ) {
+        self.maxAge = max(0, maxAge)
+        self.maxBytes = max(1, maxBytes)
+        self.pruneInterval = max(0, pruneInterval)
+    }
+
+    public static let production = AuditRetentionPolicy()
+}
+
 /// AuditLogger - 把所有 A2A 消息状态转换写入 ~/.meee2/audit.log (append-only JSONL)。
 ///
 /// 契约：
@@ -58,11 +79,15 @@ public struct AuditEvent: Codable, Sendable {
 ///   - 一次调用 = 一行紧凑 JSON。
 ///   - 读取是 MVP：把整个文件读入内存再过滤。
 public final class AuditLogger {
-    public static let shared = AuditLogger()
+    public static let shared = AuditLogger(storage: .processDefault)
 
-    private let fileManager = FileManager.default
-    private let logPath: URL
+    private let fileManager: FileManager
+    public let logFileURL: URL
+    private let lockFileURL: URL
     private let queue = DispatchQueue(label: "com.meee2.audit", qos: .utility)
+    private let retentionPolicy: AuditRetentionPolicy
+    private let now: () -> Date
+    private var lastCompactionAt: Date?
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -76,18 +101,31 @@ public final class AuditLogger {
         return d
     }()
 
-    private init() {
-        let home = NSHomeDirectory()
-        let baseDir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
+    public init(
+        storage: CommKitStoragePaths,
+        fileManager: FileManager = .default,
+        retentionPolicy: AuditRetentionPolicy = .production,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.fileManager = fileManager
+        self.retentionPolicy = retentionPolicy
+        self.now = now
+        let baseDir = storage.baseDirectory
         try? fileManager.createDirectory(at: baseDir, withIntermediateDirectories: true)
-        logPath = baseDir.appendingPathComponent("audit.log")
-        commLog(.info, "[AuditLogger] log path: \(logPath.path)")
+        logFileURL = baseDir.appendingPathComponent("audit.log")
+        lockFileURL = baseDir.appendingPathComponent("audit.log.lock")
+        compactNow()
+        commLog(.info, "[AuditLogger] log path: \(logFileURL.path)")
     }
 
     /// 追加一条审计事件。线程安全；失败只 warn，不抛出。
     public func log(_ event: AuditEvent) {
         queue.sync {
             do {
+                let currentTime = now()
+                guard event.ts >= currentTime.addingTimeInterval(-retentionPolicy.maxAge) else {
+                    return
+                }
                 let data = try encoder.encode(event)
                 guard var line = String(data: data, encoding: .utf8) else {
                     commLog(.warning, "[AuditLogger] failed to stringify event for \(event.msgId)")
@@ -100,26 +138,27 @@ public final class AuditLogger {
                     commLog(.warning, "[AuditLogger] failed to encode utf8 for \(event.msgId)")
                     return
                 }
-
-                // 必须始终以 append 方式写。早期版本对"文件不存在"走
-                // `Data.write(to:options:.atomic)`：原子写本质是写到 .tmp 再
-                // rename 覆盖原文件——多个并发 logger（同进程多线程或 swift
-                // test --parallel 多进程）会先后 atomic-overwrite，先写的整
-                // 个被吞。退一步用 `FileManager.createFile` + `FileHandle` 也
-                // 不行：createFile 会截断已存在文件，仍是覆写竞态。
-                // 唯一可靠的是直接 POSIX open 带 O_CREAT|O_APPEND：内核
-                // 保证 append 写入是原子化追加（PIPE_BUF 以下，对 JSONL 单
-                // 行远小于此），多 writer 之间不会互相截断。
-                let fd = Darwin.open(logPath.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-                if fd < 0 {
-                    commLog(.warning, "[AuditLogger] open failed for \(logPath.path): errno=\(errno)")
+                guard bytes.count <= retentionPolicy.maxBytes else {
+                    commLog(.warning, "[AuditLogger] event \(event.msgId) exceeds retention byte limit")
                     return
                 }
-                defer { Darwin.close(fd) }
-                _ = bytes.withUnsafeBytes { buf -> Int in
-                    guard let base = buf.baseAddress else { return -1 }
-                    return Darwin.write(fd, base, buf.count)
+
+                let appended = withFileLock(operation: LOCK_EX) {
+                    let currentSize = self.fileSizeLocked()
+                    let pruneDue = self.lastCompactionAt.map {
+                        currentTime.timeIntervalSince($0) >= self.retentionPolicy.pruneInterval
+                    } ?? true
+                    if pruneDue || currentSize + bytes.count > self.retentionPolicy.maxBytes {
+                        guard self.compactLocked(at: currentTime, reservingBytes: bytes.count) else {
+                            return false
+                        }
+                    }
+                    return self.appendLocked(bytes)
+                } ?? false
+                if appended {
+                    return
                 }
+                commLog(.warning, "[AuditLogger] append failed for \(event.msgId)")
             } catch {
                 commLog(.warning, "[AuditLogger] write failed for \(event.msgId): \(error)")
             }
@@ -136,55 +175,216 @@ public final class AuditLogger {
         limit: Int = 200
     ) -> [AuditEvent] {
         queue.sync {
-            guard fileManager.fileExists(atPath: logPath.path) else { return [] }
-            guard let content = try? String(contentsOf: logPath, encoding: .utf8) else {
-                commLog(.warning, "[AuditLogger] failed to read \(logPath.path)")
-                return []
-            }
-
-            // 保留文件插入顺序作为稳定排序的 tiebreaker
-            var indexed: [(Int, AuditEvent)] = []
-            var idx = 0
-            for raw in content.split(separator: "\n", omittingEmptySubsequences: true) {
-                guard let d = raw.data(using: .utf8) else { continue }
-                if let ev = try? decoder.decode(AuditEvent.self, from: d) {
-                    indexed.append((idx, ev))
-                    idx += 1
+            withFileLock(operation: LOCK_SH) {
+                guard self.fileManager.fileExists(atPath: self.logFileURL.path) else { return [] }
+                guard let content = try? String(contentsOf: self.logFileURL, encoding: .utf8) else {
+                    commLog(.warning, "[AuditLogger] failed to read \(self.logFileURL.path)")
+                    return []
                 }
-                // 静默跳过格式错误的行 —— 避免审计 I/O 阻塞业务
-            }
 
-            // 过滤
-            var filtered = indexed.filter { _, ev in
-                if let channel = channel, ev.channel != channel { return false }
-                if let msgId = msgId, ev.msgId != msgId { return false }
-                if let actor = actor, ev.actor != actor { return false }
-                if let since = since, ev.ts < since { return false }
-                return true
-            }
+                // 保留文件插入顺序作为稳定排序的 tiebreaker
+                var indexed: [(Int, AuditEvent)] = []
+                var idx = 0
+                for raw in content.split(separator: "\n", omittingEmptySubsequences: true) {
+                    guard let d = raw.data(using: .utf8) else { continue }
+                    if let ev = try? self.decoder.decode(AuditEvent.self, from: d) {
+                        indexed.append((idx, ev))
+                        idx += 1
+                    }
+                    // 静默跳过格式错误的行 —— 避免审计 I/O 阻塞业务
+                }
 
-            // newest-first：先按时间降序，时间相同时保留文件倒序（后写入者更新）
-            filtered.sort { a, b in
-                if a.1.ts != b.1.ts { return a.1.ts > b.1.ts }
-                return a.0 > b.0
-            }
+                // 过滤
+                var filtered = indexed.filter { _, ev in
+                    if let channel = channel, ev.channel != channel { return false }
+                    if let msgId = msgId, ev.msgId != msgId { return false }
+                    if let actor = actor, ev.actor != actor { return false }
+                    if let since = since, ev.ts < since { return false }
+                    return true
+                }
 
-            var result = filtered.map { $0.1 }
-            if result.count > limit {
-                result = Array(result.prefix(limit))
+                // newest-first：先按时间降序，时间相同时保留文件倒序（后写入者更新）
+                filtered.sort { a, b in
+                    if a.1.ts != b.1.ts { return a.1.ts > b.1.ts }
+                    return a.0 > b.0
+                }
+
+                var result = filtered.map { $0.1 }
+                if result.count > limit {
+                    result = Array(result.prefix(limit))
+                }
+                return result
+            } ?? []
+        }
+    }
+
+    /// Force retention immediately. Compaction uses an atomic same-directory
+    /// replace while holding the same cross-process lock as all appenders.
+    public func compactNow() {
+        queue.sync {
+            let currentTime = now()
+            let compacted = withFileLock(operation: LOCK_EX) {
+                self.compactLocked(at: currentTime, reservingBytes: 0)
+            } ?? false
+            if !compacted {
+                commLog(.warning, "[AuditLogger] retention compaction failed")
             }
-            return result
+        }
+    }
+
+    /// Factory-reset hook. The lock file intentionally remains: unlinking a
+    /// flock inode could allow a racing process to acquire a different lock.
+    @discardableResult
+    public func resetForFactoryReset() -> Int64 {
+        queue.sync {
+            let result = withFileLock(operation: LOCK_EX) { () -> (removed: Bool, bytes: Int64) in
+                guard self.fileManager.fileExists(atPath: self.logFileURL.path) else {
+                    return (true, 0)
+                }
+                let removedBytes = Int64(self.fileSizeLocked())
+                do {
+                    try self.fileManager.removeItem(at: self.logFileURL)
+                    self.lastCompactionAt = self.now()
+                    return (true, removedBytes)
+                } catch {
+                    return (false, 0)
+                }
+            } ?? (removed: false, bytes: Int64(0))
+            if !result.removed {
+                commLog(.warning, "[AuditLogger] factory reset failed to remove audit log")
+            }
+            return result.bytes
         }
     }
 
     /// 返回审计日志文件的字节数（用于诊断）
     public func sizeBytes() -> Int {
         queue.sync {
-            guard fileManager.fileExists(atPath: logPath.path) else { return 0 }
-            guard let attrs = try? fileManager.attributesOfItem(atPath: logPath.path) else {
-                return 0
-            }
-            return (attrs[.size] as? Int) ?? 0
+            withFileLock(operation: LOCK_SH) {
+                self.fileSizeLocked()
+            } ?? 0
         }
+    }
+
+    private func compactLocked(at currentTime: Date, reservingBytes: Int) -> Bool {
+        guard fileManager.fileExists(atPath: logFileURL.path) else {
+            lastCompactionAt = currentTime
+            return true
+        }
+        guard let source = try? Data(contentsOf: logFileURL) else { return false }
+
+        let cutoff = currentTime.addingTimeInterval(-retentionPolicy.maxAge)
+        var retainedLines: [Data] = []
+        for rawLine in source.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            let line = Data(rawLine)
+            guard let event = try? decoder.decode(AuditEvent.self, from: line),
+                  event.ts >= cutoff else {
+                continue
+            }
+            retainedLines.append(line)
+        }
+
+        let availableBytes = max(0, retentionPolicy.maxBytes - reservingBytes)
+        var selectedNewestFirst: [Data] = []
+        var usedBytes = 0
+        for line in retainedLines.reversed() {
+            let lineBytes = line.count + 1
+            guard usedBytes + lineBytes <= availableBytes else { break }
+            selectedNewestFirst.append(line)
+            usedBytes += lineBytes
+        }
+
+        var compacted = Data(capacity: usedBytes)
+        for line in selectedNewestFirst.reversed() {
+            compacted.append(line)
+            compacted.append(0x0A)
+        }
+        if compacted == source {
+            lastCompactionAt = currentTime
+            return true
+        }
+        let replaced = atomicReplaceLocked(with: compacted)
+        if replaced { lastCompactionAt = currentTime }
+        return replaced
+    }
+
+    private func appendLocked(_ bytes: Data) -> Bool {
+        let fd = Darwin.open(logFileURL.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
+        guard fd >= 0 else { return false }
+        defer { Darwin.close(fd) }
+        _ = Darwin.fchmod(fd, 0o600)
+        let originalSize = Darwin.lseek(fd, 0, SEEK_END)
+        guard originalSize >= 0 else { return false }
+        guard writeAll(bytes, to: fd) else {
+            _ = Darwin.ftruncate(fd, originalSize)
+            return false
+        }
+        return true
+    }
+
+    private func atomicReplaceLocked(with data: Data) -> Bool {
+        let directory = logFileURL.deletingLastPathComponent()
+        let temporaryURL = directory.appendingPathComponent(
+            ".audit.log.compact.\(getpid()).\(UUID().uuidString)"
+        )
+        let fd = Darwin.open(temporaryURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { return false }
+        var succeeded = false
+        defer {
+            Darwin.close(fd)
+            if !succeeded { try? fileManager.removeItem(at: temporaryURL) }
+        }
+        guard writeAll(data, to: fd), Darwin.fsync(fd) == 0 else { return false }
+        guard Darwin.rename(temporaryURL.path, logFileURL.path) == 0 else { return false }
+        let directoryFD = Darwin.open(directory.path, O_RDONLY)
+        if directoryFD >= 0 {
+            _ = Darwin.fsync(directoryFD)
+            Darwin.close(directoryFD)
+        }
+        succeeded = true
+        return true
+    }
+
+    private func writeAll(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return true }
+            var written = 0
+            while written < rawBuffer.count {
+                let result = Darwin.write(
+                    fd,
+                    baseAddress.advanced(by: written),
+                    rawBuffer.count - written
+                )
+                if result > 0 {
+                    written += result
+                } else if result < 0, errno == EINTR {
+                    continue
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+
+    private func fileSizeLocked() -> Int {
+        guard let attrs = try? fileManager.attributesOfItem(atPath: logFileURL.path) else {
+            return 0
+        }
+        return (attrs[.size] as? NSNumber)?.intValue ?? 0
+    }
+
+    private func withFileLock<T>(operation: Int32, _ body: () -> T) -> T? {
+        let fd = Darwin.open(lockFileURL.path, O_RDWR | O_CREAT, 0o600)
+        guard fd >= 0 else { return nil }
+        defer { Darwin.close(fd) }
+        _ = Darwin.fchmod(fd, 0o600)
+        var result: Int32
+        repeat {
+            result = flock(fd, operation)
+        } while result != 0 && errno == EINTR
+        guard result == 0 else { return nil }
+        defer { _ = flock(fd, LOCK_UN) }
+        return body()
     }
 }

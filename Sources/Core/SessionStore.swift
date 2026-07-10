@@ -28,11 +28,15 @@ public struct SessionData: Codable, Identifiable {
 
     /// 当前磁盘格式版本。新增迁移时 +1，永不回退。
     /// 早于 schemaVersion 引入的旧文件解码为 0，由 SessionStore 加载时自动迁移。
-    public static let currentSchemaVersion: Int = 2
+    public static let currentSchemaVersion: Int = 3
 
     /// 本条记录对应的 schema 版本。新建记录默认为 currentSchemaVersion；
     /// 磁盘上的旧文件会带着解码出的版本号进入内存，迁移完成后覆写。
     public var schemaVersion: Int = SessionData.currentSchemaVersion
+
+    /// Monotonic compare-and-swap revision used by the daemon and offline CLI
+    /// so stale processes cannot overwrite newer session state.
+    public var revision: UInt64 = 0
 
     // MARK: - 基本信息
 
@@ -136,6 +140,7 @@ public struct SessionData: Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
+        case revision
         case sessionId = "session_id"
         case project
         case cwd
@@ -166,6 +171,7 @@ public struct SessionData: Codable, Identifiable {
 
         // Schema 版本：缺失视为 0（pre-versioned 旧文件），由 SessionStore.loadFromDisk 负责迁移到当前版本
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+        revision = try container.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
 
         sessionId = try container.decode(String.self, forKey: .sessionId)
         project = try container.decode(String.self, forKey: .project)
@@ -209,6 +215,7 @@ public struct SessionData: Codable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
         try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(revision, forKey: .revision)
         try container.encode(sessionId, forKey: .sessionId)
         try container.encode(project, forKey: .project)
         try container.encodeIfPresent(cwd, forKey: .cwd)
@@ -259,6 +266,7 @@ public struct SessionData: Codable, Identifiable {
             lastMessage: lastMessage
         )
         copy.schemaVersion = schemaVersion
+        copy.revision = 0
         copy.pendingPermissionTool = pendingPermissionTool
         copy.pendingPermissionMessage = pendingPermissionMessage
         return copy
@@ -286,7 +294,9 @@ public struct UnreadNotification: Codable {
 /// 数据存储在 ~/.meee2/sessions/ 目录
 /// 作为单一数据源，GUI 和 CLI/TUI 都从这里读取
 public class SessionStore: ObservableObject {
-    public static let shared = SessionStore()
+    public static let shared = SessionStore(
+        baseDirectory: StorageRoots.processDefault.baseDirectory
+    )
 
     // MARK: - 实时数据源 (订阅者自动更新)
 
@@ -295,8 +305,9 @@ public class SessionStore: ObservableObject {
 
     // MARK: - 目录
 
-    private let fileManager = FileManager.default
-    private let baseDir: URL
+    private let fileManager: FileManager
+    private let repository: SessionRepository
+    public let baseDirectory: URL
     private let sessionsDir: URL
     private let queuesDir: URL
     private let unreadDir: URL
@@ -304,12 +315,17 @@ public class SessionStore: ObservableObject {
 
     // MARK: - 初始化
 
-    private init() {
-        let home = NSHomeDirectory()
-        baseDir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        sessionsDir = baseDir.appendingPathComponent("sessions")
-        queuesDir = baseDir.appendingPathComponent("queues")
-        unreadDir = baseDir.appendingPathComponent("unread")
+    public init(
+        baseDirectory: URL = StorageRoots.processDefault.baseDirectory,
+        fileManager: FileManager = .default
+    ) {
+        let base = baseDirectory.standardizedFileURL
+        self.baseDirectory = base
+        self.fileManager = fileManager
+        repository = SessionRepository(baseDirectory: base, fileManager: fileManager)
+        sessionsDir = base.appendingPathComponent("sessions", isDirectory: true)
+        queuesDir = base.appendingPathComponent("queues", isDirectory: true)
+        unreadDir = base.appendingPathComponent("unread", isDirectory: true)
 
         // 确保目录存在
         try? fileManager.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
@@ -322,20 +338,29 @@ public class SessionStore: ObservableObject {
 
     /// 从磁盘加载所有会话到内存
     private func loadAllSessions() {
-        sessions = listAllFromDisk()
+        sessions = waitForSessionRepository { [repository] in
+            await repository.loadAll()
+        }
     }
 
     // MARK: - CRUD (内存 + 持久化)
 
     /// 创建会话 (自动更新 @Published sessions)
     public func create(_ session: SessionData) {
-        let existed = sessions.contains(where: { $0.sessionId == session.sessionId })
-        saveToDisk(session)
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.create(session) }
+            return
+        }
+        let existing = sessions.first(where: { $0.sessionId == session.sessionId })
+        let existed = existing != nil
+        var candidate = session
+        if let existing { candidate.revision = existing.revision }
+        guard let persisted = saveToDisk(candidate, rebasingFrom: existing) else { return }
         // 更新内存
         if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
-            sessions[idx] = session
+            sessions[idx] = persisted
         } else {
-            sessions.append(session)
+            sessions.append(persisted)
         }
         SessionEventBus.shared.publish(existed ? .sessionMetadataChanged(sessionId: session.sessionId) : .sessionAdded(sessionId: session.sessionId))
         MLog("[SessionStore] Created session: \(session.sessionId.prefix(8))")
@@ -343,11 +368,18 @@ public class SessionStore: ObservableObject {
 
     /// 获取会话
     public func get(_ sessionId: String) -> SessionData? {
-        sessions.first { $0.sessionId == sessionId }
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.get(sessionId) }
+        }
+        return sessions.first { $0.sessionId == sessionId }
     }
 
     /// 更新会话 (自动更新 @Published sessions)
     public func update(_ sessionId: String, _ changes: (inout SessionData) -> Void) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.update(sessionId, changes) }
+            return
+        }
         update(sessionId, touchLastActivity: true, changes)
     }
 
@@ -362,12 +394,21 @@ public class SessionStore: ObservableObject {
         if touchLastActivity && updated.lastActivity == previous.lastActivity {
             updated.lastActivity = Date()
         }
-        sessions[idx] = updated
-        saveToDisk(updated)
+        guard let persisted = saveToDisk(updated, rebasingFrom: previous) else { return }
+        sessions[idx] = persisted
         SessionEventBus.shared.publish(.sessionMetadataChanged(sessionId: sessionId))
     }
 
     public func setProviderResumeSessionId(sessionId: String, providerResumeSessionId: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync {
+                self.setProviderResumeSessionId(
+                    sessionId: sessionId,
+                    providerResumeSessionId: providerResumeSessionId
+                )
+            }
+            return
+        }
         let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) else { return }
         update(sessionId, touchLastActivity: false) { session in
@@ -377,8 +418,13 @@ public class SessionStore: ObservableObject {
 
     /// 删除会话 (自动更新 @Published sessions)
     public func delete(_ sessionId: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.delete(sessionId) }
+            return
+        }
+        guard let existing = sessions.first(where: { $0.sessionId == sessionId }) else { return }
+        guard deleteFromDisk(sessionId, expectedRevision: existing.revision) else { return }
         sessions.removeAll { $0.sessionId == sessionId }
-        deleteFromDisk(sessionId)
 
         // 同时删除队列和未读标记
         clearQueue(sessionId)
@@ -394,6 +440,9 @@ public class SessionStore: ObservableObject {
     /// 用于 Claude `--resume` 或 provider metadata 暴露出更准确 session id 的情况。
     @discardableResult
     public func rekeySession(_ oldSessionId: String, to newSessionId: String) -> Bool {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.rekeySession(oldSessionId, to: newSessionId) }
+        }
         guard oldSessionId != newSessionId else {
             return exists(oldSessionId)
         }
@@ -402,14 +451,18 @@ public class SessionStore: ObservableObject {
         }
 
         let existingTarget = sessions.first(where: { $0.sessionId == newSessionId })
-        let recovered = existingTarget
+        var recovered = existingTarget
             .map { Self.mergeContinuity(from: oldSession, into: $0) }
             ?? oldSession.withSessionId(newSessionId)
+        if existingTarget == nil { recovered.revision = 0 }
 
+        guard let persisted = saveToDisk(recovered, rebasingFrom: existingTarget) else { return false }
         sessions.removeAll { $0.sessionId == oldSessionId || $0.sessionId == newSessionId }
-        sessions.append(recovered)
-        saveToDisk(recovered)
-        deleteFromDisk(oldSessionId)
+        sessions.append(persisted)
+        guard deleteFromDisk(oldSessionId, expectedRevision: oldSession.revision) else {
+            MLog("[SessionStore] Rekey retained stale source \(oldSessionId.prefix(8)); target is durable", level: .warning)
+            return false
+        }
         moveContinuitySidecars(from: oldSessionId, to: newSessionId)
 
         SessionEventBus.shared.publish(.sessionRemoved(sessionId: oldSessionId))
@@ -423,9 +476,14 @@ public class SessionStore: ObservableObject {
     /// 此时 ghosttyTerminalId / terminalInfo 常为 nil/空。若 store 里已有有效值，
     /// 保留旧值——这些是"累积发现"的元数据，不能被后续事件无意清零。
     public func upsert(_ session: SessionData) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.upsert(session) }
+            return
+        }
         var merged = session
         let existing = sessions.first(where: { $0.sessionId == session.sessionId })
         if let ex = existing {
+            merged.revision = ex.revision
             // 全 cwd：hook event 不一定每次都带，merge 时也要 sticky
             if (merged.cwd ?? "").isEmpty,
                let prev = ex.cwd, !prev.isEmpty {
@@ -448,6 +506,11 @@ public class SessionStore: ObservableObject {
             if (merged.providerResumeSessionId ?? "").isEmpty,
                let prev = ex.providerResumeSessionId, !prev.isEmpty {
                 merged.providerResumeSessionId = prev
+            }
+            // Notes are user-authored metadata. Provider snapshots do not own
+            // an absent description and must not erase an offline CLI note.
+            if merged.description == nil {
+                merged.description = ex.description
             }
             // terminalInfo：若 incoming 完全没有 tty/termProgram/cmuxSocket 就沿用旧的
             let ti = merged.terminalInfo
@@ -478,12 +541,12 @@ public class SessionStore: ObservableObject {
            !hasSessionChanged(existing, merged, allowLastActivityOnly: false) {
             return
         }
+        guard let persisted = saveToDisk(merged, rebasingFrom: existing) else { return }
         if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
-            sessions[idx] = merged
+            sessions[idx] = persisted
         } else {
-            sessions.append(merged)
+            sessions.append(persisted)
         }
-        saveToDisk(merged)
         SessionEventBus.shared.publish(existed ? .sessionMetadataChanged(sessionId: session.sessionId) : .sessionAdded(sessionId: session.sessionId))
     }
 
@@ -494,22 +557,35 @@ public class SessionStore: ObservableObject {
 
     /// 检查会话是否存在
     public func exists(_ sessionId: String) -> Bool {
-        sessions.contains { $0.sessionId == sessionId }
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.exists(sessionId) }
+        }
+        return sessions.contains { $0.sessionId == sessionId }
     }
 
     /// 列出所有会话 (从内存读取，按启动时间降序)
     public func listAll() -> [SessionData] {
-        sessions.sorted { $0.startedAt > $1.startedAt }
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.listAll() }
+        }
+        return sessions.sorted { $0.startedAt > $1.startedAt }
     }
 
     /// 列出活跃会话（非 dead 和 completed，按启动时间降序）
     public func listActive() -> [SessionData] {
-        sessions.filter { $0.status != .dead && $0.status != .completed }
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.listActive() }
+        }
+        return sessions.filter { $0.status != .dead && $0.status != .completed }
             .sorted { $0.startedAt > $1.startedAt }
     }
 
     /// 从磁盘重新加载所有会话 (用于 CLI/TUI 同步 GUI 的更新)
     public func reloadFromDisk() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.reloadFromDisk() }
+            return
+        }
         let newSessions = listAllFromDisk()
         sessions = newSessions
     }
@@ -523,6 +599,10 @@ public class SessionStore: ObservableObject {
     /// 注意：这只清内存——磁盘删除责任在调用方。每条 session 单独发
     /// `.sessionRemoved` 事件以触发现有订阅链路（BoardServer 等）。
     public func clearAllInMemory() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.clearAllInMemory() }
+            return
+        }
         let removedIds = sessions.map { $0.sessionId }
         sessions = []
         for sid in removedIds {
@@ -537,15 +617,22 @@ public class SessionStore: ObservableObject {
 
     /// 设置未读通知
     public func setUnread(_ sessionId: String, type: String, message: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.setUnread(sessionId, type: type, message: message) }
+            return
+        }
         let path = unreadDir.appendingPathComponent(sessionId)
         let notification = UnreadNotification(type: type, message: message)
 
         guard let data = try? JSONEncoder().encode(notification) else { return }
-        try? data.write(to: path)
+        try? data.write(to: path, options: .atomic)
     }
 
     /// 获取未读通知
     public func getUnread(_ sessionId: String) -> UnreadNotification? {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.getUnread(sessionId) }
+        }
         let path = unreadDir.appendingPathComponent(sessionId)
         guard let data = try? Data(contentsOf: path) else { return nil }
         return try? JSONDecoder().decode(UnreadNotification.self, from: data)
@@ -553,6 +640,10 @@ public class SessionStore: ObservableObject {
 
     /// 清除未读通知
     public func clearUnread(_ sessionId: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.clearUnread(sessionId) }
+            return
+        }
         let path = unreadDir.appendingPathComponent(sessionId)
         try? fileManager.removeItem(at: path)
     }
@@ -561,6 +652,9 @@ public class SessionStore: ObservableObject {
 
     /// 入队消息
     public func enqueue(_ sessionId: String, message: String) -> Int {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.enqueue(sessionId, message: message) }
+        }
         let path = queuePath(sessionId)
 
         // 追加消息
@@ -580,6 +674,9 @@ public class SessionStore: ObservableObject {
 
     /// 出队消息
     public func dequeue(_ sessionId: String) -> String? {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.dequeue(sessionId) }
+        }
         let path = queuePath(sessionId)
         guard fileManager.fileExists(atPath: path.path) else { return nil }
 
@@ -603,6 +700,9 @@ public class SessionStore: ObservableObject {
 
     /// 队列长度
     public func queueLength(_ sessionId: String) -> Int {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.queueLength(sessionId) }
+        }
         let path = queuePath(sessionId)
         guard fileManager.fileExists(atPath: path.path) else { return 0 }
         guard let content = try? String(contentsOf: path, encoding: .utf8) else { return 0 }
@@ -611,6 +711,10 @@ public class SessionStore: ObservableObject {
 
     /// 清空队列
     public func clearQueue(_ sessionId: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.clearQueue(sessionId) }
+            return
+        }
         let path = queuePath(sessionId)
         try? fileManager.removeItem(at: path)
     }
@@ -691,48 +795,96 @@ public class SessionStore: ObservableObject {
         }
     }
 
-    private func loadFromDisk(_ path: URL) -> SessionData? {
-        guard let data = try? Data(contentsOf: path) else { return nil }
-        guard var session = try? JSONDecoder().decode(SessionData.self, from: data) else { return nil }
-
-        // 旧版本自动迁移：只在真正需要时触发，迁移完成后立刻覆写磁盘
-        if session.schemaVersion < SessionData.currentSchemaVersion {
-            let from = session.schemaVersion
-            session = SessionDataMigrations.apply(to: session, from: from)
-            MLog("[SessionStore] Migrated \(session.sessionId.prefix(8)) schema v\(from) → v\(SessionData.currentSchemaVersion)")
-            saveToDisk(session)
-        }
-        return session
-    }
-
     private func listAllFromDisk() -> [SessionData] {
-        guard let files = try? fileManager.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: nil) else {
-            return []
+        waitForSessionRepository { [repository] in
+            await repository.loadAll()
         }
-
-        return files
-            .filter { $0.pathExtension == "json" }
-            .compactMap { loadFromDisk($0) }
-            .sorted { $0.lastActivity > $1.lastActivity }
     }
 
-    private func saveToDisk(_ session: SessionData) {
+    @discardableResult
+    private func saveToDisk(_ session: SessionData, rebasingFrom baseline: SessionData?) -> SessionData? {
         let started = Date()
-        let path = sessionPath(session.sessionId)
+        let originalCandidate = session
+        var candidate = session
 
-        // 原子写入：先写临时文件，再重命名
-        let tmpPath = path.appendingPathExtension("tmp.\(ProcessInfo.processInfo.processIdentifier)")
+        // Cross-process writers can advance the revision between GUI events.
+        // Rebase the original field delta onto the authoritative disk record
+        // and retry a bounded number of times instead of leaving memory stale
+        // until restart. A future schema still loads as nil and stays read-only.
+        for attempt in 0..<3 {
+            if let persisted = waitForSessionRepository({ [repository] in
+                await repository.save(candidate)
+            }) {
+                let bytes = (try? JSONEncoder().encode(persisted).count) ?? 0
+                perfLog(
+                    "saveToDisk",
+                    started: started,
+                    extra: "sid=\(session.sessionId.prefix(8)),bytes=\(bytes),attempt=\(attempt + 1)"
+                )
+                return persisted
+            }
 
-        guard let data = try? JSONEncoder().encode(session) else { return }
+            guard let baseline,
+                  baseline.sessionId == session.sessionId,
+                  let latest = waitForSessionRepository({ [repository] in
+                      await repository.load(sessionId: session.sessionId)
+                  }),
+                  latest.revision != candidate.revision else {
+                return nil
+            }
 
-        do {
-            try data.write(to: tmpPath)
-            try? fileManager.removeItem(at: path)  // 删除旧文件
-            try fileManager.moveItem(at: tmpPath, to: path)
-            perfLog("saveToDisk", started: started, extra: "sid=\(session.sessionId.prefix(8)),bytes=\(data.count)")
-        } catch {
-            MLog("[SessionStore] Failed to save session: \(error)")
+            candidate = rebaseSessionChanges(originalCandidate, from: baseline, onto: latest)
+            candidate.revision = latest.revision
+            if !hasSessionChanged(latest, candidate, allowLastActivityOnly: true) {
+                return latest
+            }
+            MLog(
+                "[SessionStore] Rebasing stale session \(session.sessionId.prefix(8)) "
+                    + "onto r\(latest.revision) (attempt \(attempt + 2)/3)",
+                level: .warning
+            )
         }
+        return nil
+    }
+
+    private func rebaseSessionChanges(
+        _ candidate: SessionData,
+        from baseline: SessionData,
+        onto latest: SessionData
+    ) -> SessionData {
+        var rebased = latest
+        if candidate.schemaVersion != baseline.schemaVersion { rebased.schemaVersion = candidate.schemaVersion }
+        if candidate.project != baseline.project { rebased.project = candidate.project }
+        if candidate.cwd != baseline.cwd { rebased.cwd = candidate.cwd }
+        if candidate.pid != baseline.pid { rebased.pid = candidate.pid }
+        if candidate.ghosttyTerminalId != baseline.ghosttyTerminalId {
+            rebased.ghosttyTerminalId = candidate.ghosttyTerminalId
+        }
+        if candidate.iTermSessionId != baseline.iTermSessionId { rebased.iTermSessionId = candidate.iTermSessionId }
+        if candidate.appleTerminalSessionId != baseline.appleTerminalSessionId {
+            rebased.appleTerminalSessionId = candidate.appleTerminalSessionId
+        }
+        if candidate.transcriptPath != baseline.transcriptPath { rebased.transcriptPath = candidate.transcriptPath }
+        if candidate.providerResumeSessionId != baseline.providerResumeSessionId {
+            rebased.providerResumeSessionId = candidate.providerResumeSessionId
+        }
+        if candidate.startedAt != baseline.startedAt { rebased.startedAt = candidate.startedAt }
+        if candidate.lastActivity != baseline.lastActivity { rebased.lastActivity = candidate.lastActivity }
+        if candidate.status != baseline.status { rebased.status = candidate.status }
+        if candidate.currentTool != baseline.currentTool { rebased.currentTool = candidate.currentTool }
+        if candidate.description != baseline.description { rebased.description = candidate.description }
+        if candidate.tasks != baseline.tasks { rebased.tasks = candidate.tasks }
+        if candidate.currentTask != baseline.currentTask { rebased.currentTask = candidate.currentTask }
+        if candidate.terminalInfo != baseline.terminalInfo { rebased.terminalInfo = candidate.terminalInfo }
+        if candidate.usageStats != baseline.usageStats { rebased.usageStats = candidate.usageStats }
+        if candidate.lastMessage != baseline.lastMessage { rebased.lastMessage = candidate.lastMessage }
+        if candidate.pendingPermissionTool != baseline.pendingPermissionTool {
+            rebased.pendingPermissionTool = candidate.pendingPermissionTool
+        }
+        if candidate.pendingPermissionMessage != baseline.pendingPermissionMessage {
+            rebased.pendingPermissionMessage = candidate.pendingPermissionMessage
+        }
+        return rebased
     }
 
     private func hasSessionChanged(
@@ -771,9 +923,10 @@ public class SessionStore: ObservableObject {
         MLog(String(format: "[Perf][SessionStore] %@ %.1fms%@", name, ms, suffix))
     }
 
-    private func deleteFromDisk(_ sessionId: String) {
-        let path = sessionPath(sessionId)
-        try? fileManager.removeItem(at: path)
+    private func deleteFromDisk(_ sessionId: String, expectedRevision: UInt64) -> Bool {
+        waitForSessionRepository { [repository] in
+            await repository.delete(sessionId: sessionId, expectedRevision: expectedRevision)
+        }
     }
 }
 
@@ -810,6 +963,10 @@ enum SessionDataMigrations {
         case 1:
             // v1 → v2：新增 `provider_resume_session_id` 长期恢复锚点。
             // 旧记录没有这个字段；后续由 terminal store 或 Codex jsonl backfill 补齐。
+            return s
+        case 2:
+            // v2 → v3：新增跨进程 revision CAS。旧记录从 revision 0 开始，
+            // 首次迁移持久化后由 SessionRepository 提升到 revision 1。
             return s
         default:
             return s

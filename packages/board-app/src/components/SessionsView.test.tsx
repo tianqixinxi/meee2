@@ -218,4 +218,55 @@ describe('SessionsView terminal core', () => {
     expect(rail).toHaveTextContent('Same native surface')
     expect(rail).not.toHaveTextContent('Transient alias row')
   })
+
+  it('groups actionable sessions and keeps ended or 25-day-old sessions in History', async () => {
+    const attention = makeSession({
+      id: 'session-attention',
+      title: 'Needs approval',
+      status: 'permissionRequired',
+      pendingPermissionTool: 'Bash',
+      surfaceId: 'surface-attention',
+      lastActivity: new Date().toISOString(),
+    })
+    const active = makeSession({
+      id: 'session-active',
+      title: 'Building now',
+      surfaceId: 'surface-active',
+      lastActivity: new Date().toISOString(),
+    })
+    const recent = makeSession({
+      id: 'session-recent',
+      title: 'Recently completed',
+      status: 'completed',
+      surfaceId: 'surface-recent',
+      surfaceStatus: 'running',
+      lastActivity: new Date(Date.now() - 60_000).toISOString(),
+    })
+    const historical = makeSession({
+      id: 'session-history',
+      title: 'Ended session',
+      status: 'dead',
+      surfaceId: 'surface-history',
+      surfaceStatus: 'exited',
+      lastActivity: new Date(Date.now() - 26 * 24 * 60 * 60 * 1000).toISOString(),
+    })
+
+    renderWithI18n(
+      <SessionsView
+        state={makeState([attention, active, recent, historical])}
+        unreadSids={new Set()}
+      />,
+    )
+
+    await screen.findByText('Needs approval')
+    const rail = internalRail()
+    expect(rail).toHaveTextContent('Needs attention')
+    expect(rail).toHaveTextContent('Active now')
+    expect(rail).toHaveTextContent('Recent')
+    expect(rail).not.toHaveTextContent('Ended session')
+
+    fireEvent.click(screen.getByRole('button', { name: /History/ }))
+    await screen.findByText('Ended session')
+    expect(internalRail()).not.toHaveTextContent('Building now')
+  })
 })

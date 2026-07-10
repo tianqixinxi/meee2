@@ -59,8 +59,10 @@ final class ReadinessDoctorTests: XCTestCase {
 
         XCTAssertEqual(byId["provider.codex"]?.status, .pass)
         XCTAssertEqual(byId["provider.codex"]?.severity, .required)
-        XCTAssertEqual(byId["provider.claude"]?.status, .info)
+        XCTAssertEqual(byId["provider.claude"]?.status, .warn)
         XCTAssertEqual(byId["provider.claude"]?.severity, .recommended)
+        XCTAssertEqual(byId["provider.claude"]?.message, byId["provider.claude"]?.detail)
+        XCTAssertEqual(byId["provider.claude"]?.settingsSection, "runtime")
     }
 
     private func runtimeStatus(

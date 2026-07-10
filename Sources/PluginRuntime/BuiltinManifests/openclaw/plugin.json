@@ -1,0 +1,7 @@
+{
+  "id": "com.meee2.plugin.openclaw",
+  "name": "OpenClaw",
+  "version": "0.2.0",
+  "dylib": "OpenClawPlugin.dylib",
+  "abi_version": 2
+}

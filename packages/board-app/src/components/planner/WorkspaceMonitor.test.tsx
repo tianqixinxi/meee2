@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../lib/i18n'
 import { WorkspaceMonitor } from './WorkspaceMonitor'
@@ -28,6 +28,7 @@ const canvas = {
 
 describe('WorkspaceMonitor comfortable view', () => {
   beforeEach(() => {
+    apiMocks.fetchPlannerWorkspaceMonitor.mockReset()
     apiMocks.fetchPlannerWorkspaceMonitor.mockResolvedValue({
       generatedAt: '2026-05-31T05:00:00.000Z',
       items: [{
@@ -122,5 +123,39 @@ describe('WorkspaceMonitor comfortable view', () => {
 
     await screen.findByText('Research launch sentiment')
     expect(screen.queryByRole('button', { name: /Meee2 AI/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps the last successful monitor visible and exposes retry after a request fails', async () => {
+    const { rerender } = render(
+      <I18nProvider>
+        <WorkspaceMonitor
+          activeCanvasId="canvas-1"
+          canvases={[canvas]}
+          refreshTick={0}
+          onOpenItem={vi.fn()}
+          onOpenAllSessions={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+    expect(await screen.findByText('Research launch sentiment')).toBeInTheDocument()
+
+    apiMocks.fetchPlannerWorkspaceMonitor.mockRejectedValueOnce(new Error('Monitor is offline'))
+    rerender(
+      <I18nProvider>
+        <WorkspaceMonitor
+          activeCanvasId="canvas-1"
+          canvases={[canvas]}
+          refreshTick={1}
+          onOpenItem={vi.fn()}
+          onOpenAllSessions={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Monitor is offline')
+    expect(screen.getByText('Research launch sentiment')).toBeInTheDocument()
+    apiMocks.fetchPlannerWorkspaceMonitor.mockResolvedValueOnce({ generatedAt: 'later', items: [] })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(apiMocks.fetchPlannerWorkspaceMonitor).toHaveBeenCalledTimes(3))
   })
 })

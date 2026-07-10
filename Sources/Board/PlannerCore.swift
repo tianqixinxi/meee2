@@ -571,11 +571,11 @@ enum PlannerDispatchRunner: String, Codable, Equatable {
     var spawnCommand: String? {
         switch self {
         case .claude:
-            return AgentLaunchCommand.fullAccessCommand(forProvider: "claude")
+            return AgentLaunchCommand.defaultCommand(forProvider: "claude")
         case .codex:
-            return AgentLaunchCommand.fullAccessCommand(forProvider: "codex")
+            return AgentLaunchCommand.defaultCommand(forProvider: "codex")
         case .byoaLocal:
-            return AgentLaunchCommand.fullAccessCommand(forProvider: "claude")
+            return AgentLaunchCommand.defaultCommand(forProvider: "claude")
         case .ciAgent, .human:
             return nil
         }
@@ -2963,15 +2963,9 @@ enum PlannerPermission {
     /// 最小的选择 —— 人没换，重新登录拿回的还是同一个 userId；身份只在
     /// 显式断开（disconnect 清空 settings.json）时清除。
     static func currentActorId() -> String? {
-        let defaults = UserDefaults.standard
-        let onlineSettings = OnlineProxy.loadSettings()
-        let connected = defaults.bool(forKey: "meee2Connected")
-            || (!onlineSettings.teamId.isEmpty && !onlineSettings.userId.isEmpty)
-        guard connected else { return nil }
-        let defaultsActorId = OnlineProxy.hasEnvironmentOverride ? "" : defaults.string(forKey: "meee2UserId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let actorId = defaultsActorId.isEmpty ? onlineSettings.userId : defaultsActorId
-        return actorId.isEmpty ? nil : actorId
+        let identity = OnlineProxy.loadIdentityMetadata()
+        guard identity.connected else { return nil }
+        return identity.userId.isEmpty ? nil : identity.userId
     }
 
     static func access(
@@ -4156,8 +4150,7 @@ final class PlannerStore {
     }
 
     static let shared = PlannerStore(
-        fileURL: URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        fileURL: StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("planner", isDirectory: true)
     )
 

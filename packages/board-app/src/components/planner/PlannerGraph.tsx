@@ -115,6 +115,7 @@ import { TransformInsertEdge } from './TransformInsertEdge'
 import { buildPlannerGraph, sessionMatchesBoundId, type IOArtifactDirection, type IOArtifactVisibility, type NodeLiveProgress, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
 import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
+import '@xyflow/react/dist/style.css'
 
 interface Props {
   canvasId: string
@@ -380,6 +381,7 @@ function PlannerGraphInner({
   const [assignDialogNodeId, setAssignDialogNodeId] = useState<string | null>(null)
   const [assignBusy, setAssignBusy] = useState(false)
   const [assignError, setAssignError] = useState<string | null>(null)
+  const loadGenerationRef = useRef(0)
 
   useEffect(() => {
     if (!plannerState) {
@@ -394,19 +396,29 @@ function PlannerGraphInner({
   }, [onPlannerStateChange, plannerState])
 
   const loadState = useCallback(() => {
+    const generation = ++loadGenerationRef.current
     setBusy(true)
     setError(null)
     fetchPlannerGraphState(canvasId)
       .then((state) => {
+        if (generation !== loadGenerationRef.current) return
         setPlannerState(state)
         setProposal(state.proposals.find((item) => item.status === 'pending' || item.status === 'approved') ?? null)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to load Meee2 AI state'))
-      .finally(() => setBusy(false))
+      .catch((err) => {
+        if (generation !== loadGenerationRef.current) return
+        setError((err as Error).message || 'Failed to load Meee2 AI state')
+      })
+      .finally(() => {
+        if (generation === loadGenerationRef.current) setBusy(false)
+      })
   }, [canvasId])
 
   useEffect(() => {
     loadState()
+    return () => {
+      loadGenerationRef.current += 1
+    }
   }, [loadState])
 
   // U5.1 — auto-refresh on notification.
@@ -2508,6 +2520,13 @@ function PlannerGraphInner({
               <PlannerOverviewMap nodes={flowNodes} edges={graph.edges} />
               <Controls className="planner-flow__controls" />
             </ReactFlow>
+          ) : error ? (
+            <div className="planner-canvas-error" role="alert">
+              <AlertTriangle size={20} aria-hidden />
+              <strong>Canvas could not be loaded</strong>
+              <span>{error}</span>
+              <button type="button" className="ghost" onClick={loadState}>Retry</button>
+            </div>
           ) : (
             <PlannerCanvasSkeleton canvasName={canvasName} />
           )}
@@ -2591,7 +2610,8 @@ function PlannerGraphInner({
 
 function readStoredPanelCollapsed(): boolean {
   if (typeof window === 'undefined') return false
-  return window.localStorage.getItem(PANEL_COLLAPSED_KEY) === '1'
+  const stored = window.localStorage.getItem(PANEL_COLLAPSED_KEY)
+  return stored == null ? true : stored === '1'
 }
 
 function readStoredPanelWidth(): number {

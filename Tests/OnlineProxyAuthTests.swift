@@ -6,15 +6,16 @@ import XCTest
 /// 1. refresh 无 single-flight —— access token 过期瞬间多个并发请求各自带
 ///    同一个 refresh token 调 /api/v1/connect/refresh，Supabase 轮换 +
 ///    reuse-detection 吊销整个 token family，所有副本全部 AUTH_INVALID。
-/// 2. 凭证存储三处分裂（settings.json / com.meee2.app / meee2 偏好域）——
+/// 2. 凭证存储三处分裂（Keychain / settings.json / 偏好域）——
 ///    重新登录后另一形态的二进制仍从自己的偏好域读旧 token。
 ///
-/// 约定：token 唯一真相 = ~/.meee2/settings.json；偏好域绝不存 token；
-/// refresh 401 → 清凭证 + authExpired 显式重新登录态。
+/// 约定：token 唯一真相 = Keychain；settings.json 只存非秘密元数据；
+/// refresh 401 → 清 Keychain + authExpired 显式重新登录态。
 final class OnlineProxyAuthTests: XCTestCase {
     private var tempDir: URL!
     private var settingsFile: URL!
     private var testDefaults: UserDefaults!
+    private var testCredentialStore: TestCredentialStore!
     // suite 名必须每个用例唯一：UserDefaults suite 是跨进程持久域,CI 的
     // --parallel 多进程并发跑本类时,固定名会被别的用例 setUp 里的
     // removePersistentDomain 中途擦掉
@@ -29,26 +30,50 @@ final class OnlineProxyAuthTests: XCTestCase {
         settingsFile = tempDir.appendingPathComponent("settings.json")
         testDefaults = UserDefaults(suiteName: suiteName)
         testDefaults.removePersistentDomain(forName: suiteName)
+        testCredentialStore = TestCredentialStore()
 
         OnlineProxy.settingsFileURLOverride = settingsFile
         OnlineProxy.userDefaultsOverride = testDefaults
+        OnlineProxy.credentialStoreOverride = testCredentialStore
         OnlineProxy.resetRefreshStateForTesting()
     }
 
     override func tearDown() {
         OnlineProxy.settingsFileURLOverride = nil
         OnlineProxy.userDefaultsOverride = nil
+        OnlineProxy.credentialStoreOverride = nil
         OnlineProxy.refreshTransportOverride = nil
+        OnlineProxy.settingsFileWriteOverride = nil
         OnlineProxy.resetRefreshStateForTesting()
         testDefaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: tempDir)
         super.tearDown()
     }
 
-    private func writeSettingsFile(_ meee2: [String: Any]) {
-        let root: [String: Any] = ["meee2": meee2]
-        let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try! data.write(to: settingsFile, options: .atomic)
+    /// Normal modern writer: token values in the fixture are routed directly
+    /// to the in-memory Keychain replacement and stripped from settings.json.
+    private func writeSettingsFile(
+        _ meee2: [String: Any],
+        legacyPlaintext: Bool = false
+    ) {
+        var fileSettings = meee2
+        if !legacyPlaintext {
+            let access = (fileSettings.removeValue(forKey: "accessToken") as? String) ?? ""
+            let refresh = (fileSettings.removeValue(forKey: "refreshToken") as? String) ?? ""
+            testCredentialStore.writeOnlineTokens(accessToken: access, refreshToken: refresh)
+        }
+        let root: [String: Any] = ["meee2": fileSettings]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys]
+        ) else {
+            return XCTFail("failed to encode settings fixture")
+        }
+        do {
+            try data.write(to: settingsFile, options: .atomic)
+        } catch {
+            XCTFail("failed to write settings fixture: \(error)")
+        }
     }
 
     private func fileMeee2() -> [String: Any] {
@@ -72,24 +97,38 @@ final class OnlineProxyAuthTests: XCTestCase {
     }
 
     private func refreshSuccessBody(access: String, refresh: String) -> Data {
-        try! JSONSerialization.data(withJSONObject: [
+        (try? JSONSerialization.data(withJSONObject: [
             "access_token": access,
             "refresh_token": refresh
-        ])
+        ])) ?? Data()
     }
 
-    // MARK: - 凭证读取：settings.json 是唯一真相
+    private func assertNoPlaintextTokens(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let meee2 = fileMeee2()
+        XCTAssertNil(meee2["accessToken"], file: file, line: line)
+        XCTAssertNil(meee2["refreshToken"], file: file, line: line)
+    }
 
-    func testLoadSettingsIgnoresUserDefaultsTokens() {
+    // MARK: - 凭证读取：Keychain 是唯一真相
+
+    func testLoadSettingsMigratesLegacyPlaintextAndIgnoresDefaultsTokens() {
         // 偏好域里是另一形态二进制留下的旧 token family —— 必须被无视
         testDefaults.set("stale-access", forKey: "meee2OnlineAccessToken")
         testDefaults.set("stale-refresh", forKey: "meee2OnlineRefreshToken")
-        writeSettingsFile(baseSettings(accessToken: "fresh-access", refreshToken: "fresh-refresh"))
+        writeSettingsFile(
+            baseSettings(accessToken: "fresh-access", refreshToken: "fresh-refresh"),
+            legacyPlaintext: true
+        )
 
         let settings = OnlineProxy.loadSettings()
         XCTAssertEqual(settings.accessToken, "fresh-access")
         XCTAssertEqual(settings.refreshToken, "fresh-refresh")
         XCTAssertFalse(settings.authExpired)
+        assertNoPlaintextTokens()
+        XCTAssertNotNil(testCredentialStore.read(account: OnlineProxy.onlineCredentialAccount))
     }
 
     func testLoadSettingsTokensEmptyWhenFileHasNone() {
@@ -119,7 +158,36 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertEqual(OnlineProxy.loadSettings().teamId, "stale-team")
     }
 
-    func testPersistTokensWritesFileAndPurgesDefaultsCache() {
+    func testLoadSettingsMigratesSupabaseKeyToKeychainBeforeDeletingPlaintext() {
+        writeSettingsFile(baseSettings(accessToken: "a", refreshToken: "r"))
+
+        let settings = OnlineProxy.loadSettings()
+
+        XCTAssertEqual(settings.supabaseKey, "anon-key")
+        XCTAssertNil(fileMeee2()["supabaseKey"])
+        XCTAssertEqual(
+            testCredentialStore.read(account: OnlineProxy.onlineSupabaseKeyAccount),
+            "anon-key"
+        )
+    }
+
+    func testIdentityMetadataDoesNotReadOrMigrateCredentials() {
+        writeSettingsFile(
+            baseSettings(accessToken: "legacy-a", refreshToken: "legacy-r"),
+            legacyPlaintext: true
+        )
+
+        let metadata = OnlineProxy.loadIdentityMetadata()
+
+        XCTAssertTrue(metadata.connected)
+        XCTAssertEqual(metadata.teamId, "team-1")
+        XCTAssertEqual(metadata.userId, "user-1")
+        XCTAssertEqual(fileMeee2()["supabaseKey"] as? String, "anon-key")
+        XCTAssertNil(testCredentialStore.read(account: OnlineProxy.onlineSupabaseKeyAccount))
+        XCTAssertNil(testCredentialStore.read(account: OnlineProxy.onlineCredentialAccount))
+    }
+
+    func testPersistTokensWritesKeychainAndPurgesPlaintextCaches() {
         writeSettingsFile(baseSettings(accessToken: "old-a", refreshToken: "old-r"))
         testDefaults.set("old-a", forKey: "meee2OnlineAccessToken")
         testDefaults.set(true, forKey: "meee2AuthExpired")
@@ -127,14 +195,38 @@ final class OnlineProxyAuthTests: XCTestCase {
         OnlineProxy.persistTokens(accessToken: "new-a", refreshToken: "new-r")
 
         let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "new-a")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "new-r")
+        assertNoPlaintextTokens()
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().accessToken, "new-a")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "new-r")
         XCTAssertEqual(meee2["authExpired"] as? Bool, false)
         XCTAssertNil(testDefaults.object(forKey: "meee2OnlineAccessToken"))
         XCTAssertNil(testDefaults.object(forKey: "meee2OnlineRefreshToken"))
         XCTAssertNil(testDefaults.object(forKey: "meee2AuthExpired"))
+        XCTAssertNil(meee2["supabaseKey"])
         // 其余字段不能被冲掉
         XCTAssertEqual(meee2["teamId"] as? String, "team-1")
+    }
+
+    func testPersistTokensRollsBackKeychainWhenSettingsDiskWriteFails() {
+        var expired = baseSettings(accessToken: "", refreshToken: "")
+        expired["authExpired"] = true
+        writeSettingsFile(expired)
+        OnlineProxy.settingsFileWriteOverride = { _, _ in
+            throw CocoaError(.fileWriteNoPermission)
+        }
+
+        let persisted = OnlineProxy.persistTokens(
+            accessToken: "fresh-access",
+            refreshToken: "fresh-refresh"
+        )
+
+        XCTAssertFalse(persisted)
+        XCTAssertNil(testCredentialStore.read(account: OnlineProxy.onlineCredentialAccount))
+        XCTAssertEqual(fileMeee2()["authExpired"] as? Bool, true)
+        let loaded = OnlineProxy.loadSettings()
+        XCTAssertTrue(loaded.authExpired)
+        XCTAssertTrue(loaded.accessToken.isEmpty)
+        XCTAssertTrue(loaded.refreshToken.isEmpty)
     }
 
     // MARK: - Single-flight refresh
@@ -161,9 +253,9 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertEqual(transportCalls.value, 1, "并发 401 必须 single-flight，多打一次就触发 reuse-detection 吊销全家")
         let tokens = Set(results.values.map { $0?.accessToken ?? "<nil>" })
         XCTAssertEqual(tokens, ["rotated-a"], "等待方必须复用第一个刷新的结果")
-        let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "rotated-a")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "rt-2")
+        assertNoPlaintextTokens()
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().accessToken, "rotated-a")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "rt-2")
     }
 
     func testRefreshReusesResultWhenFileAlreadyRotated() {
@@ -280,10 +372,11 @@ final class OnlineProxyAuthTests: XCTestCase {
         transportGate.signal()
         wait(for: [refreshDone, rewriteDone], timeout: 5)
 
-        // 重写带上的是轮换后的凭证，teamName 修改也保留
+        // 重写不会落回 token；Keychain 保留轮换后的凭证，teamName 也保留
         let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "rotated-a")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "rt-2")
+        assertNoPlaintextTokens()
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().accessToken, "rotated-a")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "rt-2")
         XCTAssertEqual(meee2["teamName"] as? String, "renamed-team")
     }
 
@@ -317,9 +410,9 @@ final class OnlineProxyAuthTests: XCTestCase {
         transportGate.signal()
         wait(for: [refreshDone, loginDone], timeout: 5)
 
-        let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "fresh-login-a")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "fresh-login-rt")
+        assertNoPlaintextTokens()
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().accessToken, "fresh-login-a")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "fresh-login-rt")
     }
 
     func testRefreshFailureCooldownPreventsRetryStorm() {
@@ -335,7 +428,7 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertNil(OnlineProxy.refreshAccessToken(stale: stale), "冷却窗口内不得重试")
         XCTAssertEqual(transportCalls.value, 1)
         // 非 AUTH_INVALID 失败（网络/5xx）不清凭证
-        XCTAssertEqual(fileMeee2()["refreshToken"] as? String, "rt-1")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "rt-1")
     }
 
     // MARK: - AUTH_INVALID → 清凭证 + 显式重新登录态
@@ -354,10 +447,10 @@ final class OnlineProxyAuthTests: XCTestCase {
         XCTAssertNil(OnlineProxy.refreshAccessToken(stale: stale))
         wait(for: [notified], timeout: 2)
 
-        // settings.json：token 清空 + authExpired 置位（所有二进制形态可见）
+        // Keychain token 删除 + settings.json authExpired 置位
         let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "")
+        assertNoPlaintextTokens()
+        XCTAssertNil(testCredentialStore.read(account: OnlineProxy.onlineCredentialAccount))
         XCTAssertEqual(meee2["authExpired"] as? Bool, true)
         // 当前进程域：显式退出「已连接」态，UI 提示重新登录
         XCTAssertFalse(testDefaults.bool(forKey: "meee2Connected"))
@@ -382,11 +475,12 @@ final class OnlineProxyAuthTests: XCTestCase {
 
         let result = OnlineProxy.refreshAccessToken(stale: stale)
 
-        // 刷新失败让位于新登录：复用新凭证、文件不被清、不进过期态
+        // 刷新失败让位于新登录：复用新凭证、Keychain 不被清、不进过期态
         XCTAssertEqual(result?.accessToken, "fresh-login-a")
         let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "fresh-login-a")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "fresh-login-rt")
+        assertNoPlaintextTokens()
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().accessToken, "fresh-login-a")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "fresh-login-rt")
         XCTAssertNotEqual(meee2["authExpired"] as? Bool, true)
         XCTAssertFalse(testDefaults.bool(forKey: "meee2AuthExpired"))
     }
@@ -404,9 +498,9 @@ final class OnlineProxyAuthTests: XCTestCase {
         let result = OnlineProxy.refreshAccessToken(stale: stale)
 
         XCTAssertEqual(result?.accessToken, "fresh-login-a")
-        let meee2 = fileMeee2()
-        XCTAssertEqual(meee2["accessToken"] as? String, "fresh-login-a")
-        XCTAssertEqual(meee2["refreshToken"] as? String, "fresh-login-rt")
+        assertNoPlaintextTokens()
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().accessToken, "fresh-login-a")
+        XCTAssertEqual(OnlineProxy.persistedCredentialState().refreshToken, "fresh-login-rt")
     }
 
     func testCallOnlineAPIShortCircuitsWhenAuthExpired() {
@@ -432,8 +526,97 @@ final class OnlineProxyAuthTests: XCTestCase {
         OnlineProxy.markAuthExpired()
         let meee2 = fileMeee2()
         XCTAssertEqual(meee2["teamId"] as? String, "team-1")
-        XCTAssertEqual(meee2["supabaseKey"] as? String, "anon-key")
+        XCTAssertNil(meee2["supabaseKey"])
+        XCTAssertEqual(testCredentialStore.read(account: OnlineProxy.onlineSupabaseKeyAccount), "anon-key")
         XCTAssertEqual(meee2["authExpired"] as? Bool, true)
+        XCTAssertNil(testCredentialStore.read(account: OnlineProxy.onlineCredentialAccount))
+    }
+
+    func testLegacyPlaintextIsRetainedWhenKeychainMigrationFails() {
+        writeSettingsFile(
+            baseSettings(accessToken: "legacy-a", refreshToken: "legacy-r"),
+            legacyPlaintext: true
+        )
+        testCredentialStore.failWrites = true
+
+        let settings = OnlineProxy.loadSettings()
+
+        XCTAssertEqual(settings.accessToken, "legacy-a")
+        XCTAssertEqual(settings.refreshToken, "legacy-r")
+        XCTAssertEqual(fileMeee2()["accessToken"] as? String, "legacy-a")
+        XCTAssertEqual(fileMeee2()["refreshToken"] as? String, "legacy-r")
+    }
+
+    func testFactoryResetClearsAllSecureCredentialAccounts() {
+        writeSettingsFile(baseSettings(accessToken: "a", refreshToken: "r"))
+        XCTAssertTrue(testCredentialStore.write("assistant-secret", account: "openai_api_key"))
+        testDefaults.set(true, forKey: "meee2Connected")
+
+        XCTAssertTrue(OnlineProxy.clearAllSecureCredentialsForFactoryReset())
+
+        XCTAssertNil(testCredentialStore.read(account: OnlineProxy.onlineCredentialAccount))
+        XCTAssertNil(testCredentialStore.read(account: "openai_api_key"))
+        XCTAssertFalse(testDefaults.bool(forKey: "meee2Connected"))
+        assertNoPlaintextTokens()
+    }
+
+    func testDeleteConfirmationTokenIsBoundToRequestedMode() {
+        XCTAssertEqual(SystemStorageAPI.issueDeleteToken().mode.rawValue, "workData")
+        XCTAssertEqual(
+            SystemStorageAPI.issueDeleteToken(mode: .factoryReset).mode.rawValue,
+            "factoryReset"
+        )
+    }
+}
+
+private final class TestCredentialStore: SecureCredentialStoring {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+    var failWrites = false
+
+    func read(account: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[account]
+    }
+
+    func write(_ value: String, account: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if failWrites { return false }
+        values[account] = value
+        return true
+    }
+
+    func delete(account: String) -> Bool {
+        lock.lock()
+        values.removeValue(forKey: account)
+        lock.unlock()
+        return true
+    }
+
+    func deleteAll() -> Bool {
+        lock.lock()
+        values.removeAll()
+        lock.unlock()
+        return true
+    }
+
+    func writeOnlineTokens(accessToken: String, refreshToken: String) {
+        if accessToken.isEmpty && refreshToken.isEmpty {
+            _ = delete(account: OnlineProxy.onlineCredentialAccount)
+            return
+        }
+        let payload: [String: Any] = [
+            "version": 1,
+            "accessToken": accessToken,
+            "refreshToken": refreshToken
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let value = String(data: data, encoding: .utf8) else {
+            return
+        }
+        _ = write(value, account: OnlineProxy.onlineCredentialAccount)
     }
 }
 

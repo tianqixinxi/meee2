@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleAlert, Info, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleAlert, Loader2, XCircle } from 'lucide-react'
 import type { ReadinessCheck, ReadinessReport } from '../types'
 
 interface Props {
@@ -31,7 +31,7 @@ export function ReadinessChecklist({
   }
 
   const checks = compact
-    ? report.checks.filter((check) => check.severity === 'required' || check.status === 'fail')
+    ? report.checks.filter((check) => check.severity === 'required' || check.status !== 'pass')
     : report.checks
 
   return (
@@ -61,9 +61,7 @@ function ReadinessRow({
     ? 'pass'
     : check.status === 'fail'
       ? 'fail'
-      : check.status === 'warn'
-        ? 'warn'
-        : 'info'
+      : 'warn'
   const action = check.recoveryAction
   return (
     <div className="readiness-check" data-state={state} data-severity={check.severity}>
@@ -72,10 +70,8 @@ function ReadinessRow({
           <CheckCircle2 size={17} />
         ) : state === 'fail' ? (
           <XCircle size={17} />
-        ) : state === 'warn' ? (
-          <CircleAlert size={17} />
         ) : (
-          <Info size={17} />
+          <CircleAlert size={17} />
         )}
       </div>
       <div className="readiness-check__copy">
@@ -83,7 +79,7 @@ function ReadinessRow({
           <strong>{check.title}</strong>
           <span>{check.severity}</span>
         </div>
-        <p>{check.detail}</p>
+        <p>{check.message || check.detail}</p>
         {action?.command && <small>{action.command}</small>}
       </div>
       {action && (

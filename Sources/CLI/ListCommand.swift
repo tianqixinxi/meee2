@@ -3,22 +3,39 @@ import Meee2PluginKit
 
 /// List 命令 - 列出所有活跃的会话
 public struct ListCommand {
-    public static func run(format: OutputFormat = .table) {
+    public static func run(format: OutputFormat = .table, includeAll: Bool = false) -> CLIExitCode {
         let store = SessionStore.shared
-        let sessions = store.listAll()
+        let sessions = sessionsForDisplay(store.listAll(), includeAll: includeAll)
 
         if sessions.isEmpty {
-            print("No active sessions")
-            return
+            print(includeAll ? "No sessions" : "No active or recent sessions")
+            return .success
         }
 
         switch format {
         case .table:
             printTable(sessions)
         case .json:
-            printJSON(sessions)
+            guard printJSON(sessions) else { return .failure }
         case .simple:
             printSimple(sessions)
+        }
+        return .success
+    }
+
+    static func sessionsForDisplay(
+        _ sessions: [SessionData],
+        includeAll: Bool,
+        now: Date = Date()
+    ) -> [SessionData] {
+        guard !includeAll else { return sessions }
+        let recentCutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
+        return sessions.filter { session in
+            let status = TranscriptStatusResolver.resolve(for: session)
+            if status.isWorking || status == .permissionRequired || status == .awaitingChoice {
+                return true
+            }
+            return !status.isHistorical && session.lastActivity >= recentCutoff
         }
     }
 
@@ -72,7 +89,7 @@ public struct ListCommand {
         }
     }
 
-    private static func printJSON(_ sessions: [SessionData]) {
+    private static func printJSON(_ sessions: [SessionData]) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
 
@@ -80,10 +97,12 @@ public struct ListCommand {
             let data = try encoder.encode(sessions)
             if let json = String(data: data, encoding: .utf8) {
                 print(json)
+                return true
             }
         } catch {
-            print("Error encoding JSON: \(error)")
+            CLIOutput.error("Error encoding JSON: \(error)")
         }
+        return false
     }
 
     private static func printSimple(_ sessions: [SessionData]) {

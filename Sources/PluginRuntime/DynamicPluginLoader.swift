@@ -10,7 +10,7 @@ import Meee2PluginKit
 ///
 /// Plugin authors declare what version they built against in plugin.json:
 ///   { "abi_version": 2, ... }
-/// Plugins missing the field or below this version are recorded as
+/// Plugins missing the field or not exactly matching this version are recorded as
 /// compatibility-failed and SKIPPED at load time — they do NOT progress
 /// to dlopen / instantiation, so the live vtable mismatch never executes.
 public let CURRENT_PLUGIN_KIT_ABI_VERSION: Int = 2
@@ -51,48 +51,12 @@ public class DynamicPluginLoader {
     private struct BuiltinPluginInstallSpec {
         let directoryName: String
         let dylibName: String
-        let metadata: String
     }
 
     private static let builtinPluginSpecs: [BuiltinPluginInstallSpec] = [
-        BuiltinPluginInstallSpec(
-            directoryName: "cursor",
-            dylibName: "CursorPlugin.dylib",
-            metadata: """
-            {
-                "id": "com.meee2.plugin.cursor",
-                "name": "Cursor",
-                "version": "0.2.0",
-                "dylib": "CursorPlugin.dylib",
-                "helpUrl": "https://docs.cursor.com/meee2-plugin"
-            }
-            """
-        ),
-        BuiltinPluginInstallSpec(
-            directoryName: "openclaw",
-            dylibName: "OpenClawPlugin.dylib",
-            metadata: """
-            {
-                "id": "com.meee2.plugin.openclaw",
-                "name": "OpenClaw",
-                "version": "0.2.0",
-                "dylib": "OpenClawPlugin.dylib"
-            }
-            """
-        ),
-        BuiltinPluginInstallSpec(
-            directoryName: "codex",
-            dylibName: "CodexPlugin.dylib",
-            metadata: """
-            {
-                "id": "com.meee2.plugin.codex",
-                "name": "Codex",
-                "version": "0.2.0",
-                "dylib": "CodexPlugin.dylib",
-                "helpUrl": "https://github.com/openai/codex"
-            }
-            """
-        )
+        BuiltinPluginInstallSpec(directoryName: "cursor", dylibName: "CursorPlugin.dylib"),
+        BuiltinPluginInstallSpec(directoryName: "openclaw", dylibName: "OpenClawPlugin.dylib"),
+        BuiltinPluginInstallSpec(directoryName: "codex", dylibName: "CodexPlugin.dylib")
     ]
 
     // MARK: - Init
@@ -178,6 +142,7 @@ public class DynamicPluginLoader {
             for file in files {
                 copyIfNewer(source: file, destination: destDir.appendingPathComponent(file.lastPathComponent))
             }
+            writeCanonicalBuiltinManifestIfKnown(directoryName: pluginName, destination: destDir)
             MLog("[DynamicPluginLoader] Installed builtin plugin: \(pluginName)")
         }
     }
@@ -195,6 +160,10 @@ public class DynamicPluginLoader {
             guard FileManager.default.fileExists(atPath: source.path) else {
                 continue
             }
+            guard let metadata = Self.builtinManifestText(directoryName: spec.directoryName) else {
+                MWarn("[DynamicPluginLoader] Missing canonical builtin manifest: \(spec.directoryName)")
+                continue
+            }
 
             let destDir = pluginDirectory.appendingPathComponent(spec.directoryName)
             let destDylib = destDir.appendingPathComponent(spec.dylibName)
@@ -203,9 +172,7 @@ public class DynamicPluginLoader {
             do {
                 try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
                 copyIfNewer(source: source, destination: destDylib)
-                if !FileManager.default.fileExists(atPath: metadataFile.path) {
-                    try spec.metadata.write(to: metadataFile, atomically: true, encoding: .utf8)
-                }
+                try metadata.write(to: metadataFile, atomically: true, encoding: .utf8)
                 MLog("[DynamicPluginLoader] Synced SwiftPM builtin plugin: \(spec.directoryName)")
             } catch {
                 MWarn("[DynamicPluginLoader] Failed to sync SwiftPM builtin plugin \(spec.directoryName): \(error)")
@@ -220,6 +187,48 @@ public class DynamicPluginLoader {
         guard needsCopy else { return }
         try? FileManager.default.removeItem(at: destination)
         try? FileManager.default.copyItem(at: source, to: destination)
+    }
+
+    private func writeCanonicalBuiltinManifestIfKnown(directoryName: String, destination: URL) {
+        guard Self.builtinPluginSpecs.contains(where: { $0.directoryName == directoryName }),
+              let metadata = Self.builtinManifestText(directoryName: directoryName) else {
+            return
+        }
+        do {
+            try metadata.write(
+                to: destination.appendingPathComponent("plugin.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            MWarn("[DynamicPluginLoader] Failed to normalize builtin manifest \(directoryName): \(error)")
+        }
+    }
+
+    static func builtinManifestMetadata(directoryName: String) -> PluginMetadata? {
+        guard builtinPluginSpecs.contains(where: { $0.directoryName == directoryName }),
+              let metadata = builtinManifestText(directoryName: directoryName),
+              let data = metadata.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(PluginMetadata.self, from: data)
+    }
+
+    private static func builtinManifestText(directoryName: String) -> String? {
+        let url = Bundle.module.resourceURL?
+            .appendingPathComponent("BuiltinManifests", isDirectory: true)
+            .appendingPathComponent(directoryName, isDirectory: true)
+            .appendingPathComponent("plugin.json")
+        guard let url else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    static func abiCompatibilityError(declaredABI: Int?) -> String? {
+        let abi = declaredABI ?? 0
+        guard abi != CURRENT_PLUGIN_KIT_ABI_VERSION else { return nil }
+        return "Plugin built for ABI \(abi) but meee2 needs ABI " +
+            "\(CURRENT_PLUGIN_KIT_ABI_VERSION). Rebuild the plugin against the current SDK " +
+            "and set `abi_version` in plugin.json to \(CURRENT_PLUGIN_KIT_ABI_VERSION)."
     }
 
     /// 卸载所有 Plugin
@@ -308,12 +317,8 @@ public class DynamicPluginLoader {
         // 1.5 ABI 版本硬隔离 —— Plugin 必须声明用什么 ABI 版本 build 的,
         // 不匹配就拒绝(不走 dlopen,不走 vtable lookup,从根上避免老 dylib 跟新
         // SessionPlugin 类布局错位导致的 EXC_BAD_ACCESS)。
-        let declaredABI = config.abi_version ?? 0
         let dylibPath = directory.appendingPathComponent(config.dylib).path
-        if declaredABI < CURRENT_PLUGIN_KIT_ABI_VERSION {
-            let msg = "Plugin built for ABI \(declaredABI) but meee2 needs ABI " +
-                      "\(CURRENT_PLUGIN_KIT_ABI_VERSION). Rebuild the plugin against the current SDK " +
-                      "and bump `abi_version` in plugin.json."
+        if let msg = Self.abiCompatibilityError(declaredABI: config.abi_version) {
             MWarn("[DynamicPluginLoader] Rejecting \(config.id): \(msg)")
             failedPlugins.append(FailedPlugin(
                 id: config.id,

@@ -7,7 +7,7 @@ import {
   Terminal,
   UsersRound,
 } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect } from 'react'
 import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
@@ -21,24 +21,32 @@ interface WorkspaceRailProps {
   mode: WorkspaceMode
   userProfile: UserProfile | null
   onModeChange: (mode: WorkspaceMode) => void
+  detailRef?: (node: HTMLDivElement | null) => void
 }
 
-const RAIL_WIDTH = 72
+const EXPANDED_RAIL_WIDTH = 320
+const COMPACT_RAIL_WIDTH = 72
 
 export function WorkspaceRail({
   mode,
   userProfile,
   onModeChange,
+  detailRef,
 }: WorkspaceRailProps) {
   const { t } = useI18n()
-  useEffect(() => {
-    document.documentElement.style.setProperty('--sidebar-width', `${RAIL_WIDTH}px`)
+  const compact = mode !== 'session'
+  const railWidth = compact ? COMPACT_RAIL_WIDTH : EXPANDED_RAIL_WIDTH
+
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty('--sidebar-width', `${railWidth}px`)
     document.documentElement.classList.add('board-sidebar-rail')
+    document.documentElement.classList.toggle('board-sidebar-rail--compact', compact)
     return () => {
       document.documentElement.style.removeProperty('--sidebar-width')
       document.documentElement.classList.remove('board-sidebar-rail')
+      document.documentElement.classList.remove('board-sidebar-rail--compact')
     }
-  }, [])
+  }, [compact, railWidth])
 
   const showTeam = Boolean(userProfile?.connected)
   const showAvatarShortcut = Boolean(userProfile?.connected)
@@ -59,9 +67,13 @@ export function WorkspaceRail({
   const showFallbackUserIcon = !avatarUrl && !avatarInitials
 
   return (
-    <nav className="workspace-rail" aria-label={t('rail.workspace')}>
-      {showAvatarShortcut && (
-        <div className="workspace-rail__top">
+    <nav className={`workspace-rail${compact ? ' workspace-rail--compact' : ''}`} aria-label={t('rail.workspace')}>
+      <div className="workspace-rail__top">
+        <div className="workspace-rail__brand" data-testid="workspace-rail-brand" aria-label="meee2">
+          <span className="workspace-rail__brand-mark" aria-hidden>m</span>
+          <strong className="workspace-rail__brand-name">meee2</strong>
+        </div>
+        {showAvatarShortcut && (
           <Tooltip label={t('rail.settings')} placement="right" delay={120}>
             <button
               type="button"
@@ -72,8 +84,8 @@ export function WorkspaceRail({
               {avatarUrl ? <img src={avatarUrl} alt="" /> : avatarInitials}
             </button>
           </Tooltip>
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="workspace-rail__group">
         <RailButton
@@ -122,7 +134,7 @@ export function WorkspaceRail({
         </RailButton>
       </div>
 
-      <div className="workspace-rail__spacer" />
+      <div ref={detailRef} className="workspace-rail__detail" data-testid="workspace-rail-detail" />
 
       <RailButton label={t('rail.settings')} active={mode === 'settings'} onClick={() => onModeChange('settings')}>
         <Settings size={20} />
@@ -154,18 +166,16 @@ function RailButton({
   children,
 }: RailButtonProps) {
   return (
-    <Tooltip label={label} placement="right" delay={120}>
-      <button
-        type="button"
-        className={`workspace-rail__button${active ? ' is-active' : ''}`}
-        data-tone={tone}
-        aria-label={label}
-        aria-current={active ? 'page' : undefined}
-        onClick={onClick}
-      >
-        {children}
-        <span className="workspace-rail__label">{label}</span>
-      </button>
-    </Tooltip>
+    <button
+      type="button"
+      className={`workspace-rail__button${active ? ' is-active' : ''}`}
+      data-tone={tone}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      onClick={onClick}
+    >
+      {children}
+      <span className="workspace-rail__label">{label}</span>
+    </button>
   )
 }

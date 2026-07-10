@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Meee2CommKit
 
 enum PlannerArtifactPayloadType: String, Codable, Equatable, CaseIterable {
     case text
@@ -188,8 +189,7 @@ enum PlannerArtifactStorage {
     }
 
     private static func artifactDirectory(canvasId: String, artifactId: String) -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("artifacts", isDirectory: true)
             .appendingPathComponent(safePathComponent(canvasId), isDirectory: true)
             .appendingPathComponent(safePathComponent(artifactId), isDirectory: true)

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Meee2CommKit
 
 /// 监控 Claude Code 跨 session 的 input / output token 累计并按时间窗口算速率。
 /// 数据来自 ClaudePlugin 的 sessionUsage——每条 assistant 消息被 TranscriptParser 解析时
@@ -205,8 +206,7 @@ public final class TokenRateMonitor: ObservableObject {
     }
 
     private static var stateURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2")
+        StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("token-rate-history.json")
     }
 

@@ -40,11 +40,15 @@ let package = Package(
             ],
             resources: [
                 .copy("Board/WebDist"),
+                .copy("PluginRuntime/BuiltinManifests"),
             ]
         ),
         .testTarget(
             name: "meee2Tests",
-            dependencies: ["meee2Kit"],
+            dependencies: [
+                "meee2Kit",
+                .product(name: "Swifter", package: "swifter"),
+            ],
             path: "Tests",
             exclude: ["Fixtures"]
         ),

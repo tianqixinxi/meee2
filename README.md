@@ -1,6 +1,6 @@
 # meee2
 
-> macOS menubar app that watches your AI coding sessions (Claude CLI, Claude Desktop, Codex, Cursor, OpenClaw, …) through a Dynamic Island overlay, a web Board, an ncurses TUI, and a CLI — one process, one source of truth.
+> macOS menubar app that watches your AI coding sessions (Claude CLI, Claude Desktop, Codex, Cursor, OpenClaw, …) through a Dynamic Island overlay, a web Board, and a CLI — one process, one source of truth.
 
 ![status: active development](https://img.shields.io/badge/status-active--dev-orange) ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue) ![Swift 5.7+](https://img.shields.io/badge/Swift-5.7%2B-orange)
 
@@ -28,7 +28,7 @@ meee2 is a single macOS process that:
 
 1. **Ingests** events from Claude CLI hooks (and other AI clients) over a Unix domain socket at `/tmp/meee2.sock`.
 2. **Reconciles** those events against the on-disk transcript (`.jsonl`) to derive a single canonical `SessionStatus` per session.
-3. **Publishes** a unified session model to four surfaces — Dynamic Island, TUI, CLI, Web Board — that all read from the same `SessionStore`.
+3. **Publishes** a unified session model to three surfaces — Dynamic Island, CLI, and Web Board — that all read from the same session state.
 4. **Routes** A2A (agent-to-agent) messages between sessions through named channels, and handles permission-request round-trips back to the CLI.
 
 The app runs as a standard macOS app (`.regular` activation policy) — Dock icon, App Switcher entry, and the **Board window as the primary surface** that opens on launch. The menu bar item and Dynamic Island overlay are secondary, always-on accessories.
@@ -41,10 +41,9 @@ The app runs as a standard macOS app (`.regular` activation policy) — Dock ico
 |---|---|---|
 | **Dynamic Island** | menubar icon → click | Always-on overlay; shows current session + permission prompts; click `Allow` / `Deny` without leaving the editor |
 | **Web Board** | `localhost:9876` (built-in HTTP) or `localhost:5173` (Vite dev) | Multi-session canvas: cards, transcripts, sidebar, A2A channel chat, MCP/template editors |
-| **TUI** | `meee2 dashboard` | Full-screen ncurses dashboard (works over SSH) |
 | **CLI** | `meee2 list / send / jump / channel / msg / board / note / whoami / test` | Scriptable inspect + control |
 
-All four read the same on-disk `~/.meee2/` state and the same in-memory `SessionStore` when the GUI is running.
+All three read the same on-disk `~/.meee2/` state and the same in-memory session state when the GUI is running.
 
 ---
 
@@ -112,8 +111,7 @@ Source: [`Bridge/claude-hook-bridge.sh`](Bridge/claude-hook-bridge.sh).
 
 ```
 meee2                       Launch the GUI (default)
-meee2 board                 Run only the Web Board HTTP server (no GUI)
-meee2 dashboard             ncurses TUI
+meee2 board                 Open the Web Board
 
 meee2 list [--json|--simple]              List sessions
 meee2 send <sessionId> <message>          Push a one-off message to a session
@@ -185,8 +183,8 @@ The Claude CLI integration is itself a plugin (`Sources/ClaudeCLI/ClaudePlugin.s
 │      ┌──────────────────────────┼──────────────────────────────┐       │
 │      ▼                          ▼                              ▼       │
 │  ┌─────────┐            ┌──────────────┐               ┌─────────────┐ │
-│  │ Island  │            │   TUI        │               │ BoardServer │─┼─▶ packages/board-app
-│  │  View   │            │ DashboardView│               │ /api/state  │ │   (React)
+│  │ Island  │            │     CLI      │               │ BoardServer │─┼─▶ packages/board-app
+│  │  View   │            │ argv commands│               │ /api/state  │ │   (React)
 │  └─────────┘            └──────────────┘               └─────────────┘ │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -199,7 +197,7 @@ The Claude CLI integration is itself a plugin (`Sources/ClaudeCLI/ClaudePlugin.s
 | `SessionMonitor` | `Sources/Core/SessionMonitor.swift` | Watches `~/.claude/projects/` for new transcripts |
 | `HookSocketServer` | `Sources/ClaudeCLI/HookSocketServer.swift` | `/tmp/meee2.sock` server + pending permission queue |
 | `ClaudePlugin` | `Sources/ClaudeCLI/ClaudePlugin.swift` | Translates hook events into `SessionData` mutations |
-| `TranscriptStatusResolver` | `Sources/ClaudeCLI/TranscriptStatusResolver.swift` | Canonical `SessionStatus` — Island / TUI / Board all read through this |
+| `TranscriptStatusResolver` | `Sources/ClaudeCLI/TranscriptStatusResolver.swift` | Canonical `SessionStatus` — Island / CLI / Board all read through this |
 | `MessageRouter` | A2A inbox queue + delivery hints (queued-until-next-turn, …) |
 | `ChannelRegistry` | A2A channel membership + persistence |
 | `PluginManager` | `dlopen` loader for `~/.meee2/plugins/<id>/*.dylib` |
@@ -234,7 +232,7 @@ Sources/
   ClaudeCLI/                  ClaudePlugin + transcript / hook plumbing
   Board/                      HTTP server, REST API, DTOs, web dist locator
   CLI/                        Subcommands (list, send, jump, msg, channel, test, …)
-  TUI/                        ncurses dashboard
+  TUI/                        Legacy ncurses source (excluded from the product build)
   Terminal/                   TerminalJumper + Ghostty/iTerm/cmux glue
   PluginRuntime/              Dynamic plugin loader
   SystemServices/             Sound, settings, version check, debug export
@@ -287,6 +285,11 @@ pnpm build                   # Production build of npm packages → Sources/Boar
 pnpm build:dev               # build + `swift build` (copies WebDist into SwiftPM resource bundle)
 pnpm restart:dev             # build:dev + kill old binary + nohup-restart with meee2-online env
 ```
+
+Debug builds allow the fixed loopback Vite origins on port `5002`; release
+builds still require `MEEE2_BOARD_DEV_ORIGINS` for any cross-origin development
+client. Every mutating request and WebSocket connection still requires the
+current launch control token.
 
 **Why both `pnpm build` and `swift build` matter:** `pnpm build` only updates the
 source `Sources/Board/WebDist/`. The running meee2 binary reads WebDist from

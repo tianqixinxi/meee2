@@ -36,7 +36,7 @@ if [ "${UNIVERSAL:-0}" = "1" ]; then
     echo "Building universal arm64 + x86_64 (UNIVERSAL=1)…"
     SWIFT_BUILD_ARGS+=(--arch arm64 --arch x86_64)
 fi
-# Bake git commit/branch into App/BuildInfo.swift for the About panel.
+# Bake git commit/branch into the shared BuildInfo source for About/CLI diagnostics.
 bash scripts/gen-build-info.sh
 swift build "${SWIFT_BUILD_ARGS[@]}"
 
@@ -72,11 +72,13 @@ cp "$DYLIB" "$INSTALL_DIR/libMeee2PluginKit.dylib"
 echo "Installed libMeee2PluginKit.dylib to $INSTALL_DIR/"
 
 # Install builtin plugins
+BUILTIN_MANIFESTS="Sources/PluginRuntime/BuiltinManifests"
 BUILTIN_CURSOR="$BUILD_DIR/libCursorPlugin.dylib"
 if [ -f "$BUILTIN_CURSOR" ]; then
     PLUGIN_DIR="$HOME/.meee2/plugins/cursor"
     mkdir -p "$PLUGIN_DIR"
     cp "$BUILTIN_CURSOR" "$PLUGIN_DIR/CursorPlugin.dylib"
+    cp "$BUILTIN_MANIFESTS/cursor/plugin.json" "$PLUGIN_DIR/plugin.json"
     echo "Installed CursorPlugin to $PLUGIN_DIR/"
 fi
 
@@ -86,16 +88,7 @@ if [ -f "$BUILTIN_OPENCLAW" ]; then
     PLUGIN_DIR="$HOME/.meee2/plugins/openclaw"
     mkdir -p "$PLUGIN_DIR"
     cp "$BUILTIN_OPENCLAW" "$PLUGIN_DIR/OpenClawPlugin.dylib"
-    if [ ! -f "$PLUGIN_DIR/plugin.json" ]; then
-        cat > "$PLUGIN_DIR/plugin.json" << 'EOF'
-{
-    "id": "com.meee2.plugin.openclaw",
-    "name": "OpenClaw",
-    "version": "0.2.0",
-    "dylib": "OpenClawPlugin.dylib"
-}
-EOF
-    fi
+    cp "$BUILTIN_MANIFESTS/openclaw/plugin.json" "$PLUGIN_DIR/plugin.json"
     echo "Installed OpenClawPlugin to $PLUGIN_DIR/"
 fi
 
@@ -105,16 +98,7 @@ if [ -f "$BUILTIN_CODEX" ]; then
     PLUGIN_DIR="$HOME/.meee2/plugins/codex"
     mkdir -p "$PLUGIN_DIR"
     cp "$BUILTIN_CODEX" "$PLUGIN_DIR/CodexPlugin.dylib"
-    if [ ! -f "$PLUGIN_DIR/plugin.json" ]; then
-        cat > "$PLUGIN_DIR/plugin.json" << 'EOF'
-{
-    "id": "com.meee2.plugin.codex",
-    "name": "Codex",
-    "version": "0.2.0",
-    "dylib": "CodexPlugin.dylib"
-}
-EOF
-    fi
+    cp "$BUILTIN_MANIFESTS/codex/plugin.json" "$PLUGIN_DIR/plugin.json"
     echo "Installed CodexPlugin to $PLUGIN_DIR/"
 fi
 

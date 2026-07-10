@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// Session 与终端的映射信息
 struct SessionTerminalInfo: Codable {
@@ -35,8 +36,7 @@ class SessionTerminalStore {
     private let queueKey = DispatchSpecificKey<Void>()
 
     private init() {
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
+        let dir = StorageRoots.processDefault.baseDirectory
         storeURL = dir.appendingPathComponent("session-terminals.json")
         queue.setSpecific(key: queueKey, value: ())
 
@@ -364,6 +364,6 @@ class SessionTerminalStore {
 
     private static func freshCommand(provider: String?, command: String?) -> String {
         let haystack = "\(provider ?? "") \(command ?? "")".lowercased()
-        return AgentLaunchCommand.fullAccessCommand(forProvider: haystack.contains("codex") ? "codex" : "claude")
+        return AgentLaunchCommand.defaultCommand(forProvider: haystack.contains("codex") ? "codex" : "claude")
     }
 }

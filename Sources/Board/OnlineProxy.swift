@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// OnlineProxy — synchronous-ish helper to forward a single HTTP call from the
 /// local desktop BoardServer up to meee2-online (Supabase RPC for `rpc/...`
@@ -6,15 +7,14 @@ import Foundation
 ///
 /// Credential model (single source of truth):
 ///
-///   - `~/.meee2/settings.json` is the ONLY persisted home for
-///     accessToken / refreshToken. Every binary form of the app (bundled
-///     `com.meee2.app`, SwiftPM debug binary whose `UserDefaults.standard`
-///     lands in the `meee2` domain, CLI) reads the same file, so a re-login
-///     in one form is immediately visible to all of them.
+///   - accessToken / refreshToken are stored together in one Keychain item.
+///     `~/.meee2/settings.json` contains non-secret connection metadata and
+///     `authExpired` only. A one-time lazy migration moves legacy plaintext
+///     tokens into Keychain and removes both JSON keys after the secure write.
 ///   - UserDefaults never stores tokens. 历史版本曾把 token 写进偏好域，
 ///     bundled app 和 debug 二进制落在不同 domain，重新登录后另一形态仍
 ///     发旧 token，触发 Supabase refresh-token reuse-detection 吊销整个
-///     token family —— 这里只读 env override + settings.json。
+///     token family —— 这里只读 env override + Keychain。
 ///   - Non-token connection fields (teamId, supabaseUrl, …) prefer
 ///     settings.json too; UserDefaults is a legacy fallback only.
 ///
@@ -43,25 +43,92 @@ enum OnlineProxy {
         let authExpired: Bool
     }
 
+    /// Non-secret account context used on hot local UI paths. Keeping this
+    /// separate prevents Island/session snapshot refreshes from touching
+    /// Keychain or attempting a legacy credential migration.
+    struct IdentityMetadata {
+        let teamId: String
+        let userId: String
+        let connected: Bool
+    }
+
     static let authExpiredNotification = Notification.Name("meee2.authExpired")
 
     // MARK: - Test seams
 
     /// 单测注入：替换 settings.json 路径，避免测试碰真实用户配置。
     static var settingsFileURLOverride: URL?
+    /// 单测注入：替换 Keychain。即使调用方只设置 settingsFileURLOverride，
+    /// credentialStore 也会自动选择内存实现，绝不触碰开发者真实 Keychain。
+    static var credentialStoreOverride: (any SecureCredentialStoring)?
     /// 单测注入：替换 UserDefaults，避免测试污染真实偏好域。
     static var userDefaultsOverride: UserDefaults?
     /// 单测注入:替换 refresh 的网络层(默认 performSync),用于断言 single-flight。
     static var refreshTransportOverride: ((URLRequest) -> Result<Data, ProxyError>)?
+    /// 单测故障注入：模拟 settings.json 的原子磁盘写失败。
+    static var settingsFileWriteOverride: ((Data, URL) throws -> Void)?
 
     static func resetRefreshStateForTesting() {
         refreshLock.lock()
         lastRefreshFailureAt = nil
         refreshLock.unlock()
+        automaticTestCredentialStoreLock.lock()
+        automaticTestCredentialStore = EphemeralCredentialStore()
+        automaticTestCredentialStorePath = settingsFileURLOverride?.standardizedFileURL.path
+        automaticTestCredentialStoreLock.unlock()
+        settingsFileWriteOverride = nil
     }
 
     private static var defaults: UserDefaults {
         userDefaultsOverride ?? .standard
+    }
+
+    /// Integration/debug runs with an explicit storage root must not inherit a
+    /// production preference domain (or silently connect with a real account).
+    /// Tests that explicitly inject a defaults suite still exercise migrations.
+    private static var allowsLegacyDefaultsFallback: Bool {
+        if userDefaultsOverride != nil { return true }
+        let explicitRoot = ProcessInfo.processInfo.environment["MEEE2_STORAGE_ROOT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return explicitRoot.isEmpty
+    }
+
+    static let onlineCredentialAccount = "meee2.online.tokens.v1"
+    static let onlineSupabaseKeyAccount = "meee2.online.supabase-key.v1"
+
+    private struct StoredOnlineCredentials: Codable {
+        let version: Int
+        let accessToken: String
+        let refreshToken: String
+
+        init(accessToken: String, refreshToken: String) {
+            version = 1
+            self.accessToken = accessToken
+            self.refreshToken = refreshToken
+        }
+    }
+
+    private static let automaticTestCredentialStoreLock = NSLock()
+    private static var automaticTestCredentialStore = EphemeralCredentialStore()
+    private static var automaticTestCredentialStorePath: String?
+
+    private static var credentialStore: any SecureCredentialStoring {
+        if let credentialStoreOverride { return credentialStoreOverride }
+        let isolatedRoot = ProcessInfo.processInfo.environment["MEEE2_STORAGE_ROOT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard settingsFileURLOverride != nil || !isolatedRoot.isEmpty else {
+            return SecureCredentialStore.shared
+        }
+
+        let path = settingsFileURLOverride?.standardizedFileURL.path
+            ?? StorageRoots.processDefault.baseDirectory.path
+        automaticTestCredentialStoreLock.lock()
+        defer { automaticTestCredentialStoreLock.unlock() }
+        if automaticTestCredentialStorePath != path {
+            automaticTestCredentialStore = EphemeralCredentialStore()
+            automaticTestCredentialStorePath = path
+        }
+        return automaticTestCredentialStore
     }
 
     static var hasEnvironmentOverride: Bool {
@@ -82,6 +149,7 @@ enum OnlineProxy {
     static func loadSettings() -> Settings {
         let env = ProcessInfo.processInfo.environment
         let file = fileMeee2Dict()
+        let persistedCredentials = persistedCredentialState()
 
         func fileString(_ key: String) -> String? {
             file[key] as? String
@@ -90,40 +158,39 @@ enum OnlineProxy {
         let supabaseUrl = firstNonEmpty(
             env["MEEE2_SUPABASE_URL"],
             fileString("supabaseUrl"),
-            defaults.string(forKey: "meee2SupabaseUrl")
+            allowsLegacyDefaultsFallback ? defaults.string(forKey: "meee2SupabaseUrl") : nil
         ).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let supabaseKey = firstNonEmpty(
             env["MEEE2_SUPABASE_ANON_KEY"],
-            fileString("supabaseKey"),
-            defaults.string(forKey: "meee2SupabaseKey")
+            persistedSupabaseKey()
         )
         let onlineBaseUrl = firstNonEmpty(
             env["MEEE2_ONLINE_BASE_URL"],
             fileString("onlineBaseUrl"),
-            defaults.string(forKey: "meee2OnlineBaseUrl")
+            allowsLegacyDefaultsFallback ? defaults.string(forKey: "meee2OnlineBaseUrl") : nil
         ).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         // Token 字段绝不读 UserDefaults：偏好域按二进制形态分裂
         // (com.meee2.app / meee2)，里面的副本可能属于已被吊销的 token family。
         let accessToken = firstNonEmpty(
             env["MEEE2_ONLINE_ACCESS_TOKEN"],
-            fileString("accessToken")
+            persistedCredentials.accessToken
         )
         let refreshToken = firstNonEmpty(
             env["MEEE2_ONLINE_REFRESH_TOKEN"],
-            fileString("refreshToken")
+            persistedCredentials.refreshToken
         )
         let teamId = firstNonEmpty(
             env["MEEE2_ONLINE_TEAM_ID"],
             fileString("teamId"),
-            defaults.string(forKey: "meee2TeamId")
+            allowsLegacyDefaultsFallback ? defaults.string(forKey: "meee2TeamId") : nil
         )
         let userId = firstNonEmpty(
             env["MEEE2_ONLINE_USER_ID"],
             fileString("userId"),
-            defaults.string(forKey: "meee2UserId")
+            allowsLegacyDefaultsFallback ? defaults.string(forKey: "meee2UserId") : nil
         )
         let envHasAccessToken = !firstNonEmpty(env["MEEE2_ONLINE_ACCESS_TOKEN"]).isEmpty
-        let authExpired = !envHasAccessToken && (file["authExpired"] as? Bool ?? false)
+        let authExpired = !envHasAccessToken && persistedCredentials.authExpired
 
         return Settings(
             supabaseUrl: supabaseUrl,
@@ -137,16 +204,39 @@ enum OnlineProxy {
         )
     }
 
-    /// settings.json 里当前的凭证状态。settings.json 的其他写入方
-    /// (SettingsView / BoardAPI) 重写整个文件时必须用它保留 token，
-    /// 而不是把各自偏好域里的旧副本反写回来。
-    static func persistedCredentialState() -> (accessToken: String, refreshToken: String, authExpired: Bool) {
+    static func loadIdentityMetadata() -> IdentityMetadata {
+        let env = ProcessInfo.processInfo.environment
         let file = fileMeee2Dict()
-        return (
-            accessToken: (file["accessToken"] as? String) ?? "",
-            refreshToken: (file["refreshToken"] as? String) ?? "",
-            authExpired: (file["authExpired"] as? Bool) ?? false
+        func fileString(_ key: String) -> String? { file[key] as? String }
+
+        let teamId = firstNonEmpty(
+            env["MEEE2_ONLINE_TEAM_ID"],
+            fileString("teamId"),
+            hasEnvironmentOverride || !allowsLegacyDefaultsFallback
+                ? nil
+                : defaults.string(forKey: "meee2TeamId")
         )
+        let userId = firstNonEmpty(
+            env["MEEE2_ONLINE_USER_ID"],
+            fileString("userId"),
+            hasEnvironmentOverride || !allowsLegacyDefaultsFallback
+                ? nil
+                : defaults.string(forKey: "meee2UserId")
+        )
+        return IdentityMetadata(
+            teamId: teamId,
+            userId: userId,
+            connected: (allowsLegacyDefaultsFallback && defaults.bool(forKey: "meee2Connected"))
+                || (!teamId.isEmpty && !userId.isEmpty)
+        )
+    }
+
+    /// Keychain 里的当前凭证状态 + settings.json 的 authExpired 标志。
+    /// 首次读取会在凭证锁内迁移 legacy plaintext token 并清理 JSON keys。
+    static func persistedCredentialState() -> (accessToken: String, refreshToken: String, authExpired: Bool) {
+        withCredentialFileLock {
+            persistedCredentialStateLocked()
+        }
     }
 
     private static func firstNonEmpty(_ values: String?...) -> String {
@@ -263,12 +353,11 @@ enum OnlineProxy {
         }
     }
 
-    /// settings.json 的「凭证锁」：进程内 NSLock + 跨进程 flock。
+    /// Online 凭证的「协调锁」：进程内 NSLock + 跨进程 flock。
     ///
-    /// **所有** settings.json 的写入（refresh 轮换、登录回调、SettingsView /
-    /// BoardAPI 整文件重写、断开清理）都必须在这把锁内完成读-改-写 ——
-    /// 任何不持锁的 read-then-write 都可能把并发刷新刚轮换的凭证冲回
-    /// 已吊销的旧 token family。锁内禁止再嵌套本函数（flock 不可重入）；
+    /// **所有** Keychain token 轮换以及 settings.json 的关联写入（登录回调、
+    /// SettingsView / BoardAPI 整文件重写、断开清理）都必须在这把锁内完成。
+    /// 锁内禁止再嵌套本函数（flock 不可重入）；
     /// refresh 内部用 *Locked 变体。锁文件建不出来 / flock 失败时退化为
     /// 仅进程内互斥（比拒绝写入好——单进程场景本就不需要文件锁）。
     static func withCredentialFileLock<T>(_ body: () -> T) -> T {
@@ -293,33 +382,38 @@ enum OnlineProxy {
     /// 可能被持有 30s+，主线程不能同步等；串行保证多次重写按提交顺序落盘。
     static let settingsFileWriteQueue = DispatchQueue(label: "meee2.online.settings-write", qos: .utility)
 
-    /// 在凭证锁内整文件重写 settings.json：token / authExpired 以锁内重读的
-    /// 文件现值为准（通过参数交给 compose 拼装），杜绝旧凭证回写。
+    /// 在凭证锁内整文件重写 settings.json。compose 仍收到当前凭证以兼容
+    /// 现有调用方，但输出里的 token keys 会被强制剥离，避免任何整文件写
+    /// 把秘密重新落回 JSON。`clearCredentials` 仅用于显式断开流程。
     static func rewriteSettingsFile(
+        clearCredentials: Bool = false,
         compose: ((accessToken: String, refreshToken: String, authExpired: Bool)) -> [String: Any]
     ) {
         withCredentialFileLock {
-            let meee2 = compose(persistedCredentialState())
-            let root: [String: Any] = ["meee2": meee2]
-            guard JSONSerialization.isValidJSONObject(root),
-                  let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else {
-                return
+            let credentials = persistedCredentialStateLocked()
+            var meee2 = sanitizeCredentialKeys(in: compose(credentials))
+            if clearCredentials {
+                if !credentialStore.delete(account: onlineCredentialAccount) {
+                    MWarn("[OnlineProxy] failed to delete Online credentials from Keychain")
+                }
+                if !credentialStore.delete(account: onlineSupabaseKeyAccount) {
+                    MWarn("[OnlineProxy] failed to delete Online Supabase key from Keychain")
+                }
+                meee2.removeValue(forKey: "supabaseKey")
+                defaults.removeObject(forKey: "meee2SupabaseKey")
+                meee2["authExpired"] = false
             }
-            let file = settingsFileURL()
-            try? FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? data.write(to: file, options: .atomic)
+            _ = writeMeee2SettingsLocked(meee2)
+            purgeLegacyDefaultsTokens()
         }
     }
 
     private static func refreshHoldingLocks(stale: Settings) -> Settings? {
-        // Double-check（锁内）：对照 settings.json 的「持久化」凭证态，不走
+        // Double-check（锁内）：对照 Keychain 的「持久化」凭证态，不走
         // loadSettings() —— env 注入的 token（e2e 用同一组 env 启动多进程）
         // 会盖住另一个进程刚轮换落盘的新凭证，等锁的人就会拿已用过的 env
         // refresh token 再打一次，正中 reuse-detection。
-        let persisted = persistedCredentialState()
+        let persisted = persistedCredentialStateLocked()
         if !persisted.accessToken.isEmpty, persisted.accessToken != stale.accessToken {
             MInfo("[OnlineProxy] refresh reused — token already rotated by a concurrent flight")
             return withTokens(
@@ -376,9 +470,13 @@ enum OnlineProxy {
                 return superseded
             }
             let rotatedRefreshToken = (object["refresh_token"] as? String) ?? refreshToken
-            persistTokensLocked(accessToken: accessToken, refreshToken: rotatedRefreshToken)
+            guard persistTokensLocked(accessToken: accessToken, refreshToken: rotatedRefreshToken) else {
+                lastRefreshFailureAt = Date()
+                MWarn("[OnlineProxy] refresh succeeded but local credential transaction failed")
+                return nil
+            }
             lastRefreshFailureAt = nil
-            MInfo("[OnlineProxy] refresh ok — rotated token persisted to settings.json")
+            MInfo("[OnlineProxy] refresh ok — rotated token persisted to Keychain")
             return withTokens(stale, accessToken: accessToken, refreshToken: rotatedRefreshToken)
         case .failure(.http(let status, _)) where status == 401 || status == 403:
             if let superseded = settingsIfRefreshTokenSuperseded(requestToken: refreshToken, base: stale) {
@@ -404,9 +502,9 @@ enum OnlineProxy {
     /// 刷新等待网络期间凭证是否已被「别的来源」换掉（典型：用户重新登录，
     /// 登录路径不持 refresh 文件锁）。是则返回基于文件新凭证的 Settings，
     /// 刷新结果（无论成败）都应让位于它 —— 尤其 401 不能把新登录连坐清掉。
-    /// 对账走 persistedCredentialState（文件原值），同样不能被 env 盖住。
+    /// 对账走 Keychain 原值，同样不能被 env 盖住。
     private static func settingsIfRefreshTokenSuperseded(requestToken: String, base: Settings) -> Settings? {
-        let latest = persistedCredentialState()
+        let latest = persistedCredentialStateLocked()
         guard !latest.refreshToken.isEmpty,
               latest.refreshToken != requestToken,
               !latest.accessToken.isEmpty,
@@ -430,46 +528,84 @@ enum OnlineProxy {
         )
     }
 
-    /// 登录成功（浏览器回调之外的路径，如连接码验证）或刷新成功后落盘新凭证。
-    /// settings.json 为唯一真相；同时清掉历史版本写进当前偏好域的 token 缓存。
+    /// 登录成功（浏览器回调之外的路径，如连接码验证）或刷新成功后写 Keychain。
     /// 持凭证锁串行 —— 登录写与在飞刷新互斥，谁后落盘谁是真相。
-    static func persistTokens(accessToken: String, refreshToken: String) {
+    @discardableResult
+    static func persistTokens(accessToken: String, refreshToken: String) -> Bool {
         withCredentialFileLock {
             persistTokensLocked(accessToken: accessToken, refreshToken: refreshToken)
         }
     }
 
     /// 仅限已持有凭证锁的调用方（refresh 临界区）。
-    private static func persistTokensLocked(accessToken: String, refreshToken: String) {
-        let file = settingsFileURL()
-        var root: [String: Any] = [:]
-        if let data = try? Data(contentsOf: file),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            root = existing
-        }
-        var meee2 = (root["meee2"] as? [String: Any]) ?? [:]
-        meee2["accessToken"] = accessToken
-        meee2["refreshToken"] = refreshToken
-        meee2["authExpired"] = false
-        root["meee2"] = meee2
-        if JSONSerialization.isValidJSONObject(root),
-           let nextData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
-            try? FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? nextData.write(to: file, options: .atomic)
+    @discardableResult
+    private static func persistTokensLocked(accessToken: String, refreshToken: String) -> Bool {
+        _ = persistedSupabaseKeyLocked()
+        let previousCredentials = readStoredCredentialsLocked()
+        guard writeStoredCredentialsLocked(
+            accessToken: accessToken,
+            refreshToken: refreshToken
+        ) else {
+            MError("[OnlineProxy] failed to persist Online credentials in Keychain")
+            return false
         }
 
-        let d = defaults
-        d.removeObject(forKey: "meee2OnlineAccessToken")
-        d.removeObject(forKey: "meee2OnlineRefreshToken")
-        d.removeObject(forKey: "meee2AuthExpired")
+        var meee2 = sanitizeCredentialKeys(in: fileMeee2Dict())
+        meee2["authExpired"] = false
+        let wroteSettings = writeMeee2SettingsLocked(meee2)
+        guard wroteSettings else {
+            if !restoreStoredCredentialsLocked(previousCredentials) {
+                MError("[OnlineProxy] failed to roll back credentials after settings write failure")
+            }
+            return false
+        }
+        purgeLegacyDefaultsTokens()
+        return true
     }
 
-    /// refresh 被服务端拒绝（token family 已吊销）：清 settings.json 里的
-    /// token 并打上 authExpired。所有形态的二进制读同一份文件，下一次调用
-    /// 都会短路到重新登录态，不再拿旧凭证去撞 reuse-detection。
+    /// Browser login callback path: write non-secret connection settings and
+    /// the Keychain credential envelope under one cross-process lock.
+    @discardableResult
+    static func persistConfigurationAndTokens(
+        meee2 settings: [String: Any],
+        accessToken: String,
+        refreshToken: String,
+        supabaseKey: String
+    ) -> Bool {
+        withCredentialFileLock {
+            let previousCredentials = readStoredCredentialsLocked()
+            let previousSupabaseKey = credentialStore.read(account: onlineSupabaseKeyAccount)
+            guard writeStoredCredentialsLocked(
+                accessToken: accessToken,
+                refreshToken: refreshToken
+            ) else {
+                MError("[OnlineProxy] failed to persist callback credentials in Keychain")
+                return false
+            }
+            guard credentialStore.write(supabaseKey, account: onlineSupabaseKeyAccount) else {
+                _ = restoreStoredCredentialsLocked(previousCredentials)
+                MError("[OnlineProxy] failed to persist callback Supabase key in Keychain")
+                return false
+            }
+            var sanitized = sanitizeCredentialKeys(in: settings)
+            sanitized.removeValue(forKey: "supabaseKey")
+            sanitized["authExpired"] = false
+            let wroteSettings = writeMeee2SettingsLocked(sanitized)
+            guard wroteSettings else {
+                if !restoreStoredCredentialsLocked(previousCredentials) {
+                    MError("[OnlineProxy] failed to roll back callback credentials after settings write failure")
+                }
+                _ = restoreSecretLocked(previousSupabaseKey, account: onlineSupabaseKeyAccount)
+                return false
+            }
+            purgeLegacyDefaultsTokens()
+            defaults.removeObject(forKey: "meee2SupabaseKey")
+            return true
+        }
+    }
+
+    /// refresh 被服务端拒绝（token family 已吊销）：删除 Keychain item 并在
+    /// settings.json 打上 authExpired。下一次调用短路到重新登录态。
     static func markAuthExpired() {
         withCredentialFileLock {
             markAuthExpiredLocked()
@@ -478,20 +614,59 @@ enum OnlineProxy {
 
     /// 仅限已持有凭证锁的调用方（refresh 临界区）。
     private static func markAuthExpiredLocked() {
-        let file = settingsFileURL()
-        if let data = try? Data(contentsOf: file),
-           var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            var meee2 = (root["meee2"] as? [String: Any]) ?? [:]
-            meee2["accessToken"] = ""
-            meee2["refreshToken"] = ""
-            meee2["authExpired"] = true
-            root["meee2"] = meee2
-            if JSONSerialization.isValidJSONObject(root),
-               let nextData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
-                try? nextData.write(to: file, options: .atomic)
-            }
+        _ = persistedSupabaseKeyLocked()
+        if !credentialStore.delete(account: onlineCredentialAccount) {
+            MError("[OnlineProxy] failed to delete revoked Online credentials from Keychain")
         }
+        var meee2 = sanitizeCredentialKeys(in: fileMeee2Dict())
+        meee2["authExpired"] = true
+        _ = writeMeee2SettingsLocked(meee2)
+        purgeLegacyDefaultsTokens()
         noteAuthExpiredLocally()
+    }
+
+    /// Explicit factory reset. Unlike normal Online disconnect, this clears
+    /// every credential account in the meee2 Keychain service (including
+    /// assistant-provider keys), then scrubs any legacy plaintext token keys.
+    @discardableResult
+    static func clearAllSecureCredentialsForFactoryReset() -> Bool {
+        withCredentialFileLock {
+            let deleted = credentialStore.deleteAll()
+            var meee2 = sanitizeCredentialKeys(in: fileMeee2Dict())
+            meee2.removeValue(forKey: "supabaseKey")
+            meee2["authExpired"] = false
+            let wroteSettings = writeMeee2SettingsLocked(meee2)
+            purgeLegacyDefaultsTokens()
+            defaults.removeObject(forKey: "meee2SupabaseKey")
+            defaults.set(false, forKey: "meee2Connected")
+            return deleted && wroteSettings
+        }
+    }
+
+    /// One-time migration for the legacy plaintext Supabase client key. The
+    /// old file/defaults value is removed only after Keychain confirms the write.
+    static func persistedSupabaseKey() -> String {
+        withCredentialFileLock { persistedSupabaseKeyLocked() }
+    }
+
+    private static func persistedSupabaseKeyLocked() -> String {
+        let file = fileMeee2Dict()
+        if let stored = credentialStore.read(account: onlineSupabaseKeyAccount), !stored.isEmpty {
+            scrubLegacySupabaseKeyLocked(file)
+            return stored
+        }
+        let legacy = firstNonEmpty(
+            file["supabaseKey"] as? String,
+            defaults.string(forKey: "meee2SupabaseKey")
+        )
+        guard !legacy.isEmpty else { return "" }
+        guard credentialStore.write(legacy, account: onlineSupabaseKeyAccount) else {
+            MWarn("[OnlineProxy] Keychain migration failed; legacy Supabase key retained")
+            return legacy
+        }
+        scrubLegacySupabaseKeyLocked(file)
+        MInfo("[OnlineProxy] migrated Supabase key from plaintext storage to Keychain")
+        return legacy
     }
 
     /// 当前进程域的过期收尾：清 token 缓存、退出「已连接」态、广播给 UI。
@@ -506,6 +681,159 @@ enum OnlineProxy {
         d.set(true, forKey: "meee2AuthExpired")
         d.set(false, forKey: "meee2Connected")
         NotificationCenter.default.post(name: authExpiredNotification, object: nil)
+    }
+
+    // MARK: - Secure credential persistence
+
+    /// Must be called while holding `withCredentialFileLock`.
+    private static func persistedCredentialStateLocked() -> (
+        accessToken: String,
+        refreshToken: String,
+        authExpired: Bool
+    ) {
+        let file = fileMeee2Dict()
+        let authExpired = (file["authExpired"] as? Bool) ?? false
+
+        // A revoked family must not survive in Keychain even if an earlier
+        // process crashed between writing authExpired and deleting the item.
+        if authExpired {
+            _ = credentialStore.delete(account: onlineCredentialAccount)
+            scrubLegacyCredentialKeysLocked(file)
+            return ("", "", true)
+        }
+
+        if let stored = readStoredCredentialsLocked() {
+            scrubLegacyCredentialKeysLocked(file)
+            return (stored.accessToken, stored.refreshToken, false)
+        }
+
+        // One-time migration from pre-Keychain settings.json. Only remove the
+        // plaintext keys after the secure write succeeds; a Keychain failure
+        // must not silently destroy the user's ability to reconnect.
+        let legacyAccess = (file["accessToken"] as? String) ?? ""
+        let legacyRefresh = (file["refreshToken"] as? String) ?? ""
+        if !legacyAccess.isEmpty || !legacyRefresh.isEmpty {
+            guard writeStoredCredentialsLocked(
+                accessToken: legacyAccess,
+                refreshToken: legacyRefresh
+            ) else {
+                MWarn("[OnlineProxy] Keychain migration failed; legacy token keys retained")
+                return (legacyAccess, legacyRefresh, false)
+            }
+            scrubLegacyCredentialKeysLocked(file)
+            purgeLegacyDefaultsTokens()
+            MInfo("[OnlineProxy] migrated Online credentials from settings.json to Keychain")
+            return (legacyAccess, legacyRefresh, false)
+        }
+
+        // Remove empty legacy keys too so settings.json cannot drift back into
+        // being interpreted as a credential store.
+        scrubLegacyCredentialKeysLocked(file)
+        return ("", "", false)
+    }
+
+    private static func readStoredCredentialsLocked() -> StoredOnlineCredentials? {
+        guard let value = credentialStore.read(account: onlineCredentialAccount),
+              let data = value.data(using: .utf8),
+              let stored = try? JSONDecoder().decode(StoredOnlineCredentials.self, from: data),
+              stored.version == 1 else {
+            return nil
+        }
+        return stored
+    }
+
+    @discardableResult
+    private static func writeStoredCredentialsLocked(
+        accessToken: String,
+        refreshToken: String
+    ) -> Bool {
+        if accessToken.isEmpty && refreshToken.isEmpty {
+            return credentialStore.delete(account: onlineCredentialAccount)
+        }
+        let stored = StoredOnlineCredentials(
+            accessToken: accessToken,
+            refreshToken: refreshToken
+        )
+        guard let data = try? JSONEncoder().encode(stored),
+              let value = String(data: data, encoding: .utf8) else {
+            return false
+        }
+        return credentialStore.write(value, account: onlineCredentialAccount)
+    }
+
+    private static func restoreStoredCredentialsLocked(_ previous: StoredOnlineCredentials?) -> Bool {
+        guard let previous else {
+            return credentialStore.delete(account: onlineCredentialAccount)
+        }
+        return writeStoredCredentialsLocked(
+            accessToken: previous.accessToken,
+            refreshToken: previous.refreshToken
+        )
+    }
+
+    private static func restoreSecretLocked(_ previous: String?, account: String) -> Bool {
+        guard let previous, !previous.isEmpty else {
+            return credentialStore.delete(account: account)
+        }
+        return credentialStore.write(previous, account: account)
+    }
+
+    private static func scrubLegacySupabaseKeyLocked(_ file: [String: Any]) {
+        if file.keys.contains("supabaseKey") {
+            var sanitized = file
+            sanitized.removeValue(forKey: "supabaseKey")
+            _ = writeMeee2SettingsLocked(sanitized)
+        }
+        defaults.removeObject(forKey: "meee2SupabaseKey")
+    }
+
+    private static func scrubLegacyCredentialKeysLocked(_ file: [String: Any]) {
+        guard file.keys.contains("accessToken") || file.keys.contains("refreshToken") else {
+            return
+        }
+        _ = writeMeee2SettingsLocked(sanitizeCredentialKeys(in: file))
+    }
+
+    private static func sanitizeCredentialKeys(in meee2: [String: Any]) -> [String: Any] {
+        var sanitized = meee2
+        sanitized.removeValue(forKey: "accessToken")
+        sanitized.removeValue(forKey: "refreshToken")
+        return sanitized
+    }
+
+    @discardableResult
+    private static func writeMeee2SettingsLocked(_ meee2: [String: Any]) -> Bool {
+        let root: [String: Any] = ["meee2": sanitizeCredentialKeys(in: meee2)]
+        guard JSONSerialization.isValidJSONObject(root),
+              let data = try? JSONSerialization.data(
+                withJSONObject: root,
+                options: [.prettyPrinted, .sortedKeys]
+              ) else {
+            return false
+        }
+        let file = settingsFileURL()
+        do {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if let settingsFileWriteOverride {
+                try settingsFileWriteOverride(data, file)
+            } else {
+                try data.write(to: file, options: .atomic)
+            }
+            return true
+        } catch {
+            MError("[OnlineProxy] failed to write non-secret settings: \(error)")
+            return false
+        }
+    }
+
+    private static func purgeLegacyDefaultsTokens() {
+        let d = defaults
+        d.removeObject(forKey: "meee2OnlineAccessToken")
+        d.removeObject(forKey: "meee2OnlineRefreshToken")
+        d.removeObject(forKey: "meee2AuthExpired")
     }
 
     private static func describeForLog(_ error: ProxyError) -> String {
@@ -527,8 +855,8 @@ enum OnlineProxy {
     }
 
     private static func settingsFileURL() -> URL {
-        settingsFileURLOverride ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2/settings.json")
+        settingsFileURLOverride ?? StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("settings.json")
     }
 
     private static func performSync(request: URLRequest) -> Result<Data, ProxyError> {
@@ -550,5 +878,40 @@ enum OnlineProxy {
         }.resume()
         _ = sema.wait(timeout: .now() + 35)
         return outcome
+    }
+}
+
+/// Automatic test fallback selected whenever settingsFileURLOverride is set
+/// without an explicit credentialStoreOverride. Keeping it in-process makes
+/// the legacy test seam sufficient to protect a developer's real Keychain.
+private final class EphemeralCredentialStore: SecureCredentialStoring {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+
+    func read(account: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[account]
+    }
+
+    func write(_ value: String, account: String) -> Bool {
+        lock.lock()
+        values[account] = value
+        lock.unlock()
+        return true
+    }
+
+    func delete(account: String) -> Bool {
+        lock.lock()
+        values.removeValue(forKey: account)
+        lock.unlock()
+        return true
+    }
+
+    func deleteAll() -> Bool {
+        lock.lock()
+        values.removeAll()
+        lock.unlock()
+        return true
     }
 }

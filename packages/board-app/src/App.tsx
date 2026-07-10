@@ -1,5 +1,7 @@
 import {
   createContext,
+  lazy,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -8,15 +10,10 @@ import {
   useState,
 } from 'react'
 import { CanvasToolbar } from './components/CanvasToolbar'
-import { PlannerGraph } from './components/planner/PlannerGraph'
-import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
-import { ArtifactsView, type ArtifactSessionFilter } from './components/ArtifactsView'
+import type { ArtifactSessionFilter } from './components/ArtifactsView'
 import { SessionLauncherView } from './components/SessionLauncherView'
 import { SessionTerminalOverlay } from './components/SessionTerminalOverlay'
-import { IntegrationsView } from './components/IntegrationsView'
-import { TemplatesView } from './components/TemplatesView'
-import { TeamView } from './components/TeamView'
-import { SettingsView } from './components/SettingsView'
+import type { SettingsCategory } from './components/SettingsView'
 import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
@@ -93,11 +90,20 @@ import {
 
 const PLANNER_PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
 
+const PlannerGraph = lazy(() => import('./components/planner/PlannerGraph').then((module) => ({ default: module.PlannerGraph })))
+const WorkspaceMonitor = lazy(() => import('./components/planner/WorkspaceMonitor').then((module) => ({ default: module.WorkspaceMonitor })))
+const ArtifactsView = lazy(() => import('./components/ArtifactsView').then((module) => ({ default: module.ArtifactsView })))
+const IntegrationsView = lazy(() => import('./components/IntegrationsView').then((module) => ({ default: module.IntegrationsView })))
+const TemplatesView = lazy(() => import('./components/TemplatesView').then((module) => ({ default: module.TemplatesView })))
+const TeamView = lazy(() => import('./components/TeamView').then((module) => ({ default: module.TeamView })))
+const SettingsView = lazy(() => import('./components/SettingsView').then((module) => ({ default: module.SettingsView })))
+
 type SessionsWorkspaceOpenTarget = { sessionId?: string; surfaceId?: string; nonce: number }
 
 function readStoredPlannerPanelCollapsed(): boolean {
   if (typeof window === 'undefined') return false
-  return window.localStorage.getItem(PLANNER_PANEL_COLLAPSED_KEY) === '1'
+  const stored = window.localStorage.getItem(PLANNER_PANEL_COLLAPSED_KEY)
+  return stored == null ? true : stored === '1'
 }
 
 declare global {
@@ -244,6 +250,9 @@ export const useToast = () => useContext(ToastContext)
 export default function App() {
   const { t } = useI18n()
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
+  const [canvasBootstrapError, setCanvasBootstrapError] = useState<string | null>(null)
+  const [canvasHydrationError, setCanvasHydrationError] = useState<string | null>(null)
+  const [canvasRetryRevision, setCanvasRetryRevision] = useState(0)
   const canvasListSignatureRef = useRef('')
   const applyCanvasList = useCallback((list: CanvasList) => {
     const nextSignature = canvasListSignature(list)
@@ -271,10 +280,15 @@ export default function App() {
     let retryTimer: number | null = null
     const load = (allowFallback: boolean) => {
       fetchCanvases()
-        .then((list) => { if (!cancelled) applyCanvasList(list) })
+        .then((list) => {
+          if (cancelled) return
+          setCanvasBootstrapError(null)
+          applyCanvasList(list)
+        })
         .catch((err) => {
           console.warn('[App] fetchCanvases failed:', (err as Error).message)
           if (cancelled) return
+          setCanvasBootstrapError((err as Error).message || 'Canvas list is unavailable')
           if (allowFallback) {
             setCanvasList((current) => current ?? fallbackCanvasList())
             retryTimer = window.setTimeout(() => load(false), 1500)
@@ -286,11 +300,12 @@ export default function App() {
       cancelled = true
       if (retryTimer !== null) window.clearTimeout(retryTimer)
     }
-  }, [applyCanvasList])
+  }, [applyCanvasList, canvasRetryRevision])
 
   const refreshCanvases = useCallback(() => {
     return fetchCanvases()
       .then((list) => {
+        setCanvasBootstrapError(null)
         applyCanvasList(list)
         return list
       })
@@ -360,20 +375,25 @@ export default function App() {
 
     loadCanvasHydratedState(activeCanvasId, persistence).then((next) => {
       if (cancelled) return
+      setCanvasHydrationError(null)
       rememberCanvasState(next)
       finishLoading(next)
     }).catch((err) => {
       console.warn('[App] hydrate canvas failed:', (err as Error).message)
       if (cancelled) return
+      setCanvasHydrationError((err as Error).message || 'Canvas state is unavailable')
+      if (cached) {
+        setCanvasLoading(false)
+        return
+      }
       const next = emptyHydratedState(activeCanvasId)
-      rememberCanvasState(next)
       finishLoading(next)
     })
     return () => {
       cancelled = true
       if (loadingTimer !== null) window.clearTimeout(loadingTimer)
     }
-  }, [activeCanvasId, persistence])
+  }, [activeCanvasId, canvasRetryRevision, persistence])
 
   useEffect(() => {
     if (!canvasList) return
@@ -420,6 +440,8 @@ export default function App() {
     boardState: boardState.state,
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
+  const [workspaceRailDetail, setWorkspaceRailDetail] = useState<HTMLDivElement | null>(null)
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('general')
   const [sessionsWorkspaceTarget, setSessionsWorkspaceTarget] = useState<SessionsWorkspaceOpenTarget | null>(null)
   const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
@@ -1224,6 +1246,7 @@ export default function App() {
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
     if (nextMode === 'artifacts') setArtifactSessionFilter(null)
+    if (nextMode === 'settings') setSettingsCategory('general')
     setWorkspaceMode(nextMode)
   }, [])
 
@@ -1287,6 +1310,7 @@ export default function App() {
           mode={workspaceMode}
           userProfile={userProfile}
           onModeChange={handleWorkspaceModeChange}
+          detailRef={setWorkspaceRailDetail}
         />
         <div className={`board-area${workspaceMode === 'planner' && activeWorkspaceCanvasKind === 'monitor' ? ' board-area--monitor' : ''}`}>
           {readinessReport && !readinessReport.ready && (
@@ -1296,7 +1320,14 @@ export default function App() {
               className="readiness-banner"
               title="Local setup incomplete"
               action={(
-                <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setSettingsCategory('runtime')
+                    setWorkspaceMode('settings')
+                  }}
+                >
                   Settings
                 </button>
               )}
@@ -1304,6 +1335,31 @@ export default function App() {
               {readinessReport.requiredFailed} readiness check{readinessReport.requiredFailed === 1 ? '' : 's'} failed. Some local session features may run in fallback mode.
             </Notice>
           )}
+          {(canvasBootstrapError || canvasHydrationError) && (
+            <Notice
+              tone="danger"
+              placement="canvas"
+              className="workspace-load-error"
+              title="Canvas data is temporarily unavailable"
+              action={(
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setCanvasRetryRevision((revision) => revision + 1)}
+                >
+                  Retry
+                </button>
+              )}
+            >
+              {canvasHydrationError ?? canvasBootstrapError}. Sessions remain available while meee2 reconnects.
+            </Notice>
+          )}
+          <Suspense fallback={(
+            <div className="workspace-module-loading" role="status" aria-live="polite">
+              <div className="boot-spinner" aria-hidden />
+              <span>Loading workspace…</span>
+            </div>
+          )}>
           {workspaceMode === 'session' ? (
             <SessionLauncherView
               state={boardState.state}
@@ -1312,6 +1368,8 @@ export default function App() {
               onOpenSessionArtifacts={handleOpenSessionArtifacts}
               onJumpToCanvas={handleJumpSessionToCanvas}
               onToast={pushToast}
+              unifiedSidebar
+              sidebarContainer={workspaceRailDetail}
             />
           ) : workspaceMode === 'planner' ? (
             activeWorkspaceCanvasKind === 'monitor' ? (
@@ -1395,6 +1453,7 @@ export default function App() {
             <TeamView userProfile={userProfile} />
           ) : workspaceMode === 'settings' ? (
             <SettingsView
+              initialCategory={settingsCategory}
               onSaved={() => {
                 refreshUserProfile()
                 refreshAgentRuntimeStatus(false)
@@ -1416,6 +1475,7 @@ export default function App() {
               onRestartOnboarding={restartFirstRunOnboarding}
             />
           ) : null}
+          </Suspense>
           {workspaceMode === 'planner' && (
             <CanvasToolbar
               canvases={workspaceCanvases}

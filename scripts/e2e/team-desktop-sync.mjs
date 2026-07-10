@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -10,6 +10,7 @@ const repoRoot = resolve(import.meta.dirname, '../..')
 const workspaceRoot = resolve(repoRoot, '..')
 const onlineDir = process.env.MEEE2_ONLINE_DIR || join(workspaceRoot, 'meee2-online')
 const keepData = process.env.MEEE2_E2E_KEEP_DATA === '1'
+const boardControlHelper = join(repoRoot, 'scripts', 'lib', 'board_control.py')
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -335,11 +336,22 @@ async function startDesktop(binary, env, onlineBaseUrl, world, user, label, base
     }, `${label} desktop BoardServer`, 45_000),
     new Promise((_, reject) => proc.child.once('exit', () => reject(new Error(proc.output())))),
   ])
-  return { label, baseUrl, home, stop: proc.stop, output: proc.output }
+  const controlToken = execFileSync(
+    process.env.PYTHON || '/usr/bin/python3',
+    [boardControlHelper, '--base-url', baseUrl],
+    { encoding: 'utf8', env: { ...process.env, HOME: home } },
+  ).trim()
+  return { label, baseUrl, home, controlToken, stop: proc.stop, output: proc.output }
 }
 
 async function desktopJson(desktop, path, init = {}) {
-  return jsonFetch(`${desktop.baseUrl}${path}`, init)
+  return jsonFetch(`${desktop.baseUrl}${path}`, {
+    ...init,
+    headers: {
+      'X-Meee2-Control-Token': desktop.controlToken,
+      ...(init.headers || {}),
+    },
+  })
 }
 
 async function onlineJson(online, user, path, init = {}) {

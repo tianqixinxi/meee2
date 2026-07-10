@@ -25,7 +25,6 @@ public enum DoctorCommand {
             case .pass: marker = "✓"
             case .fail: marker = "✗"
             case .warn: marker = "!"
-            case .info: marker = "i"
             }
             print("\(marker) [\(check.severity.rawValue)] \(check.title)")
             print("  \(check.detail)")

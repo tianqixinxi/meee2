@@ -86,7 +86,7 @@ The hook → state pipeline (`docs/ARCHITECTURE.md` §3, §5, §6) is the part s
 - **Hook ingress** — `Bridge/claude-hook-bridge.sh` writes hook JSON into `/tmp/meee2.sock`. `HookSocketServer.start(...)` (`Sources/ClaudeCLI/HookSocketServer.swift`) reads it, decodes `HookEvent` (`Sources/ClaudeCLI/HookEvent.swift`), dispatches to `ClaudePlugin.handleHookEvent(_:)` (`Sources/ClaudeCLI/ClaudePlugin.swift:312`).
 - **State write** — `ClaudePlugin.handleHookEvent` upserts a `SessionData` into `SessionStore` (`Sources/Core/SessionStore.swift:333` — the sticky-field-preserving merge).
 - **Status reconciliation** — `TranscriptStatusResolver.resolve(for:)` (`Sources/ClaudeCLI/TranscriptStatusResolver.swift:208`) reads the hook-derived `data.status`, then calls `resolveUncached` (`:238`) which `readTail(path:bytes: 4096)` (`:511`), finds the last user/assistant/system entry (`findLastRelevantEntry` `:532`), and runs `decideFromTail` (`:300`) to refine the status.
-- **Reads** — Island, TUI, Board, and `BoardDTOBuilder.sessionDTO` all funnel through `TranscriptStatusResolver.resolve(for:)`. Don't read `SessionData.status` directly.
+- **Reads** — Island, CLI, Board, and `BoardDTOBuilder.sessionDTO` all funnel through `TranscriptStatusResolver.resolve(for:)`. Don't read `SessionData.status` directly.
 
 ### 2.1 What stream-json could replace
 

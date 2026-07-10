@@ -1,6 +1,7 @@
 import Foundation
 import Swifter
 import Meee2PluginKit
+import Meee2CommKit
 
 /// AttachmentsAPI —— 处理 `POST /api/sessions/:id/attachments`
 ///
@@ -90,8 +91,10 @@ enum AttachmentsAPI {
         }
 
         // 保存目录：~/.meee2/attachments/<sid>/
-        let baseDir = (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".meee2/attachments/\(realSessionId)")
+        let baseDir = StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("attachments", isDirectory: true)
+            .appendingPathComponent(realSessionId, isDirectory: true)
+            .path
         do {
             try FileManager.default.createDirectory(
                 atPath: baseDir,

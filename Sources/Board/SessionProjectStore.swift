@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 public enum SessionProjectProvider: String, Codable {
     case claude
@@ -55,8 +56,7 @@ public final class SessionProjectStore {
     private var cached: StoreData?
 
     private init() {
-        let dir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let dir = StorageRoots.processDefault.baseDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("session-projects.json")
     }

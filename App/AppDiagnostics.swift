@@ -48,7 +48,7 @@ enum AppDiagnostics {
     /// of one match the other.
     private static func bootInfo() -> [String] {
         let bundle = Bundle.main
-        let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let version = BuildInfo.version
         let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"
         let bundlePath = bundle.bundlePath
         let translocated = bundlePath.contains("/AppTranslocation/")

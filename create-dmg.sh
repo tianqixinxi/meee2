@@ -115,10 +115,13 @@ else
     echo "Copied Sparkle.framework (from $SPARKLE_SRC)"
 fi
 
-# Copy SwiftPM resource bundle (contains WebDist etc.). Path differs by
-# build mode: single-arch lives under .build/<host-arch>/release, universal
-# under .build/apple/Products/Release. `find` picks whichever exists.
-RESOURCE_BUNDLE=$(find .build -maxdepth 4 -name "meee2_meee2Kit.bundle" -type d 2>/dev/null | head -1)
+# Copy SwiftPM resource bundle (contains WebDist etc.). Prefer the bundle from
+# the build directory selected above; stale bundles from other architectures can
+# otherwise win the `find | head -1` race and ship old frontend assets.
+RESOURCE_BUNDLE="$BUILD_DIR/meee2_meee2Kit.bundle"
+if [ ! -d "$RESOURCE_BUNDLE" ]; then
+    RESOURCE_BUNDLE=$(find .build -maxdepth 4 -name "meee2_meee2Kit.bundle" -type d 2>/dev/null | head -1)
+fi
 if [ -n "$RESOURCE_BUNDLE" ]; then
     cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/Resources/"
     echo "Copied meee2_meee2Kit.bundle (from $RESOURCE_BUNDLE)"
@@ -342,7 +345,6 @@ sudo ln -sf /Applications/meee2.app/Contents/MacOS/meee2 /usr/local/bin/meee2
 echo ""
 echo "Done! You can now use 'meee2' command in terminal:"
 echo "  meee2          - Start GUI (default)"
-echo "  meee2 tui      - Start TUI dashboard"
 echo "  meee2 list     - List sessions"
 echo "  meee2 --help   - Show help"
 EOF

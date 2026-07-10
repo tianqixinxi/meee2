@@ -4,9 +4,11 @@ import Meee2PluginKit
 enum BoardSessionSnapshotProvider {
     private static let syntheticE2ESessionPrefix = "e2e-session-"
 
-    static func currentBoardSessions() -> [SessionDTO] {
+    static func currentBoardSessions(reconcileTerminalStatuses: Bool = true) -> [SessionDTO] {
         let snapshots = TerminalSessionBackendRegistry.shared.listSnapshots()
-        SessionTerminalStore.shared.reconcileManagedSurfaceStatuses(liveSnapshots: snapshots)
+        if reconcileTerminalStatuses {
+            SessionTerminalStore.shared.reconcileManagedSurfaceStatuses(liveSnapshots: snapshots)
+        }
         let terminalInfos = SessionTerminalStore.shared.getAll()
         let storedSessions = visibleStoredSessions(SessionStore.shared.listAll())
         let internalSessions = snapshots

@@ -1,5 +1,6 @@
 import XCTest
 @testable import meee2Kit
+import Meee2CommKit
 import Meee2PluginKit
 
 /// Regression coverage for the planner surface→CLI correlation fix.
@@ -22,8 +23,12 @@ final class SessionCorrelationTests: XCTestCase {
 
     /// Managed-workspace cwd shared by the surface + CLI records (the only link).
     private func managedWorkspaceCwd() -> String {
-        (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".meee2/workspaces/global/meee2-corr-\(UUID().uuidString)")
+        StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent(
+                "workspaces/global/meee2-corr-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            .path
     }
 
     /// Write a minimal Claude transcript JSONL so `transcriptPreviewFromClaude`

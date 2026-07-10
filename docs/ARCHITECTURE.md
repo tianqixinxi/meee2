@@ -10,10 +10,10 @@ meee2 is a single macOS process that:
 
 1. **Ingests** events from Claude CLI hooks (and other AI clients) over a Unix domain socket.
 2. **Reconciles** those events against the transcript on disk to derive a single truthful `SessionStatus`.
-3. **Publishes** a unified session model to four surfaces: the Dynamic Island (SwiftUI), a TUI dashboard (ncurses), a CLI, and a Web Board (React, served by an embedded HTTP server).
+3. **Publishes** a unified session model to three surfaces: the Dynamic Island (SwiftUI), a CLI, and a Web Board (React, served by an embedded HTTP server).
 4. **Routes** messages between AI sessions through A2A channels, and handles permission-request round-trips back to the CLI.
 
-The app runs as a standard `.regular` activation policy process — Dock icon, App Switcher entry, and a main Board window as the **primary surface** (opened on launch). The menu bar item + Dynamic Island overlay are secondary, always-on accessories. The CLI/TUI and GUI share the same `meee2Kit` Swift module; the binary dispatches on argv in `Meee2App.init()`.
+The app runs as a standard `.regular` activation policy process — Dock icon, App Switcher entry, and a main Board window as the **primary surface** (opened on launch). The menu bar item + Dynamic Island overlay are secondary, always-on accessories. The CLI and GUI share the same `meee2Kit` Swift module; the binary dispatches on argv in `Meee2App.init()`.
 
 ---
 
@@ -24,13 +24,12 @@ One process, multiple surfaces:
 | Surface | Thread / Runloop | Entry | Purpose |
 |---|---|---|---|
 | **GUI** | main runloop (NSApplication) | `App/Meee2App.swift` → `AppDelegate` | Status bar item + Dynamic Island window + Settings window |
-| **TUI** | main runloop (ncurses owns stdin) | `meee2 dashboard` | Full-screen terminal dashboard |
 | **CLI** | main thread, exits after command | `meee2 list / send / jump / channel / msg / board / note …` | Scriptable commands |
 | **Hook Socket** | `com.meee2.socket` serial `DispatchQueue` | `HookSocketServer.shared.start(...)` | Accept Unix-socket clients, parse JSON, dispatch events |
 | **Board HTTP** | own queue inside `BoardServer` | `meee2 board` or GUI start | Serves `web/` static files + JSON API on `:9876` |
 | **Session Monitor** | background | `SessionMonitor` | Watches `~/.claude/sessions/` for new sessions |
 
-The CLI and TUI read the same `SessionStore` that the GUI writes to, via the `~/.meee2/` filesystem (below). There is no IPC between CLI invocations and the running GUI for most commands — they both read/write the same JSON files.
+The CLI reads the same persisted session state that the GUI writes via the `~/.meee2/` filesystem (below). There is no IPC between CLI invocations and the running GUI for most commands — they both read/write the same JSON files.
 
 ---
 
@@ -74,8 +73,8 @@ The CLI and TUI read the same `SessionStore` that the GUI writes to, via the `~/
 │      ┌──────────────────────────┼─────────────────────────────┼───────┐  │
 │      ▼                          ▼                             ▼        │  │
 │  ┌─────────┐            ┌──────────────┐               ┌────────────┐  │  │
-│  │ Island  │            │   TUI        │               │BoardServer │──┼─▶ web/ (React)
-│  │  View   │            │ DashboardView│               │ /api/state │  │
+│  │ Island  │            │     CLI      │               │BoardServer │──┼─▶ web/ (React)
+│  │  View   │            │ argv commands│               │ /api/state │  │
 │  └────┬────┘            └──────────────┘               └────────────┘  │  │
 │       │                                                                 │  │
 │       └── TerminalManager / TerminalJumper ──────────────────────────┘  │
@@ -102,9 +101,9 @@ Sources/
                                        ChannelRegistry, MessageRouter, TerminalManager,
                                        TerminalJumper, AuditLogger, UsageTracker,
                                        SoundManager, LogManager, SessionEventBus, …
-  Views/         SwiftUI               IslandView, DashboardView, SettingsView,
+  Views/         SwiftUI               IslandView, SettingsView,
                                        PluginSessionRowView, BuddyASCIIView
-  TUI/           ncurses dashboard     DashboardView, Table, Curses, InputReader
+  TUI/           legacy source         Excluded from the product build
   CLI/           argv commands         CLI, ListCommand, SendCommand, JumpCommand,
                                        ChannelCommand, MsgCommand, BoardCommand, NoteCommand
   Board/         Embedded HTTP API     BoardServer, BoardAPI, BoardDTO, CardTemplateStore
@@ -121,7 +120,7 @@ Tests/             XCTest              AISessionTests, HookEventTests, SessionDa
                                        A2ATests, SessionEventBusTests
 ```
 
-The `meee2Kit` Swift package target contains `Sources/` excluding `App/`. That's what CLI/TUI/GUI all import.
+The `meee2Kit` Swift package target contains `Sources/` excluding `App/`. That's what the CLI and GUI import.
 
 ---
 
@@ -183,7 +182,7 @@ HookEvent          ClaudePlugin         TranscriptStatusResolver     UI template
 | 3 | `Sources/Services/TranscriptStatusResolver.swift` — `resolveUncached` | Refines hookStatus against transcript tail + process/terminal liveness. **Every ESC/abandon/stale heuristic lives here.** Tail-type switch (`user` / `assistant` / `system`) with priority-ordered rules inside each branch. |
 | 4 | `web/src/defaultTemplate.ts` — `classifyLive` / `statusBarColor` / `statusStyle` | Display status → visual triple (halo, badge, color, dim). Mirrored in SwiftUI surfaces via `SessionStatus.color` / `.icon`. |
 
-**Invariant**: Island / TUI / Board all call `TranscriptStatusResolver.resolve(for: SessionData)`, never read `SessionData.status` directly. That's the only reason three surfaces stay in sync when hooks arrive late or out of order. `BoardDTOBuilder.sessionDTO` and `SessionData.toPluginSession()` are the two call sites.
+**Invariant**: Island / CLI / Board all use the canonical status resolution path rather than reading `SessionData.status` directly. That's what keeps the three surfaces in sync when hooks arrive late or out of order.
 
 ### ESC — the only "signal" we never receive
 
@@ -348,10 +347,11 @@ Plugins can register a custom `jumpHandlerId` on `PluginTerminalInfo` to opt int
 
 ## 12. Concurrency Model
 
-- **Main thread** owns all `@Published` mutations on `SessionStore` / `StatusManager`. `HookSocketServer` callbacks that touch those go through `DispatchQueue.main.async` (via `ClaudePlugin`).
+- **`SessionRepository` actor** is the single mutation and persistence domain for `SessionData`. Hook, Board, monitor, and CLI mutations converge there; offline writers additionally use the file lock + persisted revision CAS.
+- **Main thread** consumes immutable snapshots and owns `@Published` publication on `SessionStore` / `StatusManager`. `SessionStore` keeps its synchronous compatibility API by bridging into the repository actor, then publishes the resulting snapshot on main.
 - **`com.meee2.socket` serial queue** owns the socket, the `pendingPermissions` dictionary (guarded by `permissionsLock: NSLock` for defensive reasons — some setters come from other queues), and all timer bookkeeping.
-- **File I/O** for `SessionStore` is synchronous on whichever thread called `upsert`/`saveToDisk`. Writes are atomic (`write to tmp → rename`), so readers on other threads never see a half-written file.
-- **`SessionEventBus.shared`** is a lightweight publish/subscribe used to decouple emitters of "session changed" from subscribers (TUI refresh, web polling). It uses a `DispatchQueue` barrier for mutation.
+- **Session file I/O** writes a mode-0600 temporary file in the destination directory, fsyncs it, atomically renames it, and fsyncs the directory. Corrupt records are quarantined; future schemas stay untouched and read-only.
+- **`SessionEventBus.shared`** is a lightweight publish/subscribe used to decouple emitters of "session changed" from subscribers such as Board refresh. It uses a `DispatchQueue` barrier for mutation.
 
 ---
 
@@ -360,13 +360,13 @@ Plugins can register a custom `jumpHandlerId` on `PluginTerminalInfo` to opt int
 These are the things that, if you forget them, will bite you later. All of them are enforced by convention, not the compiler — don't bypass them without a commit-message explanation.
 
 1. **`SessionStatus` is the single enum.** Don't introduce a parallel status type in a new surface. If the resolver doesn't give you what you need, extend the resolver.
-2. **Three surfaces agree.** Island, TUI, Board all go through `TranscriptStatusResolver.resolve`. Don't short-circuit by reading `SessionData.status` directly in a view.
+2. **Three surfaces agree.** Island, CLI, and Board all use the canonical status resolution path. Don't short-circuit by reading `SessionData.status` directly in a view.
 3. **No `print()` in `Sources/Services/`.** Use `MLog / MDebug / MInfo / MWarn / MError`. CI + validate.sh enforce this.
 4. **No hardcoded `/Users/<name>` paths.** Use `NSHomeDirectory()`, `Bundle.main`, `FileManager`. SwiftLint + CI enforce this.
 5. **Bump `schemaVersion` when `SessionData` shape changes.** Write a migrator and a regression test.
 6. **Don't close the permission socket early.** The client is blocked on read. If you drop the fd without writing, Claude CLI hangs until the timeout fires.
 7. **Plugins are trusted.** `disable-library-validation` is intentional. Document any new code path that executes user-provided code (e.g., card templates) in `SECURITY.md`.
-8. **`meee2Kit` must not assume the GUI is running.** CLI/TUI import it too. Guard any `NSApplication` / SwiftUI use behind AppDelegate.
+8. **`meee2Kit` must not assume the GUI is running.** The CLI imports it too. Guard any `NSApplication` / SwiftUI use behind AppDelegate.
 
 ---
 

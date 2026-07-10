@@ -215,11 +215,12 @@ Lookups: `memberByAlias(_:)`, `memberBySessionId(_:)`.
 
 **Purpose** The primary in-memory + on-disk session model. This is what the UI binds to (via `SessionStore.sessions`), what gets serialized to `~/.meee2/sessions/<id>.json`, and what `BoardDTOBuilder.sessionDTO` starts from. Supersedes `AISession` for anything that touches the UI.
 
-**Schema version** `SessionData.currentSchemaVersion = 2`. On-disk files written before this existed decode as `schemaVersion = 0` and get lazily migrated by `SessionDataMigrations.apply(to:from:)` at load time. See [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-schema-versioning).
+**Schema version** `SessionData.currentSchemaVersion = 3`. On-disk files written before this existed decode as `schemaVersion = 0` and get lazily migrated by `SessionDataMigrations.apply(to:from:)` at load time. Version 3 adds the persisted revision used for cross-process compare-and-swap. See [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-schema-versioning).
 
 | Field | Type | JSON key | Notes |
 |---|---|---|---|
 | `schemaVersion` | `Int` | `schema_version` | Defaults to `currentSchemaVersion` for new records; 0 for pre-versioning legacy |
+| `revision` | `UInt64` | `revision` | Monotonic per record; offline writers must compare-and-swap instead of overwriting a newer revision |
 | `sessionId` | `String` | `session_id` | Primary key |
 | `project` | `String` | `project` | Working directory |
 | `pid` | `Int?` | `pid` | |
@@ -244,13 +245,14 @@ Lookups: `memberByAlias(_:)`, `memberBySessionId(_:)`.
 **Producer → consumer**
 
 - Written by: `ClaudePlugin`, `UsageTracker`, `SessionMonitor`, CLI `note` command.
-- Read by: `IslandView`, `DashboardView`, `BoardDTOBuilder`, CLI `list` command, `TranscriptStatusResolver`.
+- Read by: `IslandView`, `BoardDTOBuilder`, CLI `list` command, `TranscriptStatusResolver`.
 
 **Example JSON (current schema)**
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
+  "revision": 42,
   "session_id": "3f4a1c2e-...",
   "project": "/Users/me/code/meee2",
   "pid": 52031,
@@ -352,7 +354,7 @@ Plugins are loaded as dylibs — see [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.
 
 **File** `meee2-plugin-kit/Sources/Meee2PluginKit/SessionStatus.swift`
 
-The **single** status enum. Every surface (Island, TUI, CLI, Board) must render via these cases.
+The **single** status enum. Every surface (Island, CLI, Board) must render via these cases.
 
 | Case | Semantics | Icon (SF / terminal) | Color | Animation |
 |---|---|---|---|---|
@@ -499,10 +501,18 @@ All dates are ISO 8601 with fractional seconds (`BoardDTOBuilder.iso`).
 
 ```json
 {
+  "revision": 42,
+  "generatedAt": "2026-07-10T02:47:28.000Z",
   "sessions": [SessionDTO, ...],
-  "channels": [ChannelDTO, ...]
+  "channels": [ChannelDTO, ...],
+  "coordinationGroups": [CoordinationGroupDTO, ...]
 }
 ```
+
+`revision` is monotonic within one BoardServer launch and is also carried by
+`state.changed` WebSocket events. Clients may skip a refresh when they have
+already applied that revision. `generatedAt` is the ISO 8601 time at which that
+revision was broadcast.
 
 ### SessionDTO
 
@@ -693,6 +703,24 @@ Migration warnings surface via `MLog("[NodeContractV2][migrate] ...")` for every
 | `POST /api/artifact-candidates/hook` | Codex plugin hook ingress; accepts hook JSON and never requires global user hook config |
 | `POST /api/artifact-candidates/:id/promote` | Attaches the candidate to the unique bound node, or requires `{canvasId,nodeId}` when ambiguous |
 | `POST /api/artifact-candidates/:id/discard` | Marks a candidate discarded |
+
+---
+
+### Legacy Message Cleanup
+
+Pre-retention terminal history is preview-only until the user explicitly
+confirms the exact count and byte scope. Pending and held messages are excluded
+at the `MessageRouter` index layer.
+
+| Route | Request / response |
+|---|---|
+| `POST /api/system/legacy-message-cleanup/token` | Returns a 120-second one-time token with `purpose: legacyMessageRetention`, `messageCount`, `messageBytes`, `issuedAt`, and `expiresAt` |
+| `POST /api/system/legacy-message-cleanup` | Accepts `{token,purpose}` and returns `{ok,backupPath,removedCount,reclaimedBytes,failedCount}` |
+
+The token is bound to the preview scope. A count/size change returns `409`
+without deleting anything. Successful confirmation first creates and verifies a
+timestamped byte-for-byte archive under `~/.meee2/backups`; only then are the
+matching source JSON files removed.
 
 ---
 

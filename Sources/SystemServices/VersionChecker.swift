@@ -247,10 +247,7 @@ public class VersionChecker: ObservableObject {
     }
 
     private static func getCurrentAppVersion() -> String {
-        if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-            return v
-        }
-        return "0.0.0-dev"
+        BuildInfo.version
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 enum SessionArtifactCandidateStatus: String, Codable, Equatable {
     case candidate
@@ -88,8 +89,7 @@ final class SessionArtifactCandidateStore {
     private var backfilledCodexTranscriptSessionIds = Set<String>()
 
     init(
-        rootURL: URL = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        rootURL: URL = StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("artifact-candidates", isDirectory: true),
         fileManager: FileManager = .default
     ) {

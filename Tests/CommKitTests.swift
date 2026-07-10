@@ -21,14 +21,12 @@ final class CommKitTests: XCTestCase {
         return "sid-\(tag)-\(UUID().uuidString.lowercased())"
     }
 
-    /// 删除某 channel 在 ~/.meee2/messages/<name>/ 下的消息封装目录。
+    /// 删除某 channel 在当前（测试隔离）storage root 下的消息封装目录。
     /// ChannelRegistry.delete() 只删 channel 文件,不动 MessageRouter 的
     /// 消息存储 —— 这是 production 行为(channel 删了消息历史保留供审计),
     /// 但测试不需要,这里手动清。
     private func purgeChannelMessages(_ name: String) {
-        let dir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2")
-            .appendingPathComponent("messages")
+        let dir = MessageRouter.shared.storagePaths.messagesDirectory
             .appendingPathComponent(name)
         try? FileManager.default.removeItem(at: dir)
     }

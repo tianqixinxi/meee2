@@ -42,6 +42,14 @@ api_get_version() {
     curl -s "$API/api/version"
 }
 
+api_post() {
+    local path="$1"
+    local control_header
+    control_header=$(python3 "$PROJECT_ROOT/scripts/lib/board_control.py" \
+        --base-url "$API" --header)
+    curl -s -H "$control_header" -X POST "$API$path"
+}
+
 api_field() {
     curl -s "$API/api/version" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1', ''))" 2>/dev/null
 }
@@ -148,7 +156,7 @@ cmd_scenario2() {
     require_meee2_running
     assert_field "isStaged" "False"
     info "POST /api/update/check-in-background — 触发 Sparkle silent download cycle..."
-    curl -s -X POST "$API/api/update/check-in-background" >/dev/null
+    api_post "/api/update/check-in-background" >/dev/null
     info "等待 Sparkle 下载 + 验签 + stage(~10-30s)..."
     elapsed=$(poll_until "isStaged" "True" 90)
     ok "isStaged → True (took ${elapsed}s)"
@@ -189,7 +197,7 @@ cmd_scenario4() {
     before_pid=$(pgrep -f "meee2.app/Contents/MacOS/meee2" | head -1)
     info "PID 开始: $before_pid"
     info "POST /api/update/install — 触发 confirmPendingInstall..."
-    curl -s -X POST "$API/api/update/install" >/dev/null
+    api_post "/api/update/install" >/dev/null
     info "等待 app 重启..."
     sleep 8
     local after_pid
@@ -231,7 +239,7 @@ cmd_scenario5() {
     fi
 
     info "POST /api/_dev/override-latest?version=0.4.99(假造远端出了更新版)..."
-    curl -s -X POST "$API/api/_dev/override-latest?version=0.4.99" >/dev/null
+    api_post "/api/_dev/override-latest?version=0.4.99" >/dev/null
     sleep 1
     assert_field "latest" "0.4.99"
 
@@ -245,7 +253,7 @@ cmd_scenario5() {
     fi
 
     info "清掉 override..."
-    curl -s -X POST "$API/api/_dev/override-latest" >/dev/null
+    api_post "/api/_dev/override-latest" >/dev/null
     sleep 1
     assert_field "latest" "0.4.1"
     ok "scenario 5 passed(discard 分支被识别)"

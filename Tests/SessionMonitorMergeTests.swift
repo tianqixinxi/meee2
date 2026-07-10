@@ -6,6 +6,26 @@ import XCTest
 /// sessionId (a restore was observed to leave 7). `mergeSessions` must collapse
 /// them by id instead of letting each duplicate fall through as a "new" session.
 final class SessionMonitorMergeTests: XCTestCase {
+    func testMonitoringRecoversWhenSessionsDirectoryAppearsAfterStartup() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("session-monitor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let sessions = root.appendingPathComponent(".claude/sessions", isDirectory: true)
+        let monitor = SessionMonitor(sessionsPath: sessions)
+        let watcherAttached = expectation(description: "sessions directory watcher attached")
+        monitor.onDirectoryWatcherAttached = { watcherAttached.fulfill() }
+
+        monitor.startMonitoring()
+        XCTAssertTrue(monitor.isMonitoring)
+        XCTAssertFalse(monitor.isWatchingDirectory)
+
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        wait(for: [watcherAttached], timeout: 3)
+        XCTAssertTrue(monitor.isWatchingDirectory)
+        monitor.stopMonitoring()
+    }
+
 
     private func makeSession(id: String, pid: Int, updated: Date) -> AISession {
         var s = AISession(id: id, pid: pid, cwd: "/tmp/project")

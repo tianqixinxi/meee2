@@ -153,9 +153,26 @@ jobs:
           pnpm install --frozen-lockfile=false
           pnpm build
 
+      - name: Enforce Board bundle budgets
+        run: ./scripts/check-board-bundle-size.sh
+
+      - name: Board typecheck
+        run: pnpm --filter @meee1/board-app typecheck
+
+      - name: Board tests
+        run: pnpm --filter @meee1/board-app test
+
       # 先跑一次 test 作 sanity —— 挂掉的 build 不该 release
       - name: Sanity test
-        run: swift test --parallel
+        # The isolation gate shares one storage root with CLI child processes;
+        # keep release tests serial to avoid cross-worker persistence races.
+        run: ./scripts/test-isolated-home.sh -- swift test
+
+      - name: Session mutation Thread Sanitizer
+        run: ./scripts/test-isolated-home.sh -- swift test --sanitize=thread --filter SessionStoreConcurrencyTests
+
+      - name: Test control-token helper
+        run: python3 scripts/tests/test_board_control.py
 
       # ── Apple Developer ID signing keychain setup (only if secrets present) ──
       # apple-actions/import-codesign-certs handles the whole keychain

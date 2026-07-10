@@ -254,6 +254,12 @@ describe('TemplatesView Claude Code workflow imports', () => {
     expect(screen.getByText('Tag release')).toBeInTheDocument()
     expect(onApplyTemplate).not.toHaveBeenCalled()
 
+    expect(screen.getByRole('button', { name: 'Close Preview - Release Checklist' })).toHaveFocus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: /Preview - Release Checklist/ })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview template Release Checklist' }))
+
     fireEvent.click(screen.getByRole('button', { name: 'Use template' }))
     expect(screen.getByRole('dialog', { name: /Use template - Release Checklist/ })).toBeInTheDocument()
     expect(onApplyTemplate).not.toHaveBeenCalled()

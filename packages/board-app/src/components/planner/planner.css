@@ -151,6 +151,32 @@
   overflow: hidden;
 }
 
+.planner-canvas-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px;
+  background: var(--bg);
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.planner-canvas-error svg {
+  color: var(--warning);
+}
+
+.planner-canvas-error strong {
+  color: var(--text);
+}
+
+.planner-canvas-error span {
+  max-width: 520px;
+  font-size: 12px;
+}
+
 .planner-flow input,
 .planner-flow textarea,
 .planner-flow [contenteditable='true'] {
@@ -5871,6 +5897,17 @@
   color: #edb0b0;
 }
 
+.planner-monitor__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planner-monitor__error .ghost {
+  flex: 0 0 auto;
+}
+
 .planner-proposal-panel__empty {
   border: 1px dashed rgba(168, 165, 155, 0.22);
   color: var(--text-dim);
@@ -6416,6 +6453,36 @@
 
 .planner-monitor__kanban[data-density="comfortable"] .planner-monitor-lane {
   min-width: 250px;
+}
+
+@media (max-width: 1320px) {
+  .planner-main {
+    grid-template-columns: minmax(320px, 34vw) minmax(0, 1fr);
+  }
+
+  .planner-main--panel-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .planner-monitor__kanban,
+  .planner-monitor__kanban[data-density="comfortable"] {
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .planner-monitor__kanban[data-density="comfortable"] .planner-monitor-lane,
+  .planner-monitor-lane {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 1100px) and (min-width: 981px) {
+  .planner-monitor__kanban,
+  .planner-monitor__kanban[data-density="comfortable"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .planner-monitor-lane__header {

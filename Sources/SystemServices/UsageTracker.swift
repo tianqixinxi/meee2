@@ -13,7 +13,7 @@ public class UsageTracker {
     // MARK: - 用户设置
 
     /// 是否启用统计（用户可在设置中关闭）
-    @AppStorage("usageTrackingEnabled") var enabled: Bool = true
+    @AppStorage("usageTrackingEnabled") var enabled: Bool = false
 
     /// 设备唯一标识（首次启动生成，存储在 UserDefaults）
     @AppStorage("usageDeviceId") var deviceId: String = ""
@@ -84,7 +84,7 @@ public class UsageTracker {
     }
 
     private func getAppVersion() -> String {
-        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        BuildInfo.version
     }
 
     private func getOSVersion() -> String {

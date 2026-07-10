@@ -222,6 +222,8 @@ struct CoordinationGroupDTO: Encodable {
 
 /// 全局状态 DTO —— `GET /api/state` 的 payload
 struct StateDTO: Encodable {
+    let revision: UInt64
+    let generatedAt: String
     let sessions: [SessionDTO]
     let channels: [ChannelDTO]
     let coordinationGroups: [CoordinationGroupDTO]
@@ -272,6 +274,7 @@ struct AppSettingsDTO: Encodable {
     let quickOpenShortcutLabel: String
     let quickOpenShortcutConflict: String?
     let claudeWorkflowCanvasMode: String
+    let usageTrackingEnabled: Bool
 }
 
 /// One identity in the team member directory — the authoritative source the
@@ -499,6 +502,30 @@ struct CanvasListEnvelope: Encodable {
     let activeCanvasId: String
     let defaultCanvasIds: [String]
     let memberships: [CanvasSessionMembershipDTO]
+}
+
+/// One deduplicated row in the global Artifacts index. Formal artifacts keep
+/// their complete slot head list so existing detail/version behavior remains
+/// available; raw candidates use the same envelope without pretending to be a
+/// promoted artifact.
+struct ArtifactPageItemDTO: Encodable {
+    let sourceKind: String
+    let canvas: CanvasInfoDTO
+    let node: PlanningNode?
+    let sessionId: String?
+    let artifacts: [PlannerArtifact]
+    let candidate: SessionArtifactCandidate?
+}
+
+/// Cursor page returned by `GET /api/artifacts`.
+struct ArtifactPageEnvelope: Encodable {
+    let items: [ArtifactPageItemDTO]
+    let cursor: String?
+    let total: Int
+    let hasMore: Bool
+    let candidateTotal: Int
+    let canvasCount: Int
+    let groupCounts: [String: Int]
 }
 
 // MARK: - Canvas templates (gallery / apply)

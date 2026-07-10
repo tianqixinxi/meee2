@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import { Archive, CheckCircle2, CircleAlert, Download, Monitor, Moon, RotateCcw, Sun, Upload } from 'lucide-react'
 import { NotificationSettings } from './NotificationSettings'
 import { ReadinessChecklist } from './ReadinessChecklist'
+import { LegacyMessageCleanupConfirmModal } from './LegacyMessageCleanupConfirmModal'
 import {
   DEFAULT_SPAWN_PROVIDER,
   loadAllowCloud,
@@ -41,20 +42,28 @@ import {
   type ThemeProfile,
 } from '../lib/themeProfile'
 import {
+  cleanUpLegacyMessages,
   deleteLocalData,
+  deleteAssistantSecret,
   disconnectMeee2Online,
   exportDebugBundle,
   fetchAppSettings,
+  fetchAssistantSecretStatus,
   fetchDevPerf,
   fetchStorageStats,
   fetchUserProfile,
   openMeee2OnlineConnect,
   openMeee2OnlineDashboard,
   requestDeleteLocalDataToken,
+  requestLegacyMessageCleanupToken,
   resetDevPerf,
+  saveAssistantSecret,
   updateAppSettings,
   updateSessionControl,
   type AppSettings,
+  type DeleteLocalDataMode,
+  type HostedAssistantProvider,
+  type LegacyMessageCleanupToken,
   type StorageStats,
   type UserProfile,
 } from '../api'
@@ -77,9 +86,10 @@ interface Props {
   onSessionControlChanged?: () => void
   devMode?: boolean
   onRestartOnboarding?: () => void
+  initialCategory?: SettingsCategory
 }
 
-type SettingsCategory = 'general' | 'dynamicIsland' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
+export type SettingsCategory = 'general' | 'dynamicIsland' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
 type ThemeProfileFileHandle = {
   createWritable: () => Promise<{
     write: (content: string) => Promise<void>
@@ -113,6 +123,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   quickOpenShortcutLabel: '⌘⌥P',
   quickOpenShortcutConflict: null,
   claudeWorkflowCanvasMode: 'ask',
+  usageTrackingEnabled: false,
 }
 
 const MODIFIER_CODES = new Set([
@@ -227,6 +238,7 @@ export function SettingsView({
   onSessionControlChanged,
   devMode = false,
   onRestartOnboarding,
+  initialCategory = 'general',
 }: Props) {
   const { t, locale, setLocale } = useI18n()
   const { mode, resolvedTheme, themeProfile, setMode, setThemeProfile } = useTheme()
@@ -235,9 +247,16 @@ export function SettingsView({
   const [lockViewportOnSwitch, setLockViewportOnSwitch] = useState(loadLockViewportOnSwitch)
   const [canvasRecapIntervalMinutes, setCanvasRecapIntervalMinutes] = useState(loadCanvasRecapIntervalMinutes)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
+  const legacyAssistantSecretRef = useRef(
+    llm.apiKey.trim() && isHostedLlmProvider(llm.provider)
+      ? { provider: llm.provider as HostedAssistantProvider, apiKey: llm.apiKey.trim() }
+      : null,
+  )
+  const [assistantSecretConfigured, setAssistantSecretConfigured] = useState(false)
+  const [assistantSecretBusy, setAssistantSecretBusy] = useState(false)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
-  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>('general')
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>(initialCategory)
   const [recordingQuickOpenShortcut, setRecordingQuickOpenShortcut] = useState(false)
   const quickOpenRecorderRef = useRef<HTMLButtonElement | null>(null)
   const recordingPreviousShortcutRef = useRef<string | null>(null)
@@ -253,7 +272,13 @@ export function SettingsView({
   const [allowCloud, setAllowCloud] = useState(loadAllowCloud)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteConfirmAcknowledged, setDeleteConfirmAcknowledged] = useState(false)
+  const [deleteMode, setDeleteMode] = useState<DeleteLocalDataMode>('workData')
   const [deletingLocalData, setDeletingLocalData] = useState(false)
+  const [legacyCleanupConfirmation, setLegacyCleanupConfirmation] = useState<LegacyMessageCleanupToken | null>(null)
+  const [legacyCleanupAcknowledged, setLegacyCleanupAcknowledged] = useState(false)
+  const [legacyCleanupPreparing, setLegacyCleanupPreparing] = useState(false)
+  const [legacyCleanupRunning, setLegacyCleanupRunning] = useState(false)
+  const legacyCleanupRequestRef = useRef(0)
   const [perfSnapshot, setPerfSnapshot] = useState<BoardPerfSnapshot | null>(null)
   const [perfLoading, setPerfLoading] = useState(false)
   const [perfError, setPerfError] = useState<string | null>(null)
@@ -279,6 +304,22 @@ export function SettingsView({
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
     onToast?.(kind, text)
   }, [onToast])
+
+  useEffect(() => {
+    setActiveSettingsCategory(initialCategory)
+  }, [initialCategory])
+
+  useEffect(() => {
+    if (activeSettingsCategory !== 'privacy') {
+      legacyCleanupRequestRef.current += 1
+      setLegacyCleanupPreparing(false)
+      setLegacyCleanupConfirmation(null)
+      setLegacyCleanupAcknowledged(false)
+    }
+    return () => {
+      legacyCleanupRequestRef.current += 1
+    }
+  }, [activeSettingsCategory])
 
   const notifySaved = useCallback(() => {
     notify('success', t('common.saved'))
@@ -354,6 +395,37 @@ export function SettingsView({
   }, [loadAppSettings, loadProfile, loadStorageStats])
 
   useEffect(() => {
+    if (!isHostedLlmProvider(llm.provider)) {
+      setAssistantSecretConfigured(false)
+      return
+    }
+    let cancelled = false
+    const legacy = legacyAssistantSecretRef.current
+    const request = legacy?.provider === llm.provider
+      ? saveAssistantSecret(legacy.provider, legacy.apiKey).then((status) => {
+          legacyAssistantSecretRef.current = null
+          const next = { ...llm, apiKey: '' }
+          writeLlmSettings(next)
+          setLlm((current) => ({ ...current, apiKey: '' }))
+          return status
+        })
+      : fetchAssistantSecretStatus(llm.provider)
+    request
+      .then((status) => {
+        if (!cancelled) setAssistantSecretConfigured(status.configured)
+      })
+      .catch(() => {
+        if (!cancelled) setAssistantSecretConfigured(false)
+      })
+    return () => {
+      cancelled = true
+    }
+    // Only provider changes should re-check Keychain. `llm` also carries the
+    // transient password draft, which must never trigger an automatic save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [llm.provider])
+
+  useEffect(() => {
     if (activeSettingsCategory === 'developer' && (devMode || effectiveAppSettings.devMode)) {
       loadPerfSnapshot()
     }
@@ -379,7 +451,8 @@ export function SettingsView({
     notifySaved()
   }
 
-  const openDeleteConfirm = () => {
+  const openDeleteConfirm = (mode: DeleteLocalDataMode) => {
+    setDeleteMode(mode)
     setDeleteConfirmAcknowledged(false)
     setDeleteConfirmOpen(true)
   }
@@ -397,19 +470,94 @@ export function SettingsView({
       // 二次确认 = 这里先 GET token,再立刻 POST。token 服务端是一次性的,
       // backdrop-click 走不到这里(closeDeleteConfirm 在 deletingLocalData 时
       // 也不会触发关闭),所以只有按下确认按钮才会真的 fire。
-      const tokenResult = await requestDeleteLocalDataToken()
-      const result = await deleteLocalData(tokenResult.token)
+      const tokenResult = await requestDeleteLocalDataToken(deleteMode)
+      const result = await deleteLocalData(tokenResult.token, deleteMode)
+      if (!result.ok) {
+        throw new Error(t('settings.privacyDeletePartialFailure'))
+      }
       notify(
         'success',
-        t('settings.privacyDeleteSuccess', { bytes: formatBytes(result.removedBytes) }),
+        t(
+          deleteMode === 'factoryReset'
+            ? 'settings.privacyFactoryResetSuccess'
+            : 'settings.privacyDeleteSuccess',
+          { bytes: formatBytes(result.removedBytes) },
+        ),
       )
+      if (deleteMode === 'factoryReset') clearFactoryBrowserState()
+      else clearWorkDataBrowserState()
       setDeleteConfirmOpen(false)
       setDeleteConfirmAcknowledged(false)
       loadStorageStats()
+      if (deleteMode === 'factoryReset') {
+        window.setTimeout(() => window.location.reload(), 750)
+      }
     } catch (err) {
       notify('error', (err as Error).message || t('settings.privacyDeleteFailed'))
     } finally {
       setDeletingLocalData(false)
+    }
+  }
+
+  const openLegacyCleanupConfirm = async () => {
+    const requestID = legacyCleanupRequestRef.current + 1
+    legacyCleanupRequestRef.current = requestID
+    setLegacyCleanupPreparing(true)
+    try {
+      const confirmation = await requestLegacyMessageCleanupToken()
+      if (legacyCleanupRequestRef.current !== requestID) return
+      setLegacyCleanupAcknowledged(false)
+      setLegacyCleanupConfirmation(confirmation)
+    } catch (err) {
+      if (legacyCleanupRequestRef.current !== requestID) return
+      notify('error', (err as Error).message || t('settings.privacyLegacyCleanupPrepareFailed'))
+      loadStorageStats()
+    } finally {
+      if (legacyCleanupRequestRef.current === requestID) {
+        setLegacyCleanupPreparing(false)
+      }
+    }
+  }
+
+  const closeLegacyCleanupConfirm = () => {
+    if (legacyCleanupRunning) return
+    setLegacyCleanupConfirmation(null)
+    setLegacyCleanupAcknowledged(false)
+  }
+
+  const confirmLegacyCleanup = async () => {
+    if (!legacyCleanupConfirmation || !legacyCleanupAcknowledged) return
+    setLegacyCleanupRunning(true)
+    try {
+      const result = await cleanUpLegacyMessages({
+        token: legacyCleanupConfirmation.token,
+        purpose: legacyCleanupConfirmation.purpose,
+      })
+      if (result.ok) {
+        notify('success', t('settings.privacyLegacyCleanupSuccess', {
+          count: result.removedCount,
+          bytes: formatBytes(result.reclaimedBytes),
+          path: result.backupPath,
+        }))
+      } else {
+        notify('error', t('settings.privacyLegacyCleanupPartialFailure', {
+          count: result.removedCount,
+          failed: result.failedCount,
+          path: result.backupPath,
+        }))
+      }
+      setLegacyCleanupConfirmation(null)
+      setLegacyCleanupAcknowledged(false)
+      loadStorageStats()
+    } catch (err) {
+      notify('error', (err as Error).message || t('settings.privacyLegacyCleanupFailed'))
+      // A failed/consumed token must not be reused against a potentially
+      // changed preview. Close and require a fresh scope review.
+      setLegacyCleanupConfirmation(null)
+      setLegacyCleanupAcknowledged(false)
+      loadStorageStats()
+    } finally {
+      setLegacyCleanupRunning(false)
     }
   }
 
@@ -582,12 +730,12 @@ export function SettingsView({
   }, [notifySaved])
 
   const saveLlmDraft = useCallback((next: LlmSettings) => {
-    writeLlmSettings(next)
+    writeLlmSettings({ ...next, apiKey: '' })
     notifySaved()
   }, [notifySaved])
 
   const applyLlmProvider = useCallback((provider: LlmProvider) => {
-    const next = { ...llm, provider }
+    const next = { ...llm, provider, apiKey: '' }
     setLlm(next)
     saveLlmDraft(next)
   }, [llm, saveLlmDraft])
@@ -595,6 +743,39 @@ export function SettingsView({
   const updateLlmDraft = useCallback((patch: Partial<LlmSettings>) => {
     setLlm((current) => ({ ...current, ...patch }))
   }, [])
+
+  const saveHostedApiKey = useCallback(async () => {
+    if (!isHostedLlmProvider(llm.provider)) return
+    const apiKey = llm.apiKey.trim()
+    if (!apiKey) return
+    setAssistantSecretBusy(true)
+    try {
+      const result = await saveAssistantSecret(llm.provider, apiKey)
+      setAssistantSecretConfigured(result.configured)
+      setLlm((current) => ({ ...current, apiKey: '' }))
+      writeLlmSettings({ ...llm, apiKey: '' })
+      notifySaved()
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to save API key')
+    } finally {
+      setAssistantSecretBusy(false)
+    }
+  }, [llm, notify, notifySaved])
+
+  const removeHostedApiKey = useCallback(async () => {
+    if (!isHostedLlmProvider(llm.provider)) return
+    setAssistantSecretBusy(true)
+    try {
+      await deleteAssistantSecret(llm.provider)
+      setAssistantSecretConfigured(false)
+      setLlm((current) => ({ ...current, apiKey: '' }))
+      notifySaved()
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to remove API key')
+    } finally {
+      setAssistantSecretBusy(false)
+    }
+  }, [llm.provider, notify, notifySaved])
 
   const applyQuickOpenShortcut = useCallback(async (shortcut: string) => {
     const label = formatShortcut(shortcut)
@@ -1104,31 +1285,64 @@ export function SettingsView({
                   <span>{t('settings.privacyTotal')}</span>
                   <strong>{formatBytes(storageStats?.total)}</strong>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 2. 导出全部数据 */}
-          <div className="settings-panel">
-            <div className="settings-section-header" style={{ alignItems: 'center', gap: 12 }}>
-              <div>
-                <strong>{t('settings.privacyExportAll')}</strong>
-                <div className="muted" style={{ fontSize: 11 }}>
-                  {t('settings.privacyExportAllHelp')}
+                {(storageStats?.reclaimableMessageCount ?? 0) > 0 && (
+                  <div className="settings-meta-row">
+                    <span>{t('settings.privacyCleanupPreview', {
+                      count: storageStats?.reclaimableMessageCount ?? 0,
+                    })}</span>
+                    <strong>{formatBytes(storageStats?.reclaimableMessageBytes)}</strong>
+                  </div>
+                )}
+                <div className="settings-meta-row">
+                  <span>{t('settings.privacyFactoryResetMeasured')}</span>
+                  <strong>{formatBytes(storageStats?.factoryResetTotal)}</strong>
                 </div>
               </div>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => void runDebugExport()}
-                disabled={debugExporting}
-              >
-                {debugExporting ? t('settings.privacyExportRunning') : t('settings.privacyExportAll')}
-              </button>
             </div>
           </div>
 
-          {/* 3. 删除本地数据 */}
+          {(storageStats?.reclaimableMessageCount ?? 0) > 0 && (
+            <div className="settings-panel legacy-cleanup-panel" data-testid="legacy-message-cleanup-panel">
+              <div className="settings-section-header legacy-cleanup-panel__header">
+                <div>
+                  <strong>{t('settings.privacyLegacyCleanupTitle')}</strong>
+                  <div className="legacy-cleanup-panel__scope">
+                    <strong>{t('settings.privacyLegacyCleanupScope', {
+                      count: storageStats?.reclaimableMessageCount ?? 0,
+                      bytes: formatBytes(storageStats?.reclaimableMessageBytes),
+                    })}</strong>
+                  </div>
+                  <div className="muted legacy-cleanup-panel__help">
+                    {t('settings.privacyLegacyCleanupHelp')}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void openLegacyCleanupConfirm()}
+                  disabled={legacyCleanupPreparing || legacyCleanupRunning}
+                  className="ghost legacy-cleanup-panel__action"
+                >
+                  {legacyCleanupPreparing
+                    ? t('settings.privacyLegacyCleanupPreparing')
+                    : t('settings.privacyLegacyCleanupAction')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <label className="settings-toggle-row settings-panel">
+            <span>
+              <strong>{t('settings.privacyUsageTracking')}</strong>
+              <small>{t('settings.privacyUsageTrackingHelp')}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={effectiveAppSettings.usageTrackingEnabled}
+              onChange={(event) => void applyAppSettingsPatch({ usageTrackingEnabled: event.target.checked })}
+            />
+          </label>
+
+          {/* 2. 删除本地数据 */}
           <div className="settings-panel">
             <div className="settings-section-header" style={{ alignItems: 'center', gap: 12 }}>
               <div>
@@ -1140,7 +1354,7 @@ export function SettingsView({
               <button
                 type="button"
                 className="ghost"
-                onClick={openDeleteConfirm}
+                onClick={() => openDeleteConfirm('workData')}
                 disabled={deletingLocalData}
                 style={{ color: 'var(--danger, #b94c45)' }}
               >
@@ -1149,7 +1363,27 @@ export function SettingsView({
             </div>
           </div>
 
-          {/* 4. Summarizer 数据流向说明 */}
+          <div className="settings-panel">
+            <div className="settings-section-header" style={{ alignItems: 'center', gap: 12 }}>
+              <div>
+                <strong>{t('settings.privacyFactoryReset')}</strong>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {t('settings.privacyFactoryResetHelp')}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => openDeleteConfirm('factoryReset')}
+                disabled={deletingLocalData}
+                style={{ color: 'var(--danger, #b94c45)' }}
+              >
+                {t('settings.privacyFactoryReset')}
+              </button>
+            </div>
+          </div>
+
+          {/* 3. Summarizer 数据流向说明 */}
           <div className="settings-panel">
             <div className="col" style={{ gap: 6 }}>
               <strong>{t('settings.privacySummarizer')}</strong>
@@ -1159,7 +1393,7 @@ export function SettingsView({
             </div>
           </div>
 
-          {/* 5. 允许 cloud / model 调用 toggle */}
+          {/* 4. 允许 cloud / model 调用 toggle */}
           <label className="settings-toggle-row settings-panel">
             <span>
               <strong>{t('settings.privacyAllowCloud')}</strong>
@@ -1186,6 +1420,22 @@ export function SettingsView({
             onCancel={closeDeleteConfirm}
             onConfirm={() => void confirmDeleteLocalData()}
             deleting={deletingLocalData}
+            mode={deleteMode}
+            bytes={deleteMode === 'factoryReset'
+              ? (storageStats?.factoryResetTotal ?? storageStats?.total ?? 0)
+              : (storageStats?.total ?? 0)}
+          />
+        )}
+        {legacyCleanupConfirmation && (
+          <LegacyMessageCleanupConfirmModal
+            t={t}
+            messageCount={legacyCleanupConfirmation.messageCount}
+            messageBytes={formatBytes(legacyCleanupConfirmation.messageBytes)}
+            acknowledged={legacyCleanupAcknowledged}
+            cleaning={legacyCleanupRunning}
+            onToggleAcknowledged={setLegacyCleanupAcknowledged}
+            onCancel={closeLegacyCleanupConfirm}
+            onConfirm={() => void confirmLegacyCleanup()}
           />
         )}
           </>
@@ -1389,7 +1639,29 @@ export function SettingsView({
           </div>
           {isHostedLlmProvider(llm.provider) && (
             <div className="col" style={{ gap: 6 }}>
-              <SettingsTextInput label={t('settings.apiKey')} type="password" value={llm.apiKey} placeholder={llm.provider === 'openai' ? 'sk-...' : 'sk-ant-...'} onChange={(value) => updateLlmDraft({ apiKey: value })} onBlur={() => saveLlmDraft(llm)} />
+              <SettingsTextInput
+                label={t('settings.apiKey')}
+                type="password"
+                value={llm.apiKey}
+                placeholder={assistantSecretConfigured
+                  ? t('settings.apiKeyConfigured')
+                  : llm.provider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+                onChange={(value) => updateLlmDraft({ apiKey: value })}
+                onBlur={() => void saveHostedApiKey()}
+              />
+              {assistantSecretConfigured && (
+                <div className="settings-inline-secret-status">
+                  <span>{t('settings.apiKeyStoredInKeychain')}</span>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={assistantSecretBusy}
+                    onClick={() => void removeHostedApiKey()}
+                  >
+                    {t('settings.apiKeyRemove')}
+                  </button>
+                </div>
+              )}
               <SettingsTextInput label={`${t('settings.baseUrl')} (${t('settings.blankDefault')})`} value={llm.baseUrl} placeholder={DEFAULT_BASE_URL[llm.provider]} onChange={(value) => updateLlmDraft({ baseUrl: value })} onBlur={() => saveLlmDraft(llm)} />
               <SettingsTextInput label={`${t('settings.model')} (${t('settings.blankDefault')})`} value={llm.model} placeholder={DEFAULT_MODEL[llm.provider]} onChange={(value) => updateLlmDraft({ model: value })} onBlur={() => saveLlmDraft(llm)} />
             </div>
@@ -1468,6 +1740,33 @@ export function SettingsView({
       </div>
     </main>
   )
+}
+
+function clearWorkDataBrowserState(): void {
+  const exactKeys = new Set([
+    'meee2.session.pinned.v1',
+    'meee2.session.titleOverrides.v1',
+    'meee2.sessionLauncher.lastSelection',
+  ])
+  const prefixes = [
+    'meee2.planner.chatHistory.',
+    'meee2.planner.viewport.',
+    'meee2.planner.canvasRecapPosition.',
+    'meee2.planner.ioArtifactVisibility.',
+    'meee2.monitor.',
+  ]
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index)
+    if (!key) continue
+    if (exactKeys.has(key) || prefixes.some((prefix) => key.startsWith(prefix))) {
+      window.localStorage.removeItem(key)
+    }
+  }
+}
+
+function clearFactoryBrowserState(): void {
+  window.localStorage.clear()
+  window.sessionStorage.clear()
 }
 
 function normalizeAppSettings(settings: AppSettings | null | undefined): AppSettings {
@@ -1774,6 +2073,8 @@ function formatTimestamp(value: string | null | undefined): string {
 
 function PrivacyDeleteConfirmModal({
   t,
+  mode,
+  bytes,
   acknowledged,
   onToggleAck,
   onCancel,
@@ -1781,21 +2082,70 @@ function PrivacyDeleteConfirmModal({
   deleting,
 }: {
   t: (key: TranslationKey, params?: Record<string, string | number>) => string
+  mode: DeleteLocalDataMode
+  bytes: number
   acknowledged: boolean
   onToggleAck: (value: boolean) => void
   onCancel: () => void
   onConfirm: () => void
   deleting: boolean
 }) {
+  const factoryReset = mode === 'factoryReset'
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null)
+  const onCancelRef = useRef(onCancel)
+  const deletingRef = useRef(deleting)
+
+  useEffect(() => {
+    onCancelRef.current = onCancel
+    deletingRef.current = deleting
+  }, [deleting, onCancel])
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    cancelButtonRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !deletingRef.current) {
+        event.preventDefault()
+        onCancelRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ))
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previouslyFocused?.focus()
+    }
+  }, [])
   // 二次确认 modal:
   //   - 点 backdrop 不算确认(我们在 backdrop 上只触发 cancel,不触发 delete)
   //   - 删除按钮 disabled 直到用户主动勾选 acknowledged
   //   - 删除中不可关闭(防止 token 已签发但 UI 进入未知状态)
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="privacy-delete-confirm-title"
+      role="presentation"
       style={{
         position: 'fixed',
         inset: 0,
@@ -1811,7 +2161,13 @@ function PrivacyDeleteConfirmModal({
       }}
     >
       <div
+        ref={dialogRef}
         className="settings-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="privacy-delete-confirm-title"
+        aria-describedby="privacy-delete-confirm-body"
+        tabIndex={-1}
         style={{
           maxWidth: 460,
           width: 'min(92vw, 460px)',
@@ -1826,14 +2182,19 @@ function PrivacyDeleteConfirmModal({
           id="privacy-delete-confirm-title"
           style={{ fontSize: 16, fontWeight: 600, margin: 0, marginBottom: 10 }}
         >
-          {t('settings.privacyDeleteConfirmTitle')}
+          {t(factoryReset ? 'settings.privacyFactoryResetConfirmTitle' : 'settings.privacyDeleteConfirmTitle')}
         </h2>
-        <p style={{ fontSize: 12, lineHeight: 1.5, margin: 0, marginBottom: 14 }}>
-          {t('settings.privacyDeleteConfirmBody')}
+        <p id="privacy-delete-confirm-body" style={{ fontSize: 12, lineHeight: 1.5, margin: 0, marginBottom: 14 }}>
+          {t(
+            factoryReset ? 'settings.privacyFactoryResetConfirmBody' : 'settings.privacyDeleteConfirmBody',
+            { bytes: formatBytes(bytes) },
+          )}
         </p>
         <label className="settings-toggle-row" style={{ padding: '6px 0', marginBottom: 12 }}>
           <span>
-            <strong style={{ fontSize: 12 }}>{t('settings.privacyDeleteConfirmAck')}</strong>
+            <strong style={{ fontSize: 12 }}>
+              {t(factoryReset ? 'settings.privacyFactoryResetConfirmAck' : 'settings.privacyDeleteConfirmAck')}
+            </strong>
           </span>
           <input
             type="checkbox"
@@ -1842,7 +2203,13 @@ function PrivacyDeleteConfirmModal({
           />
         </label>
         <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="ghost" onClick={onCancel} disabled={deleting}>
+          <button
+            ref={cancelButtonRef}
+            type="button"
+            className="ghost"
+            onClick={onCancel}
+            disabled={deleting}
+          >
             {t('common.cancel')}
           </button>
           <button
@@ -1852,7 +2219,9 @@ function PrivacyDeleteConfirmModal({
             disabled={!acknowledged || deleting}
             style={{ background: 'var(--danger, #b94c45)' }}
           >
-            {deleting ? t('common.loading') : t('settings.privacyDeleteConfirmAction')}
+            {deleting
+              ? t('common.loading')
+              : t(factoryReset ? 'settings.privacyFactoryResetConfirmAction' : 'settings.privacyDeleteConfirmAction')}
           </button>
         </div>
       </div>

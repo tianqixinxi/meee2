@@ -27,11 +27,11 @@ public enum ChannelRegistryError: Error, CustomStringConvertible {
 /// 持久化位置: ~/.meee2/channels/<name>.json
 /// 线程安全：所有公开方法通过串行 DispatchQueue 同步
 public final class ChannelRegistry {
-    public static let shared = ChannelRegistry()
+    public static let shared = ChannelRegistry(storage: .processDefault)
 
-    private let fileManager = FileManager.default
-    private let baseDir: URL
+    private let fileManager: FileManager
     private let channelsDir: URL
+    public let storagePaths: CommKitStoragePaths
 
     /// 内存缓存（name -> Channel），所有访问必须持 queue
     private var cache: [String: Channel] = [:]
@@ -39,10 +39,13 @@ public final class ChannelRegistry {
     /// 串行队列，保证注册表操作的线程安全
     private let queue = DispatchQueue(label: "com.meee2.channel-registry", qos: .userInitiated)
 
-    private init() {
-        let home = NSHomeDirectory()
-        baseDir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        channelsDir = baseDir.appendingPathComponent("channels")
+    public init(
+        storage: CommKitStoragePaths,
+        fileManager: FileManager = .default
+    ) {
+        storagePaths = storage
+        self.fileManager = fileManager
+        channelsDir = storage.channelsDirectory
 
         try? fileManager.createDirectory(at: channelsDir, withIntermediateDirectories: true)
 
@@ -61,6 +64,19 @@ public final class ChannelRegistry {
     /// 获取指定频道
     public func get(_ name: String) -> Channel? {
         queue.sync { cache[name] }
+    }
+
+    /// Clear process-local state after the owning application deletes CommKit
+    /// storage on disk. This intentionally does not touch files; destructive
+    /// deletion remains the caller's responsibility.
+    public func clearAllInMemory() {
+        queue.sync {
+            cache.removeAll()
+        }
+        orientationFlapLock.lock()
+        lastOrientationAt.removeAll()
+        orientationFlapLock.unlock()
+        commLog(.info, "[ChannelRegistry] Cleared in-memory channel cache")
     }
 
     /// 创建新频道
@@ -89,7 +105,9 @@ public final class ChannelRegistry {
                 throw ChannelRegistryError.notFound(name)
             }
             let path = channelPath(name)
-            try? fileManager.removeItem(at: path)
+            if fileManager.fileExists(atPath: path.path) {
+                try fileManager.removeItem(at: path)
+            }
             cache.removeValue(forKey: name)
             commLog(.info, "[ChannelRegistry] Deleted channel '\(name)'")
         }

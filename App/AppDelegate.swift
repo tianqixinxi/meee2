@@ -137,44 +137,60 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 本来要靠用户自己点菜单 "Open Board" 才出现,新用户根本不知道有这一步。
     private static func consumeFirstLaunchOnboardingFlag() -> Bool {
         let key = "meee2.hasLaunchedBefore"
-        let defaults = UserDefaults.standard
-        if defaults.bool(forKey: key) { return false }
+        let storageRoot = StorageRoots.processDefault.baseDirectory
+        let explicitStorageRoot = !(ProcessInfo.processInfo.environment["MEEE2_STORAGE_ROOT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let isolatedMarker = storageRoot.appendingPathComponent(".has-launched-before")
+        if explicitStorageRoot {
+            if FileManager.default.fileExists(atPath: isolatedMarker.path) { return false }
+        } else if UserDefaults.standard.bool(forKey: key) {
+            return false
+        }
         // 升级守卫:这个 key 是新引入的 — 老用户升上来没有它,不能把升级当
         // 首装强弹 Board(只想用菜单栏的人会被惊扰)。~/.meee2 下已有持久化
         // 状态(会话/画布/planner)即视为老装机,补打标后按非首次处理。
-        let meee2Dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let meee2Dir = storageRoot
         let priorInstallMarkers = ["sessions", "board-canvases.json", "planner"]
         let hasPriorInstall = priorInstallMarkers.contains { marker in
             FileManager.default.fileExists(atPath: meee2Dir.appendingPathComponent(marker).path)
         }
-        defaults.set(true, forKey: key)
+        if explicitStorageRoot {
+            try? Data().write(to: isolatedMarker, options: .atomic)
+        } else {
+            UserDefaults.standard.set(true, forKey: key)
+        }
         return !hasPriorInstall
     }
 
     private func schedulePostLaunchStartup(launchStartedAt: Date) {
         DispatchQueue.main.async { [weak self] in
-            self?.startSessionRuntime()
             self?.startBoardServer()
 
-            // 主界面为主体:每次启动都打开主看板窗口(不再只首次/带 `board` 参数)。
-            // 仍消费首次标记,让 Board 内 FirstRunOnboarding 能区分新老用户。
+            // Present the Board shell before initializing MessageRouter and
+            // provider runtimes. Those services can scan substantial history;
+            // they must not hold the first visible frame hostage.
             _ = Self.consumeFirstLaunchOnboardingFlag()
-            DispatchQueue.main.async { [weak self] in
-                self?.openBoardMenu()
-            }
-
-            // 发送使用统计（异步，不阻塞启动）
-            UsageTracker.shared.trackLaunch()
-
-            // 启动 meee2 推送器（如果已连接且在线）
-            Meee2OnlinePusher.shared.activate()
+            self?.openBoardMenu()
 
             let elapsed = Date().timeIntervalSince(launchStartedAt) * 1_000
-            MInfo(String(format: "[Startup] post-launch runtime scheduled after %.1fms", elapsed))
+            MInfo(String(format: "[Startup] Board shell scheduled after %.1fms", elapsed))
+
+            DispatchQueue.main.async { [weak self] in
+                self?.startSessionRuntime()
+                UsageTracker.shared.trackLaunch()
+                Meee2OnlinePusher.shared.activate()
+                let runtimeElapsed = Date().timeIntervalSince(launchStartedAt) * 1_000
+                MInfo(String(format: "[Startup] session runtime scheduled after %.1fms", runtimeElapsed))
+            }
         }
 
         DispatchQueue.global(qos: .utility).async {
+            #if DEBUG
+            guard ProcessInfo.processInfo.environment["MEEE2_DEV_CONFIG"] == "1" else {
+                MInfo("[Startup] DEBUG build left provider hooks/MCP unchanged; set MEEE2_DEV_CONFIG=1 to opt in")
+                return
+            }
+            #endif
             // 确保 Claude CLI hooks 配置存在。可能读写 ~/.claude/settings.json，
             // 不需要卡在 UI 首帧前。
             SettingsConfigManager.shared.ensureHooksConfigured()
@@ -185,6 +201,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             MCPConfigManager.shared.ensureRegistered()
         }
 
+        #if !DEBUG
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self = self else { return }
             // 强制 init Sparkle updater(lazy var,不主动 touch 永远不创建,
@@ -204,6 +221,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             // 延迟首次网络请求，避免启动时和 Sparkle / plugin 扫描争资源。
             VersionChecker.shared.startBackgroundCheck(initialDelay: 2)
         }
+        #else
+        MInfo("[Startup] DEBUG build skipped Sparkle and version-network startup")
+        #endif
     }
 
     private func startSessionRuntime() {
@@ -293,6 +313,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        #if !DEBUG
         // SettingsView (在 meee2Kit 模块,不能直接 import Sparkle) 发的
         // "Check for Updates" 通知 → 在这里桥到 SPUUpdater。Settings、
         // Board Update pill 和 menubar 都走同一套 staged/fresh-check 分支。
@@ -310,6 +331,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: Notification.Name("meee2.checkForUpdatesInBackground"),
             object: nil
         )
+        #endif
 
     }
 
@@ -319,6 +341,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     ///      然后跑 user-initiated checkForUpdates 拉真正的最新版下来装。
     ///   3. **没 staged 包** → 直接 user-initiated checkForUpdates 走完整闭环。
     @objc private func handleCheckForUpdatesRequest() {
+        guard confirmDisruptiveActionIfNeeded(
+            title: "Update meee2?",
+            message: "Updating restarts meee2 and disconnects its managed terminal surfaces.",
+            destructiveTitle: "Update & Restart",
+            alwaysConfirm: true
+        ) else { return }
         let stagedV = silentDriver.stagedVersion
         let latestV = VersionChecker.shared.latestVersion
         if let stagedV, stagedV == latestV {
@@ -347,6 +375,40 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         BoardServer.shared.stop()
         Meee2OnlinePusher.shared.deactivate()
         NotificationCenter.default.removeObserver(self)
+    }
+
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        confirmDisruptiveActionIfNeeded(
+            title: "Quit meee2?",
+            message: "Quitting disconnects meee2 from its managed terminal surfaces. External agent processes are not stopped.",
+            destructiveTitle: "Quit"
+        ) ? .terminateNow : .terminateCancel
+    }
+
+    private func confirmDisruptiveActionIfNeeded(
+        title: String,
+        message: String,
+        destructiveTitle: String,
+        alwaysConfirm: Bool = false
+    ) -> Bool {
+        let activeCount = TerminalSessionBackendRegistry.shared.listSnapshots().filter { snapshot in
+            snapshot.backend == .ghosttySurface
+                && snapshot.status != "exited"
+                && snapshot.status != "failed"
+        }.count
+        guard activeCount > 0 || alwaysConfirm else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = title
+        if activeCount > 0 {
+            alert.informativeText = "\(activeCount) managed session\(activeCount == 1 ? " is" : "s are") active. \(message)"
+        } else {
+            alert.informativeText = message
+        }
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: destructiveTitle)
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -400,6 +462,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         diagItem.target = self
         menu.addItem(diagItem)
         menu.addItem(NSMenuItem.separator())
+        #if !DEBUG
         // Sparkle —— 跟 pill 同一条入口,silentDriver 把所有 dialog 自动 confirm,
         // 点完直接装 + relaunch,无弹框。
         let updateItem = NSMenuItem(
@@ -410,6 +473,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         updateItem.target = self
         menu.addItem(updateItem)
         menu.addItem(NSMenuItem.separator())
+        #endif
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -667,11 +731,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// binary has no embedded Info.plist, so the standard panel would show nothing.
     @objc private func showAboutPanel(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        let version = BuildInfo.version
         // Dev builds either have no embedded Info.plist (bare swift build) or a
         // "-dev" placeholder version; release .app bundles carry a real version.
-        let isDev = version == nil || version!.contains("-dev")
-        let shownVersion = version ?? "0.0.0-dev"
+        let isDev = version.contains("-dev")
+        let shownVersion = version
 
         var creditLines: [String] = []
         if isDev {

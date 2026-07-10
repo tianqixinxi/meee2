@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "session_id": "frozen-v2",
+  "project": "fixture-project",
+  "cwd": "/tmp/fixture-project",
+  "provider_resume_session_id": "provider-v2",
+  "started_at": "2026-01-01T00:00:00Z",
+  "last_activity": "2026-01-01T00:01:00Z",
+  "status": "idle",
+  "tasks": []
+}

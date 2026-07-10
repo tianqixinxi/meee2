@@ -65,15 +65,15 @@ final class PlannerCoreTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentLaunchCommand.fullAccessCommand(forProvider: "codex"),
-            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+            "codex --dangerously-bypass-approvals-and-sandbox"
         )
         XCTAssertEqual(
             AgentLaunchCommand.normalize(command: "claude").command,
-            "claude --dangerously-skip-permissions"
+            "claude --permission-mode default"
         )
         XCTAssertEqual(
             AgentLaunchCommand.normalize(command: "codex").command,
-            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+            "codex --sandbox workspace-write --ask-for-approval on-request"
         )
     }
 
@@ -1578,22 +1578,15 @@ final class PlannerCoreTests: XCTestCase {
     }
 
     func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
-        let defaults = UserDefaults.standard
-        let oldConnected = defaults.object(forKey: "meee2Connected")
-        let oldUserId = defaults.string(forKey: "meee2UserId")
+        let suiteName = "PlannerCoreTests-identity-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        OnlineProxy.userDefaultsOverride = defaults
         defaults.set(true, forKey: "meee2Connected")
         defaults.set("current-local-user", forKey: "meee2UserId")
         defer {
-            if let oldConnected {
-                defaults.set(oldConnected, forKey: "meee2Connected")
-            } else {
-                defaults.removeObject(forKey: "meee2Connected")
-            }
-            if let oldUserId {
-                defaults.set(oldUserId, forKey: "meee2UserId")
-            } else {
-                defaults.removeObject(forKey: "meee2UserId")
-            }
+            OnlineProxy.userDefaultsOverride = nil
+            defaults.removePersistentDomain(forName: suiteName)
         }
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "stale-owner")
 

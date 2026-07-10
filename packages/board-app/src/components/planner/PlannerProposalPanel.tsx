@@ -1120,7 +1120,7 @@ async function requestEmptyCanvasAIReply({
       messages: buildEmptyCanvasAIMessages(canvasName, canvasTask, history),
       settings: {
         provider: llm.provider,
-        apiKey: llm.apiKey,
+        apiKey: '',
         baseUrl: llm.baseUrl,
         model: llm.model,
         enabledTools: [],
@@ -1181,7 +1181,7 @@ async function repairEmptyCanvasAIReply({
     messages: buildEmptyCanvasAIRepairMessages(canvasName, canvasTask, history, rawText),
     settings: {
       provider: llm.provider,
-      apiKey: llm.apiKey,
+      apiKey: '',
       baseUrl: llm.baseUrl,
       model: llm.model,
       enabledTools: [],

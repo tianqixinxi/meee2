@@ -1266,7 +1266,7 @@ enum AssistantTools {
         var cwd = stringValue(args["cwd"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let mode = createSessionMode(rawMode: rawMode, cwd: cwd)
         let provider = normalizedProvider(stringValue(args["provider"]) ?? stringValue(args["command"]) ?? "claude")
-        let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+        let command = AgentLaunchCommand.defaultCommand(forProvider: provider)
         if mode == "global" {
             guard let context else {
                 return .failure("global session requires a current canvas")

@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 public enum InternalSessionIdentity {
     public struct CliCorrelationIndex {
@@ -23,11 +24,13 @@ public enum InternalSessionIdentity {
         return internalManagedWorkspaceCwds.contains(normalized)
     }
 
-    /// 进程生命周期内 `~/.meee2/workspaces` 的规范化路径不变 —— 提成常量,
+    /// 进程生命周期内受管 workspace 根目录的规范化路径不变 —— 提成常量,
     /// 避免在 surface→CLI 关联热路径(每次重算对 surface × 全量 session 调用)
     /// 里反复 `NSHomeDirectory()` + 路径规范化。
     private static let managedWorkspacesRoot: String = normalizedPath(
-        (NSHomeDirectory() as NSString).appendingPathComponent(".meee2/workspaces")
+        StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("workspaces", isDirectory: true)
+            .path
     )
 
     public static func isMeee2ManagedWorkspace(_ path: String) -> Bool {

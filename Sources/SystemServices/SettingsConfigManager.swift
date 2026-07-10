@@ -44,9 +44,12 @@ public class SettingsConfigManager {
 
     // MARK: - Init
 
-    private init() {
-        let home = NSHomeDirectory()
-        settingsPath = URL(fileURLWithPath: home)
+    private convenience init() {
+        self.init(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    init(homeDirectory: URL) {
+        settingsPath = homeDirectory.standardizedFileURL
             .appendingPathComponent(".claude")
             .appendingPathComponent("settings.json")
     }
@@ -160,6 +163,65 @@ public class SettingsConfigManager {
         } else {
             NSLog("[SettingsConfigManager] Hooks already configured with correct path")
         }
+    }
+
+    /// Remove only meee2-owned hook commands and permission allowlist entries,
+    /// preserving every unrelated Claude setting and third-party hook.
+    @discardableResult
+    public func unregisterMeee2Hooks() -> Bool {
+        guard FileManager.default.fileExists(atPath: settingsPath.path) else { return true }
+        guard let data = try? Data(contentsOf: settingsPath),
+              var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            NSLog("[SettingsConfigManager] refusing to unregister hooks from unreadable settings.json")
+            return false
+        }
+
+        var changed = false
+        if var hooks = settings["hooks"] as? [String: Any] {
+            for eventType in Array(hooks.keys) {
+                guard let eventHooks = hooks[eventType] as? [[String: Any]] else { continue }
+                var retainedConfigs: [[String: Any]] = []
+                for var config in eventHooks {
+                    guard let innerHooks = config["hooks"] as? [[String: Any]] else {
+                        retainedConfigs.append(config)
+                        continue
+                    }
+                    let retainedHooks = innerHooks.filter { hook in
+                        guard let command = hook["command"] as? String else { return true }
+                        return !command.contains(bridgeScriptName)
+                    }
+                    if retainedHooks.count != innerHooks.count { changed = true }
+                    guard !retainedHooks.isEmpty else { continue }
+                    config["hooks"] = retainedHooks
+                    retainedConfigs.append(config)
+                }
+                if retainedConfigs.isEmpty {
+                    hooks.removeValue(forKey: eventType)
+                } else {
+                    hooks[eventType] = retainedConfigs
+                }
+            }
+            if hooks.isEmpty {
+                settings.removeValue(forKey: "hooks")
+            } else {
+                settings["hooks"] = hooks
+            }
+        }
+
+        if var permissions = settings["permissions"] as? [String: Any],
+           let allow = permissions["allow"] as? [String] {
+            let retained = allow.filter {
+                !$0.hasPrefix("mcp__meee2__") && !$0.hasPrefix("mcp__plugin_meee2_meee2__")
+            }
+            if retained.count != allow.count {
+                permissions["allow"] = retained
+                settings["permissions"] = permissions
+                changed = true
+            }
+        }
+
+        guard changed else { return true }
+        return writeSettings(settings: settings)
     }
 
     /// 检查 hooks 配置，返回是否需要写入
@@ -325,13 +387,16 @@ public class SettingsConfigManager {
     }
 
     /// 写入 settings.json
-    private func writeSettings(settings: [String: Any]) {
+    @discardableResult
+    private func writeSettings(settings: [String: Any]) -> Bool {
         do {
             let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: settingsPath, options: .atomic)
             NSLog("[SettingsConfigManager] Successfully wrote settings.json")
+            return true
         } catch {
             NSLog("[SettingsConfigManager] Failed to write settings.json: \(error)")
+            return false
         }
     }
 }

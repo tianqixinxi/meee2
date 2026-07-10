@@ -3,10 +3,21 @@ import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { ArtifactsView } from './ArtifactsView'
-import type { CanvasInfo, PlannerArtifact, PlannerArtifactVersion, PlanningNode } from '../types'
+import type { ArtifactPageParams } from '../api'
+import type {
+  ArtifactPageEnvelope,
+  ArtifactPageItem,
+  CanvasInfo,
+  PlannerArtifact,
+  PlannerArtifactVersion,
+  PlanningNode,
+  SessionArtifactCandidate,
+} from '../types'
 
 const apiMocks = vi.hoisted(() => ({
+  fetchArtifactsPage: vi.fn(),
   fetchPlannerGraphState: vi.fn(),
+  fetchArtifactCandidates: vi.fn(),
   getPlannerArtifactContent: vi.fn(),
   listArtifactVersions: vi.fn(),
   getArtifactVersion: vi.fn(),
@@ -17,7 +28,9 @@ vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
   return {
     ...actual,
+    fetchArtifactsPage: apiMocks.fetchArtifactsPage,
     fetchPlannerGraphState: apiMocks.fetchPlannerGraphState,
+    fetchArtifactCandidates: apiMocks.fetchArtifactCandidates,
     getPlannerArtifactContent: apiMocks.getPlannerArtifactContent,
     listArtifactVersions: apiMocks.listArtifactVersions,
     getArtifactVersion: apiMocks.getArtifactVersion,
@@ -97,6 +110,205 @@ function artifact(input: Partial<PlannerArtifact> & { id: string; kind: PlannerA
   }
 }
 
+function pageItem(
+  canvas: CanvasInfo,
+  artifacts: PlannerArtifact[],
+  itemNode: PlanningNode | null,
+): ArtifactPageItem {
+  return {
+    sourceKind: 'artifact',
+    canvas,
+    node: itemNode,
+    sessionId: itemNode?.sessionId ?? null,
+    artifacts,
+    candidate: null,
+  }
+}
+
+function candidatePageItem(candidate: SessionArtifactCandidate): ArtifactPageItem {
+  return {
+    sourceKind: 'candidate',
+    canvas: {
+      id: `session:${candidate.sessionId}`,
+      name: 'Session',
+      scope: 'personal',
+      kind: 'monitor',
+      isDefault: false,
+      workspacePath: candidate.cwd ?? '',
+    },
+    node: null,
+    sessionId: candidate.sessionId,
+    artifacts: [],
+    candidate,
+  }
+}
+
+function artifactGroup(item: ArtifactPageItem): string {
+  const kind = item.artifacts[0]?.kind ?? item.candidate?.kind
+  if (kind === 'prd' || kind === 'lark-doc') return 'docs'
+  if (kind === 'kanban' || kind === 'idea-draft') return 'boards'
+  if (kind === 'impl-pr' || kind === 'main-merge') return 'implementation'
+  if (kind === 'check-result' || kind === 'prerelease-verdict') return 'validation'
+  return 'files-data'
+}
+
+function artifactPage(
+  items: ArtifactPageItem[],
+  params: ArtifactPageParams,
+  candidates: SessionArtifactCandidate[],
+): ArtifactPageEnvelope {
+  const sessionIds = new Set(params.sessionId?.split(',').map((value) => value.toLowerCase()) ?? [])
+  const project = params.project?.toLowerCase()
+  let filtered = items.filter((item) => {
+    if (params.canvasId && item.canvas.id !== params.canvasId) return false
+    if (params.scope && params.scope !== 'all' && item.canvas.scope !== params.scope) return false
+    if (params.group && params.group !== 'all' && artifactGroup(item) !== params.group) return false
+    if (sessionIds.size || project) {
+      const sessionMatch = item.sessionId ? sessionIds.has(item.sessionId.toLowerCase()) : false
+      const projectMatch = project
+        ? [item.canvas.id, item.canvas.name, item.canvas.workspacePath]
+          .some((value) => value.toLowerCase().includes(project))
+        : false
+      if (!sessionMatch && !projectMatch) return false
+    }
+    if (params.query) {
+      const haystack = [
+        item.canvas.name,
+        item.node?.title,
+        item.artifacts[0]?.title,
+        item.artifacts[0]?.reference,
+        item.candidate?.title,
+      ].filter(Boolean).join(' ').toLowerCase()
+      if (!haystack.includes(params.query.toLowerCase())) return false
+    }
+    return true
+  })
+  if (params.status === 'candidate') {
+    filtered = candidates.map(candidatePageItem).filter((item) => {
+      if (!sessionIds.size && !project) return true
+      return (item.sessionId ? sessionIds.has(item.sessionId.toLowerCase()) : false)
+        || Boolean(project && item.canvas.workspacePath.toLowerCase().includes(project))
+    })
+  } else if (params.status === 'needs-review') {
+    const prd = filtered.find((item) => item.artifacts[0]?.reference === 'release.md')
+    filtered = prd ? [{
+      ...prd,
+      artifacts: prd.artifacts.map((value, index) => index === 0 ? { ...value, reviewStatus: 'pending' } : value),
+    }] : []
+  }
+  const groupCounts = {
+    docs: 0,
+    boards: 0,
+    implementation: 0,
+    validation: 0,
+    'files-data': 0,
+    other: 0,
+  }
+  for (const item of filtered) groupCounts[artifactGroup(item) as keyof typeof groupCounts] += 1
+  const offset = Number(params.cursor ?? '0')
+  const limit = params.limit ?? 50
+  const pageItems = filtered.slice(offset, offset + limit)
+  const end = offset + pageItems.length
+  return {
+    items: pageItems,
+    cursor: end < filtered.length ? String(end) : null,
+    total: filtered.length,
+    hasMore: end < filtered.length,
+    candidateTotal: candidates.length,
+    canvasCount: new Set(filtered.map((item) => item.canvas.id)).size,
+    groupCounts,
+  }
+}
+
+function formalPageItems(): ArtifactPageItem[] {
+  const monitorNode = { ...node, sessionId: 'session-a' }
+  const prdArtifacts = [
+    artifact({
+      id: 'prd-v2',
+      kind: 'prd',
+      title: 'Release PRD',
+      reference: 'release.md',
+      createdAt: '2026-06-03T10:00:00Z',
+      reviewStatus: 'approved',
+      typedPayload: {
+        type: 'prd',
+        reviewStatus: 'approved',
+        tldr: 'Internal release plan and ownership',
+        sections: [{ heading: 'Milestones', lines: 4 }],
+      },
+    }),
+    artifact({
+      id: 'prd-v1',
+      kind: 'prd',
+      title: 'Release PRD',
+      reference: 'release.md',
+      createdAt: '2026-06-02T10:00:00Z',
+      reviewStatus: 'approved',
+    }),
+  ]
+  return [
+    pageItem(canvases[0], prdArtifacts, monitorNode),
+    pageItem(canvases[0], [artifact({
+      id: 'smoke',
+      kind: 'check-result',
+      nodeId: 'smoke-node',
+      title: 'Smoke Test',
+      reference: 'smoke.json',
+      createdAt: '2026-06-01T10:00:00Z',
+      typedPayload: {
+        type: 'check-result',
+        pass: 10,
+        fail: 1,
+        skip: 0,
+        failing: ['web smoke'],
+      },
+    })], smokeNode),
+    pageItem(canvases[1], [artifact({
+      id: 'pr',
+      canvasId: 'release',
+      kind: 'impl-pr',
+      title: 'GitHub PR #128',
+      reference: 'https://github.com/example/repo/pull/128',
+      createdAt: '2026-06-03T09:00:00Z',
+      typedPayload: {
+        type: 'impl-pr',
+        number: 128,
+        branch: 'feat/artifacts',
+        baseBranch: 'main',
+        filesChanged: 5,
+        insertions: 200,
+        deletions: 20,
+        ciStatus: 'running',
+        reviewers: ['Kai'],
+      },
+    })], { ...node, canvasId: 'release', sessionId: 'session-other' }),
+    pageItem(canvases[2], [artifact({
+      id: 'team-doc',
+      canvasId: 'team-canvas',
+      kind: 'lark-doc',
+      title: 'Team Review Notes',
+      reference: 'https://example.com/team-review',
+      createdAt: '2026-06-03T08:00:00Z',
+      typedPayload: {
+        type: 'markdown',
+        preview: `# Team Review
+Ready for review
+
+${'Detailed team review context. '.repeat(30)}
+SHOULD_NOT_APPEAR_IN_DETAIL`,
+      },
+    })], { ...node, canvasId: 'team-canvas', sessionId: 'session-other' }),
+    pageItem(canvases[2], [artifact({
+      id: 'legacy-kanban',
+      canvasId: 'team-canvas',
+      kind: 'kanban',
+      title: 'Legacy Kanban Payload',
+      reference: 'legacy-kanban.json',
+      createdAt: '2026-06-03T07:00:00Z',
+    })], { ...node, canvasId: 'team-canvas', sessionId: 'session-other' }),
+  ]
+}
+
 const versions: PlannerArtifactVersion[] = [
   {
     version_id: 'v2',
@@ -137,8 +349,16 @@ function renderView(props: Partial<ComponentProps<typeof ArtifactsView>> = {}) {
   return { onOpenCanvas }
 }
 
+const candidateFixtures: SessionArtifactCandidate[] = []
+
 describe('ArtifactsView global index', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
+    candidateFixtures.splice(0)
+    apiMocks.fetchArtifactsPage.mockImplementation((params: ArtifactPageParams) => Promise.resolve(
+      artifactPage(formalPageItems(), params, candidateFixtures),
+    ))
+    apiMocks.fetchArtifactCandidates.mockResolvedValue({ candidates: [] })
     apiMocks.fetchPlannerGraphState.mockImplementation((canvasId: string) => Promise.resolve({
       canvas: { id: canvasId, ownerId: 'kai', title: canvasId, plannerContext: '' },
       nodes: canvasId === 'monitor'
@@ -302,11 +522,66 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
 
     fireEvent.click(screen.getByRole('button', { name: /Implementation 1/ }))
 
-    const list = screen.getByRole('region', { name: 'Artifact index list' })
+    const list = await screen.findByRole('region', { name: 'Artifact index list' })
     await waitFor(() => {
       expect(within(list).getByText('GitHub PR #128')).toBeInTheDocument()
       expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
     })
+  })
+
+  it('caps the mounted artifact rows and reveals additional pages on demand', async () => {
+    const items = Array.from({ length: 120 }, (_, index) => pageItem(
+      canvases[0],
+      [artifact({
+          id: `artifact-${index}`,
+          kind: 'prd',
+          title: `Artifact ${index}`,
+          reference: `artifact-${index}.md`,
+          createdAt: new Date(Date.UTC(2026, 5, 3, 10, index)).toISOString(),
+      })],
+      null,
+    ))
+    apiMocks.fetchArtifactsPage.mockImplementation((params: ArtifactPageParams) => Promise.resolve(
+      artifactPage(items, params, []),
+    ))
+
+    renderView()
+
+    const table = await screen.findByRole('table')
+    expect(within(table).getAllByRole('row')).toHaveLength(51)
+    expect(screen.getByText('Showing 50 of 120')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load 50 more' }))
+    await screen.findByText('Showing 100 of 120')
+    expect(within(table).getAllByRole('row').length).toBeLessThanOrEqual(61)
+    expect(apiMocks.fetchPlannerGraphState).not.toHaveBeenCalled()
+    expect(apiMocks.fetchArtifactsPage.mock.calls.every(([params]) => params.limit <= 50)).toBe(true)
+  })
+
+  it('keeps raw session candidates behind an explicit toggle', async () => {
+    candidateFixtures.push({
+        id: 'candidate-raw',
+        sessionId: 'session-a',
+        provider: 'codex',
+        cwd: '/repo',
+        title: 'Raw terminal candidate',
+        kind: 'file',
+        status: 'candidate',
+        createdAt: '2026-06-18T00:00:00Z',
+        updatedAt: '2026-06-18T00:00:00Z',
+        sourceEvent: 'PostToolUse',
+        toolName: 'apply_patch',
+        toolUseId: 'tool-a',
+        references: [],
+        summary: 'Generated candidate artifact.',
+    })
+
+    renderView()
+
+    const toggle = await screen.findByRole('button', { name: 'Raw candidates (1)' })
+    expect(screen.queryByText('Raw terminal candidate')).not.toBeInTheDocument()
+    fireEvent.click(toggle)
+    expect(await screen.findAllByText('Raw terminal candidate')).not.toHaveLength(0)
   })
 
   it('shows selected artifact detail and dispatches open-in-canvas target', async () => {
@@ -341,8 +616,8 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
 
     await screen.findAllByText('Release PRD')
     fireEvent.change(screen.getByLabelText(/State/), { target: { value: 'needs-review' } })
-    expect(screen.getAllByText('Release PRD').length).toBeGreaterThan(0)
-    expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument()
+    expect((await screen.findAllByText('Release PRD')).length).toBeGreaterThan(0)
+    await waitFor(() => expect(screen.queryByText('Smoke Test')).not.toBeInTheDocument())
 
     fireEvent.change(screen.getByPlaceholderText(/Search title/), { target: { value: 'github' } })
     await waitFor(() => {
@@ -400,7 +675,9 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     renderView()
 
     await screen.findAllByText('Release PRD')
-    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    fireEvent.change(screen.getByLabelText(/State/), { target: { value: 'needs-review' } })
+    const detail = await screen.findByRole('complementary', { name: 'Artifact detail' })
+    await within(detail).findByRole('button', { name: /Approve/ })
     fireEvent.click(within(detail).getByRole('button', { name: /Approve/ }))
 
     await waitFor(() => {
@@ -478,7 +755,7 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     await screen.findAllByText('Release PRD')
     fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
 
-    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
+    const detail = await screen.findByRole('complementary', { name: 'Artifact detail' })
     expect(await within(detail).findByRole('heading', { name: 'Team Review Notes' })).toBeInTheDocument()
     expect(within(detail).queryByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).not.toBeInTheDocument()
 

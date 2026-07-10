@@ -30,8 +30,8 @@ export const DEFAULT_ALLOW_CLOUD = true
 
 export function commandForSpawnProvider(provider: SpawnProvider): string {
   return provider === 'codex'
-    ? 'codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust'
-    : 'claude --dangerously-skip-permissions'
+    ? 'codex --sandbox workspace-write --ask-for-approval on-request'
+    : 'claude --permission-mode default'
 }
 
 export function spawnProviderLabel(provider: SpawnProvider): string {
