@@ -96,7 +96,10 @@ const DEFAULT_PROMPT = ''
 const PROVIDERS: SpawnProvider[] = ['codex', 'claude']
 const DEFAULT_PERMISSION_MODE: AgentPermissionMode = 'onRequest'
 const DEFAULT_VISIBLE_SESSIONS = 8
-const TEMPORARY_GROUP_ID = 'temporary'
+const RECENT_GROUP_ID = 'recent'
+const HISTORY_GROUP_ID = 'history'
+const HISTORY_SECTION_ID = 'history-section'
+const HISTORY_AFTER_MS = 25 * 24 * 60 * 60 * 1000
 const SIDEBAR_WIDTH_KEY = 'meee2.sessionLauncher.sidebarWidth'
 const SIDEBAR_COLLAPSED_KEY = 'meee2.sessionLauncher.sidebarCollapsed'
 const LAST_SELECTION_KEY = 'meee2.sessionLauncher.lastSelection'
@@ -331,6 +334,7 @@ export function SessionLauncherView({
   const initializedSelectionRef = useRef(initialSelection !== null)
   const handledOpenTargetRef = useRef<string | null>(null)
   const pointerSidebarResizeActiveRef = useRef(false)
+  const stableSessionPlacementRef = useRef(new Map<string, 'current' | 'history'>())
   const sessions = state?.sessions ?? []
 
   const refreshProjects = useCallback(() => {
@@ -438,45 +442,42 @@ export function SessionLauncherView({
     const byProject = new Map<string, Session[]>()
     for (const project of explicitProjects) byProject.set(project.id, [])
     const pinned: Session[] = []
-    const temporary: Session[] = []
-    const external: Session[] = []
+    const recent: Session[] = []
+    const history: Session[] = []
 
     for (const session of launcherSessions) {
       if (pinnedSessionIds.has(session.id)) {
         pinned.push(session)
         continue
       }
+      let placement = stableSessionPlacementRef.current.get(session.id)
+      if (!placement) {
+        placement = sessionIsHistorical(session) ? 'history' : 'current'
+        stableSessionPlacementRef.current.set(session.id, placement)
+      }
+      if (placement === 'history') {
+        history.push(session)
+        continue
+      }
       const project = projectByPath.get(normalizePath(session.project))
       if (project) byProject.get(project.id)?.push(session)
-      else if (sessionScope(session) === 'external') external.push(session)
-      else temporary.push(session)
+      else recent.push(session)
     }
 
-    for (const list of byProject.values()) list.sort(compareSessions)
-    pinned.sort(compareSessions)
-    temporary.sort(compareSessions)
-    external.sort(compareSessions)
-    return { byProject, pinned, temporary, external }
+    // 会话创建后保持固定位置。实时 activity 仍更新年龄和状态，但不再导致点击后的列表重排。
+    for (const list of byProject.values()) list.sort(compareStableSessions)
+    pinned.sort(compareStableSessions)
+    recent.sort(compareStableSessions)
+    history.sort(compareStableSessions)
+    return { byProject, pinned, recent, history }
   }, [explicitProjects, launcherSessions, pinnedSessionIds, projectByPath])
 
-  const latestProjectSessionTimes = useMemo(() => {
-    const times = new Map<string, number>()
-    for (const session of launcherSessions) {
-      const project = projectByPath.get(normalizePath(session.project))
-      if (!project) continue
-      times.set(project.id, Math.max(times.get(project.id) ?? 0, sessionTime(session)))
-    }
-    return times
-  }, [launcherSessions, projectByPath])
-
   const sortedProjects = useMemo(() => {
-    return [...explicitProjects].sort((a, b) => {
-      const aTime = latestProjectSessionTimes.get(a.id) ?? projectTime(a)
-      const bTime = latestProjectSessionTimes.get(b.id) ?? projectTime(b)
-      if (aTime !== bTime) return bTime - aTime
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-    })
-  }, [explicitProjects, latestProjectSessionTimes])
+    return [...explicitProjects].sort((a, b) => (
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        || a.id.localeCompare(b.id)
+    ))
+  }, [explicitProjects])
 
   const reopenLauncherSessionForSession = useCallback((session: Session) => {
     const resumeSessionId = providerResumeTargetForSession(session)
@@ -522,7 +523,7 @@ export function SessionLauncherView({
 
   useEffect(() => {
     if (selection || initializedSelectionRef.current || state === null) return
-    const latestSession = [...launcherSessions].sort(compareSessions)[0]
+    const latestSession = [...launcherSessions].sort(compareSessionActivity)[0]
     if (latestSession) {
       initializedSelectionRef.current = true
       setSelection({ kind: 'session', sessionId: latestSession.id, surfaceId: latestSession.surfaceId })
@@ -579,8 +580,8 @@ export function SessionLauncherView({
       setExpandedSessionGroups((current) => addToSet(current, 'pinned'))
       return
     }
-    if (sessionScope(session) === 'external') {
-      setExpandedSessionGroups((current) => addToSet(current, 'external'))
+    if (grouped.history.some((item) => item.id === session.id)) {
+      setExpandedSessionGroups((current) => addToSet(current, HISTORY_SECTION_ID))
       return
     }
     const project = projectByPath.get(normalizePath(session.project))
@@ -589,8 +590,8 @@ export function SessionLauncherView({
       setExpandedSessionGroups((current) => addToSet(current, `project:${project.id}`))
       return
     }
-    setExpandedSessionGroups((current) => addToSet(current, TEMPORARY_GROUP_ID))
-  }, [launcherSessions, pinnedSessionIds, projectByPath, selection])
+    setExpandedSessionGroups((current) => addToSet(current, RECENT_GROUP_ID))
+  }, [grouped.history, launcherSessions, pinnedSessionIds, projectByPath, selection])
 
   const selectedProject = useMemo(() => {
     if (selection?.kind !== 'project') return null
@@ -824,7 +825,7 @@ export function SessionLauncherView({
       }))
       setTemporaryPrompt(DEFAULT_PROMPT)
       setTemporaryAttachments([])
-      setExpandedSessionGroups((current) => new Set([...current, TEMPORARY_GROUP_ID]))
+      setExpandedSessionGroups((current) => new Set([...current, RECENT_GROUP_ID]))
       onSessionCreated?.()
       onToast?.('success', t('sessions.launcher.startedTemporary', { provider: spawnProviderLabel(temporaryProvider) }))
     } catch (err) {
@@ -853,11 +854,6 @@ export function SessionLauncherView({
     const opened = await activateSession(session.id)
     if (!opened) onToast?.('error', t('sessions.launcher.noTerminalSurface'))
   }, [onToast, t])
-
-  const handleCancelSessionSelection = useCallback((session: Session) => {
-    const project = projectForSession(session, projects)
-    setSelection(project ? { kind: 'project', projectId: project.id } : { kind: 'temporaryDraft' })
-  }, [projects])
 
   const handleTogglePinned = useCallback((session: Session) => {
     setSessionMenu(null)
@@ -1037,40 +1033,51 @@ export function SessionLauncherView({
         />
         {projectsError && <div className="session-launcher__error">{projectsError}</div>}
         <div className="session-launcher__project-list">
-          <SessionGroupHeader title={t('sessions.launcher.pinned')} />
-          {grouped.pinned.length > 0 ? (
-            <SessionList
-              groupId="pinned"
-              sessions={grouped.pinned}
-              selection={selection}
-              expandedSessionGroups={expandedSessionGroups}
-              onToggleExpanded={setExpandedSessionGroups}
-              onSelectSession={(session) => void handleSelectSession(session)}
-              onTogglePinned={handleTogglePinned}
-              onArchiveSession={setArchiveSession}
-              onOpenSessionMenu={handleOpenSessionMenu}
-              onOpenSessionMenuAt={openSessionMenuAt}
-              titleOverrides={titleOverrides}
-              pinnedSessionIds={pinnedSessionIds}
-              archivingSessionId={archivingSessionId}
-            />
-          ) : (
-            <div className="session-launcher__empty session-launcher__empty--compact">{t('sessions.launcher.noPinned')}</div>
+          {grouped.pinned.length > 0 && (
+            <>
+              <SessionGroupHeader title={t('sessions.launcher.pinned')} />
+              <SessionList
+                groupId="pinned"
+                sessions={grouped.pinned}
+                selection={selection}
+                expandedSessionGroups={expandedSessionGroups}
+                onToggleExpanded={setExpandedSessionGroups}
+                onSelectSession={(session) => void handleSelectSession(session)}
+                onTogglePinned={handleTogglePinned}
+                onArchiveSession={setArchiveSession}
+                onOpenSessionMenu={handleOpenSessionMenu}
+                onOpenSessionMenuAt={openSessionMenuAt}
+                titleOverrides={titleOverrides}
+                pinnedSessionIds={pinnedSessionIds}
+                archivingSessionId={archivingSessionId}
+              />
+            </>
           )}
 
           <SessionGroupHeader
             title={t('sessions.launcher.projects')}
             action={(
-              <button
-                type="button"
-                className="session-launcher__group-action"
-                onClick={handleAddFolder}
-                disabled={addingFolder}
-                aria-label={t('sessions.launcher.addFolder')}
-                title={t('sessions.launcher.addFolder')}
-              >
-                {addingFolder ? <Loader2 size={14} className="spin" /> : <FolderPlus size={14} />}
-              </button>
+              <div className="session-launcher__group-actions">
+                <button
+                  type="button"
+                  className="session-launcher__group-action"
+                  onClick={() => setSelection({ kind: 'temporaryDraft' })}
+                  aria-label={t('sessions.launcher.newTemporarySession')}
+                  title={t('sessions.launcher.newTemporarySession')}
+                >
+                  <MessageSquarePlus size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="session-launcher__group-action"
+                  onClick={handleAddFolder}
+                  disabled={addingFolder}
+                  aria-label={t('sessions.launcher.addFolder')}
+                  title={t('sessions.launcher.addFolder')}
+                >
+                  {addingFolder ? <Loader2 size={14} className="spin" /> : <FolderPlus size={14} />}
+                </button>
+              </div>
             )}
           />
           {projectsLoading ? (
@@ -1119,42 +1126,12 @@ export function SessionLauncherView({
             )
           })}
 
-          <SessionGroupHeader
-            title={t('sessions.launcher.temporary')}
-            action={(
-              <button
-                type="button"
-                className="session-launcher__group-action"
-                onClick={() => setSelection({ kind: 'temporaryDraft' })}
-                aria-label={t('sessions.launcher.newTemporarySession')}
-                title={t('sessions.launcher.newTemporarySession')}
-              >
-                <MessageSquarePlus size={14} />
-              </button>
-            )}
-          />
-          <SessionList
-            groupId={TEMPORARY_GROUP_ID}
-            sessions={grouped.temporary}
-            selection={selection}
-            expandedSessionGroups={expandedSessionGroups}
-            onToggleExpanded={setExpandedSessionGroups}
-            onSelectSession={(session) => void handleSelectSession(session)}
-            onTogglePinned={handleTogglePinned}
-            onArchiveSession={setArchiveSession}
-            onOpenSessionMenu={handleOpenSessionMenu}
-            onOpenSessionMenuAt={openSessionMenuAt}
-            titleOverrides={titleOverrides}
-            pinnedSessionIds={pinnedSessionIds}
-            archivingSessionId={archivingSessionId}
-          />
-
-          {grouped.external.length > 0 && (
+          {grouped.recent.length > 0 && (
             <>
-              <SessionGroupHeader title={t('sessions.launcher.history')} />
+              <SessionGroupHeader title={t('sessions.launcher.recent')} />
               <SessionList
-                groupId="external"
-                sessions={grouped.external}
+                groupId={RECENT_GROUP_ID}
+                sessions={grouped.recent}
                 selection={selection}
                 expandedSessionGroups={expandedSessionGroups}
                 onToggleExpanded={setExpandedSessionGroups}
@@ -1167,6 +1144,33 @@ export function SessionLauncherView({
                 pinnedSessionIds={pinnedSessionIds}
                 archivingSessionId={archivingSessionId}
               />
+            </>
+          )}
+
+          {grouped.history.length > 0 && (
+            <>
+              <SessionDisclosureHeader
+                title={t('sessions.launcher.history')}
+                expanded={expandedSessionGroups.has(HISTORY_SECTION_ID)}
+                onToggle={() => setExpandedSessionGroups((current) => toggleSet(current, HISTORY_SECTION_ID))}
+              />
+              {expandedSessionGroups.has(HISTORY_SECTION_ID) && (
+                <SessionList
+                  groupId={HISTORY_GROUP_ID}
+                  sessions={grouped.history}
+                  selection={selection}
+                  expandedSessionGroups={expandedSessionGroups}
+                  onToggleExpanded={setExpandedSessionGroups}
+                  onSelectSession={(session) => void handleSelectSession(session)}
+                  onTogglePinned={handleTogglePinned}
+                  onArchiveSession={setArchiveSession}
+                  onOpenSessionMenu={handleOpenSessionMenu}
+                  onOpenSessionMenuAt={openSessionMenuAt}
+                  titleOverrides={titleOverrides}
+                  pinnedSessionIds={pinnedSessionIds}
+                  archivingSessionId={archivingSessionId}
+                />
+              )}
             </>
           )}
         </div>
@@ -1186,7 +1190,6 @@ export function SessionLauncherView({
             onResume={() => selectedSession && reopenLauncherSessionForSession(selectedSession)}
             onRetryAttach={handleRetrySessionAttachment}
             onOpenExternal={() => selectedSession && void handleOpenExternalTerminal(selectedSession)}
-            onCancel={() => selectedSession && handleCancelSessionSelection(selectedSession)}
             activeTab={sessionPanelTabs[selection.sessionId] ?? 'terminal'}
             onActiveTabChange={(tab) => setSessionPanelTabs((current) => ({ ...current, [selection.sessionId]: tab }))}
           />
@@ -1653,6 +1656,28 @@ function SessionGroupHeader({
       <span>{title}</span>
       {action}
     </div>
+  )
+}
+
+function SessionDisclosureHeader({
+  title,
+  expanded,
+  onToggle,
+}: {
+  title: string
+  expanded: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="session-launcher__disclosure-header"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <span>{title}</span>
+      <ChevronDown size={13} className={expanded ? 'is-open' : ''} aria-hidden />
+    </button>
   )
 }
 
@@ -2226,7 +2251,6 @@ function SessionLauncherTerminal({
   onResume,
   onRetryAttach,
   onOpenExternal,
-  onCancel,
   activeTab,
   onActiveTabChange,
 }: {
@@ -2242,7 +2266,6 @@ function SessionLauncherTerminal({
   onResume?: () => void
   onRetryAttach?: () => void
   onOpenExternal?: () => void
-  onCancel?: () => void
   activeTab: SessionPanelTab
   onActiveTabChange: (tab: SessionPanelTab) => void
 }) {
@@ -2253,7 +2276,7 @@ function SessionLauncherTerminal({
   const switchTraceIdRef = useRef<string>('')
   const switchStartedAtRef = useRef<number>(Date.now())
   const [showRecovery, setShowRecovery] = useState(false)
-  const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [showRecoveryDetails, setShowRecoveryDetails] = useState(false)
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
   const targetSurfaceId = liveTarget.surfaceId ?? (usingRestoredSurface ? suppliedSurfaceId : undefined)
@@ -2263,7 +2286,7 @@ function SessionLauncherTerminal({
   const targetKey = `${targetSessionId ?? 'missing'}:${targetSurfaceId ?? 'missing'}`
 
   useEffect(() => {
-    setShowDiagnostics(false)
+    setShowRecoveryDetails(false)
     if (canOpenNativeTerminal || !terminalTabActive) {
       setShowRecovery(false)
       return undefined
@@ -2438,18 +2461,26 @@ function SessionLauncherTerminal({
               {session && sessionCanBeReopened(session) && onResume ? (
                 <button type="button" className="primary" onClick={onResume}>{t('sessions.launcher.resumeSession')}</button>
               ) : null}
-              {onRetryAttach ? <button type="button" onClick={onRetryAttach}>{t('sessions.launcher.retryAttach')}</button> : null}
               {onOpenExternal ? <button type="button" onClick={onOpenExternal}>{t('sessions.launcher.openExternalTerminal')}</button> : null}
-              {onCancel ? <button type="button" onClick={onCancel}>{t('common.cancel')}</button> : null}
-              <button type="button" onClick={() => setShowDiagnostics((value) => !value)}>{t('sessions.launcher.viewDiagnostics')}</button>
+              <button
+                type="button"
+                className="quiet"
+                aria-expanded={showRecoveryDetails}
+                onClick={() => setShowRecoveryDetails((value) => !value)}
+              >
+                {t('sessions.launcher.troubleshoot')}
+              </button>
             </div>
           )}
-          {showDiagnostics && session ? (
-            <dl className="session-launcher-terminal__diagnostics">
-              <div><dt>session</dt><dd>{session.id}</dd></div>
-              <div><dt>status</dt><dd>{session.surfaceStatus ?? session.status}</dd></div>
-              <div><dt>surface</dt><dd>{session.surfaceId ?? 'none'}</dd></div>
-            </dl>
+          {showRecoveryDetails && session ? (
+            <div className="session-launcher-terminal__recovery-details">
+              {onRetryAttach ? <button type="button" onClick={onRetryAttach}>{t('sessions.launcher.retryAttach')}</button> : null}
+              <dl className="session-launcher-terminal__diagnostics">
+                <div><dt>session</dt><dd>{session.id}</dd></div>
+                <div><dt>status</dt><dd>{session.surfaceStatus ?? session.status}</dd></div>
+                <div><dt>surface</dt><dd>{session.surfaceId ?? 'none'}</dd></div>
+              </dl>
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -2613,14 +2644,30 @@ function normalizePermissionMode(provider: SpawnProvider, mode: AgentPermissionM
   return options.some((option) => option.value === mode) ? mode as AgentPermissionMode : DEFAULT_PERMISSION_MODE
 }
 
-function compareSessions(a: Session, b: Session): number {
-  return sessionTime(b) - sessionTime(a)
+function compareSessionActivity(a: Session, b: Session): number {
+  return sessionActivityTime(b) - sessionActivityTime(a) || a.id.localeCompare(b.id)
 }
 
-function sessionTime(session: Session): number {
+function compareStableSessions(a: Session, b: Session): number {
+  return sessionStartedTime(b) - sessionStartedTime(a) || a.id.localeCompare(b.id)
+}
+
+function sessionActivityTime(session: Session): number {
   const raw = session.lastActivity ?? session.startedAt ?? ''
   const parsed = Date.parse(raw)
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function sessionStartedTime(session: Session): number {
+  const parsed = Date.parse(session.startedAt ?? '')
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function sessionIsHistorical(session: Session): boolean {
+  const rawStatus = (session.surfaceStatus ?? session.status ?? '').toLowerCase()
+  if (rawStatus === 'exited' || rawStatus === 'dead' || rawStatus === 'failed') return true
+  const activity = sessionActivityTime(session)
+  return activity > 0 && Date.now() - activity >= HISTORY_AFTER_MS
 }
 
 function compactSessionAge(session: Session): string {
@@ -2632,12 +2679,6 @@ function compactSessionAge(session: Session): string {
   if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}分`
   if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}小时`
   return `${Math.floor(delta / 86_400_000)}天`
-}
-
-function projectTime(project: SessionProject): number {
-  const raw = project.lastUsedAt ?? project.updatedAt ?? project.createdAt
-  const parsed = Date.parse(raw)
-  return Number.isNaN(parsed) ? 0 : parsed
 }
 
 function sessionRuntimeLabel(session: Session | null): string {

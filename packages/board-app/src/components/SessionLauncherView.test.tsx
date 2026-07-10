@@ -90,6 +90,11 @@ function renderWithI18n(ui: ReactElement) {
   return render(<I18nProvider>{ui}</I18nProvider>)
 }
 
+async function expandHistory() {
+  const button = await screen.findByRole('button', { name: '历史会话' })
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button)
+}
+
 describe('SessionLauncherView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -427,6 +432,116 @@ describe('SessionLauncherView', () => {
     await screen.findByText('置顶')
     expect(screen.getAllByRole('button', { name: '新增 Session 原生 Terminal' })).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'meee2-workspace' })).toBeInTheDocument()
+  })
+
+  it('hides empty groups and keeps historical sessions behind one disclosure', async () => {
+    const recentSession = makeSession({
+      id: 'recent-external',
+      project: '/Users/kai/Code/untracked',
+      sessionScope: 'external',
+      recentMessages: [{ role: 'user', text: '最近的外部会话' }],
+      lastActivity: new Date(Date.now() - 60_000).toISOString(),
+    })
+    const historicalSession = makeSession({
+      id: 'old-temporary',
+      project: '/Users/kai/.meee2/workspaces/temporary/old',
+      recentMessages: [{ role: 'user', text: '很久以前的临时会话' }],
+      surfaceStatus: 'running',
+      startedAt: new Date(Date.now() - 31 * 24 * 60 * 60_000).toISOString(),
+      lastActivity: new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString(),
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([recentSession, historicalSession])} />)
+
+    expect(screen.queryByText('置顶')).not.toBeInTheDocument()
+    expect(await screen.findByText('最近会话')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '最近的外部会话' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '很久以前的临时会话' })).not.toBeInTheDocument()
+
+    await expandHistory()
+    expect(screen.getByRole('button', { name: '很久以前的临时会话' })).toBeInTheDocument()
+  })
+
+  it('keeps session and project positions stable when live activity changes', async () => {
+    const alphaProject: SessionProject = {
+      ...project,
+      id: 'project-alpha',
+      name: 'alpha',
+      path: '/Users/kai/Code/alpha',
+    }
+    const betaProject: SessionProject = {
+      ...project,
+      id: 'project-beta',
+      name: 'beta',
+      path: '/Users/kai/Code/beta',
+    }
+    api.fetchSessionProjects.mockResolvedValue({ projects: [betaProject, alphaProject] })
+    const newerStartedAt = new Date(Date.now() - 60_000).toISOString()
+    const olderStartedAt = new Date(Date.now() - 2 * 60_000).toISOString()
+    const newer = makeSession({
+      id: 'newer-session',
+      project: alphaProject.path,
+      recentMessages: [{ role: 'user', text: '较新创建' }],
+      surfaceId: 'newer-surface',
+      startedAt: newerStartedAt,
+      lastActivity: newerStartedAt,
+    })
+    const older = makeSession({
+      id: 'older-session',
+      project: alphaProject.path,
+      recentMessages: [{ role: 'user', text: '较早创建' }],
+      surfaceId: 'older-surface',
+      startedAt: olderStartedAt,
+      lastActivity: olderStartedAt,
+    })
+    const view = renderWithI18n(<SessionLauncherView state={makeState([older, newer])} />)
+
+    await screen.findByRole('button', { name: 'alpha' })
+    fireEvent.click(screen.getByRole('button', { name: '展开 alpha' }))
+    fireEvent.click(await screen.findByRole('button', { name: '较早创建' }))
+    const sidebarOrder = () => Array.from(
+      view.container.querySelectorAll('.session-launcher__project-row strong, .session-launcher__session-row strong'),
+    ).map((node) => node.textContent)
+    expect(sidebarOrder()).toEqual(['alpha', '较新创建', '较早创建', 'beta'])
+
+    view.rerender(
+      <I18nProvider>
+        <SessionLauncherView state={makeState([{
+          ...older,
+          lastActivity: new Date().toISOString(),
+          surfaceStatus: 'exited',
+        }, newer])} />
+      </I18nProvider>,
+    )
+
+    expect(sidebarOrder()).toEqual(['alpha', '较新创建', '较早创建', 'beta'])
+    expect(screen.getByRole('button', { name: '较早创建' }).closest('.session-launcher__session-item')).toHaveClass('is-selected')
+  })
+
+  it('keeps recovery choices focused until troubleshooting is requested', async () => {
+    localStorage.setItem(lastSelectionKey, JSON.stringify({
+      kind: 'session',
+      sessionId: 'stale-session',
+    }))
+    const staleSession = makeSession({
+      id: 'stale-session',
+      recentMessages: [{ role: 'user', text: '待恢复会话' }],
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
+
+    expect(await screen.findByRole('button', { name: '恢复会话' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '打开外部终端' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '排查问题' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试挂载' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '排查问题' }))
+    expect(screen.getByRole('button', { name: '重试挂载' })).toBeInTheDocument()
+    expect(screen.getByText('stale-session')).toBeInTheDocument()
   })
 
   it('archives a session from the launcher row without deleting it', async () => {
@@ -772,6 +887,7 @@ describe('SessionLauncherView', () => {
     ]
     renderWithI18n(<SessionLauncherView state={makeState(temporarySessions)} />)
 
+    await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: '临时问题 B' }))
 
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
@@ -817,6 +933,7 @@ describe('SessionLauncherView', () => {
     })
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
 
+    await expandHistory()
     const row = await screen.findByRole('button', { name: '继续历史临时问题' })
     fireEvent.click(row)
 
@@ -876,6 +993,7 @@ describe('SessionLauncherView', () => {
     })
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
 
+    await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: '在外部终端中继续' }))
 
     expect(api.activateSession).not.toHaveBeenCalled()
@@ -916,6 +1034,7 @@ describe('SessionLauncherView', () => {
     const view = renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: '继续旧的 Session' }))
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
@@ -994,6 +1113,7 @@ describe('SessionLauncherView', () => {
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} onToast={onToast} />)
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    await expandHistory()
     const title = await screen.findByText('支持Session新建页面输入图片，用户粘贴即可')
     fireEvent.click(title.closest('button')!)
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
@@ -1052,6 +1172,7 @@ describe('SessionLauncherView', () => {
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} onToast={onToast} />)
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: '已经恢复过的 Session' }))
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
@@ -1080,6 +1201,7 @@ describe('SessionLauncherView', () => {
 
     renderWithI18n(<SessionLauncherView state={makeState([planSession])} />)
 
+    await expandHistory()
     expect(screen.getByRole('button', { name: 'hi' })).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText('正在加载项目')).not.toBeInTheDocument())
     expect(screen.getByRole('button', { name: /^hi(?: ·|$)/ })).toBeInTheDocument()

@@ -16006,11 +16006,46 @@ body.session-launcher-sidebar-resizing * {
   transition: color 120ms ease, background 120ms ease;
 }
 
+.session-launcher__group-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .session-launcher__group-header:hover .session-launcher__group-action,
 .session-launcher__group-header:focus-within .session-launcher__group-action {
   background: var(--bg-elevated);
   color: var(--text);
   pointer-events: auto;
+}
+
+.session-launcher__disclosure-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: calc(100% - 8px);
+  min-height: 28px;
+  margin: 7px 4px 2px;
+  padding: 0 5px;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.session-launcher__disclosure-header:hover {
+  color: var(--text);
+}
+
+.session-launcher__disclosure-header svg {
+  transform: rotate(-90deg);
+  transition: transform 120ms ease;
+}
+
+.session-launcher__disclosure-header svg.is-open {
+  transform: rotate(0);
 }
 
 .session-launcher__project-row,
@@ -17580,6 +17615,28 @@ body.session-launcher-sidebar-resizing * {
   border-color: rgba(104, 145, 202, 0.58);
   background: rgba(104, 145, 202, 0.22);
   color: #dbeafe;
+}
+
+.session-launcher-terminal__recovery-actions button.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: rgba(232, 232, 232, 0.58);
+}
+
+.session-launcher-terminal__recovery-details {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.session-launcher-terminal__recovery-details > button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 232, 232, 0.58);
+  font-size: 11px;
 }
 
 .session-launcher-terminal__diagnostics {
