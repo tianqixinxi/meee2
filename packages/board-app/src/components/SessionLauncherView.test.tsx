@@ -152,6 +152,29 @@ describe('SessionLauncherView', () => {
     expect(screen.getByPlaceholderText('随心输入')).toBeInTheDocument()
   })
 
+  it('renders the session list inside the unified workspace sidebar', async () => {
+    const sidebarContainer = document.createElement('div')
+    document.body.appendChild(sidebarContainer)
+    const view = renderWithI18n(
+      <SessionLauncherView
+        state={makeState()}
+        unifiedSidebar
+        sidebarContainer={sidebarContainer}
+      />,
+    )
+
+    try {
+      expect(await screen.findByRole('button', { name: project.name })).toBeInTheDocument()
+      expect(sidebarContainer.querySelector('.session-launcher__project-list')).toBeInTheDocument()
+      expect(view.container.querySelector('.session-launcher__sidebar')).not.toBeInTheDocument()
+      expect(view.container.querySelector('.session-launcher')).toHaveClass('session-launcher--unified-sidebar')
+      expect(screen.queryByRole('button', { name: '折叠会话侧边栏' })).not.toBeInTheDocument()
+    } finally {
+      view.unmount()
+      sidebarContainer.remove()
+    }
+  })
+
   it('selects the latest session on first entry when no selection is stored', async () => {
     localStorage.removeItem(lastSelectionKey)
     const older = makeSession({

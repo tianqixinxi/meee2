@@ -440,6 +440,7 @@ export default function App() {
     boardState: boardState.state,
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
+  const [workspaceRailDetail, setWorkspaceRailDetail] = useState<HTMLDivElement | null>(null)
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('general')
   const [sessionsWorkspaceTarget, setSessionsWorkspaceTarget] = useState<SessionsWorkspaceOpenTarget | null>(null)
   const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
@@ -1309,6 +1310,7 @@ export default function App() {
           mode={workspaceMode}
           userProfile={userProfile}
           onModeChange={handleWorkspaceModeChange}
+          detailRef={setWorkspaceRailDetail}
         />
         <div className={`board-area${workspaceMode === 'planner' && activeWorkspaceCanvasKind === 'monitor' ? ' board-area--monitor' : ''}`}>
           {readinessReport && !readinessReport.ready && (
@@ -1366,6 +1368,8 @@ export default function App() {
               onOpenSessionArtifacts={handleOpenSessionArtifacts}
               onJumpToCanvas={handleJumpSessionToCanvas}
               onToast={pushToast}
+              unifiedSidebar
+              sidebarContainer={workspaceRailDetail}
             />
           ) : workspaceMode === 'planner' ? (
             activeWorkspaceCanvasKind === 'monitor' ? (

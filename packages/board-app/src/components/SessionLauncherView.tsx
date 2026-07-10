@@ -69,6 +69,8 @@ interface Props {
   onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
   onJumpToCanvas?: (session: Session) => void
   onToast?: (kind: 'success' | 'error', text: string) => void
+  unifiedSidebar?: boolean
+  sidebarContainer?: HTMLElement | null
 }
 
 type Selection =
@@ -282,6 +284,8 @@ export function SessionLauncherView({
   onOpenSessionArtifacts,
   onJumpToCanvas,
   onToast,
+  unifiedSidebar = false,
+  sidebarContainer = null,
 }: Props) {
   const { t } = useI18n()
   const { resolvedTheme } = useTheme()
@@ -1016,33 +1020,38 @@ export function SessionLauncherView({
 
   return (
     <>
-    <section
-      className={`session-launcher${sidebarCollapsed ? ' session-launcher--sidebar-collapsed' : ''}`}
-      style={launcherStyle}
-      aria-label={t('rail.session')}
-    >
-      <button
-        type="button"
-        className="session-launcher__sidebar-toggle"
-        onClick={() => setSidebarCollapsed((current) => !current)}
-        aria-label={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
-        title={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
+      <section
+        className={`session-launcher${unifiedSidebar ? ' session-launcher--unified-sidebar' : ''}${!unifiedSidebar && sidebarCollapsed ? ' session-launcher--sidebar-collapsed' : ''}`}
+        style={launcherStyle}
+        aria-label={t('rail.session')}
       >
-        {sidebarCollapsed ? <PanelLeftOpen size={15} aria-hidden /> : <PanelLeftClose size={15} aria-hidden />}
-      </button>
-      <aside className="session-launcher__sidebar" aria-hidden={sidebarCollapsed}>
-        <button
-          type="button"
-          className="session-launcher__sidebar-resize"
-          aria-label={t('sessions.launcher.resizeSidebar')}
-          title={t('sessions.launcher.resizeSidebar')}
-          onPointerDown={handleSidebarResizeStart}
-          onMouseDown={handleSidebarMouseResizeStart}
-          onKeyDown={handleSidebarResizeKeyDown}
-          tabIndex={sidebarCollapsed ? -1 : 0}
-        />
-        {projectsError && <div className="session-launcher__error">{projectsError}</div>}
-        <div className="session-launcher__project-list">
+        {!unifiedSidebar && (
+          <button
+            type="button"
+            className="session-launcher__sidebar-toggle"
+            onClick={() => setSidebarCollapsed((current) => !current)}
+            aria-label={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
+            title={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={15} aria-hidden /> : <PanelLeftClose size={15} aria-hidden />}
+          </button>
+        )}
+        <OptionalPortal enabled={unifiedSidebar} target={sidebarContainer}>
+          <aside className="session-launcher__sidebar" aria-hidden={unifiedSidebar ? false : sidebarCollapsed}>
+            {!unifiedSidebar && (
+              <button
+                type="button"
+                className="session-launcher__sidebar-resize"
+                aria-label={t('sessions.launcher.resizeSidebar')}
+                title={t('sessions.launcher.resizeSidebar')}
+                onPointerDown={handleSidebarResizeStart}
+                onMouseDown={handleSidebarMouseResizeStart}
+                onKeyDown={handleSidebarResizeKeyDown}
+                tabIndex={sidebarCollapsed ? -1 : 0}
+              />
+            )}
+            {projectsError && <div className="session-launcher__error">{projectsError}</div>}
+            <div className="session-launcher__project-list">
           {grouped.pinned.length > 0 && (
             <>
               <SessionGroupHeader title={t('sessions.launcher.pinned')} />
@@ -1185,9 +1194,10 @@ export function SessionLauncherView({
               )}
             </>
           )}
-        </div>
-      </aside>
-      <main className="session-launcher__main">
+            </div>
+          </aside>
+        </OptionalPortal>
+        <main className="session-launcher__main">
         {selection?.kind === 'session' ? (
           <SessionLauncherTerminal
             session={selectedSession}
@@ -1287,8 +1297,8 @@ export function SessionLauncherView({
             </button>
           </div>
         )}
-      </main>
-    </section>
+        </main>
+      </section>
     {sessionMenu && typeof document !== 'undefined' && createPortal(
       <SessionContextMenuView
         title={sessionDisplayTitle(sessionMenu.session, titleOverrides)}
@@ -2531,6 +2541,19 @@ function toggleSet(values: Set<string>, value: string): Set<string> {
   if (next.has(value)) next.delete(value)
   else next.add(value)
   return next
+}
+
+function OptionalPortal({
+  enabled,
+  target,
+  children,
+}: {
+  enabled: boolean
+  target: HTMLElement | null
+  children: ReactNode
+}) {
+  if (!enabled) return children
+  return target ? createPortal(children, target) : null
 }
 
 function addToSet(values: Set<string>, value: string): Set<string> {

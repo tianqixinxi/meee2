@@ -45,6 +45,7 @@ describe('WorkspaceRail', () => {
     expect(screen.getByRole('button', { name: 'Canvas' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-rail-detail')).toBeInTheDocument()
   })
 
   it('omits the avatar shortcut when the user is not connected', () => {

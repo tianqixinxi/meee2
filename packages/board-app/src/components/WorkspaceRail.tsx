@@ -21,14 +21,16 @@ interface WorkspaceRailProps {
   mode: WorkspaceMode
   userProfile: UserProfile | null
   onModeChange: (mode: WorkspaceMode) => void
+  detailRef?: (node: HTMLDivElement | null) => void
 }
 
-const RAIL_WIDTH = 72
+const RAIL_WIDTH = 320
 
 export function WorkspaceRail({
   mode,
   userProfile,
   onModeChange,
+  detailRef,
 }: WorkspaceRailProps) {
   const { t } = useI18n()
   useEffect(() => {
@@ -122,7 +124,7 @@ export function WorkspaceRail({
         </RailButton>
       </div>
 
-      <div className="workspace-rail__spacer" />
+      <div ref={detailRef} className="workspace-rail__detail" data-testid="workspace-rail-detail" />
 
       <RailButton label={t('rail.settings')} active={mode === 'settings'} onClick={() => onModeChange('settings')}>
         <Settings size={20} />
@@ -154,18 +156,16 @@ function RailButton({
   children,
 }: RailButtonProps) {
   return (
-    <Tooltip label={label} placement="right" delay={120}>
-      <button
-        type="button"
-        className={`workspace-rail__button${active ? ' is-active' : ''}`}
-        data-tone={tone}
-        aria-label={label}
-        aria-current={active ? 'page' : undefined}
-        onClick={onClick}
-      >
-        {children}
-        <span className="workspace-rail__label">{label}</span>
-      </button>
-    </Tooltip>
+    <button
+      type="button"
+      className={`workspace-rail__button${active ? ' is-active' : ''}`}
+      data-tone={tone}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      onClick={onClick}
+    >
+      {children}
+      <span className="workspace-rail__label">{label}</span>
+    </button>
   )
 }
