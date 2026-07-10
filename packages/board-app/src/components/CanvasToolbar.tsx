@@ -2031,7 +2031,7 @@ async function generateAIRecap(
     messages: [{ role: 'user', content: buildAIRecapPrompt({ plannerState: state, monitor }) }],
     settings: {
       provider: llm.provider,
-      apiKey: llm.apiKey,
+      apiKey: '',
       baseUrl: llm.baseUrl,
       model: llm.model,
       enabledTools: [],

@@ -9,11 +9,10 @@ struct meee2App: App {
     init() {
         // 解析命令行参数（排除第一个 "meee2"）
         let args = Array(CommandLine.arguments.dropFirst())
-        let shouldRunGUI = CLI.run(args: args)
+        let execution = CLI.run(args: args)
 
-        // 如果不是 GUI 模式，直接退出
-        if !shouldRunGUI {
-            exit(0)
+        if case .exit(let code) = execution {
+            exit(code.rawValue)
         }
     }
 

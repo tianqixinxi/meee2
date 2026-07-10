@@ -11,8 +11,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  fetchPlannerGraphState,
-  fetchArtifactCandidates,
+  fetchArtifactsPage,
   getArtifactVersion,
   getPlannerArtifactContent,
   listArtifactVersions,
@@ -25,16 +24,15 @@ import {
   artifactGroupCounts,
   buildCandidateArtifactIndex,
   buildArtifactIndex,
-  filterArtifactIndex,
   type ArtifactDisplayState,
   type ArtifactIndexItem,
   type ArtifactTypeGroupId,
-  type CanvasArtifactsSource,
 } from '../lib/artifactIndex'
 import { resolvedArtifactPayload } from '../lib/artifactPayload'
 import { useI18n } from '../lib/i18n'
 import type {
   ArtifactPayload,
+  ArtifactPageItem,
   ArtifactReviewStatus,
   CanvasInfo,
   CanvasScope,
@@ -68,6 +66,10 @@ const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
   'rejected',
   'other',
 ]
+const ARTIFACT_PAGE_SIZE = 50
+const CANDIDATE_PAGE_SIZE = 30
+const ARTIFACT_WINDOW_SIZE = 60
+const ARTIFACT_ROW_HEIGHT = 56
 
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
@@ -92,11 +94,21 @@ export function ArtifactsView({
   const [activeGroup, setActiveGroup] = useState<ArtifactTypeGroupId | 'all'>('all')
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
   const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
-  const [stateFilter, setStateFilter] = useState<StateFilter>('all')
-  const [sources, setSources] = useState<CanvasArtifactsSource[]>([])
+  const [stateFilter, setStateFilter] = useState<StateFilter>('ready')
+  const [artifactItems, setArtifactItems] = useState<ArtifactIndexItem[]>([])
   const [candidateItems, setCandidateItems] = useState<ArtifactIndexItem[]>([])
+  const [artifactTotal, setArtifactTotal] = useState(0)
+  const [candidateTotal, setCandidateTotal] = useState(0)
+  const [candidatePageTotal, setCandidatePageTotal] = useState(0)
+  const [canvasCount, setCanvasCount] = useState(0)
+  const [counts, setCounts] = useState(() => artifactGroupCounts([]))
+  const [artifactCursor, setArtifactCursor] = useState<string | null>(null)
+  const [candidateCursor, setCandidateCursor] = useState<string | null>(null)
+  const [artifactHasMore, setArtifactHasMore] = useState(false)
+  const [candidateHasMore, setCandidateHasMore] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reviewActionKey, setReviewActionKey] = useState<string | null>(null)
   const [contentByArtifactId, setContentByArtifactId] = useState<Record<string, PlannerArtifactContent>>({})
@@ -107,42 +119,48 @@ export function ArtifactsView({
   const [versionDetailById, setVersionDetailById] = useState<Record<string, PlannerArtifactVersion>>({})
   const [contentModalKey, setContentModalKey] = useState<string | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
+  const [windowStart, setWindowStart] = useState(0)
+  const [showCandidates, setShowCandidates] = useState(Boolean(sessionFilter))
 
   const canvasSignature = useMemo(
     () => canvases.map((canvas) => `${canvas.id}:${canvas.name}`).join('|'),
     [canvases],
   )
 
+  const pageParams = useMemo(() => {
+    const sessionIds = [
+      sessionFilter?.sessionId,
+      sessionFilter?.providerResumeSessionId,
+      sessionFilter?.surfaceId,
+    ].map((value) => value?.trim()).filter((value): value is string => Boolean(value))
+    return {
+      canvasId: canvasFilter === 'all' ? undefined : canvasFilter,
+      query,
+      sessionId: sessionIds.length ? sessionIds.join(',') : undefined,
+      project: sessionFilter?.project ?? sessionFilter?.projectName ?? undefined,
+      scope: scopeFilter,
+      group: activeGroup,
+    } as const
+  }, [activeGroup, canvasFilter, query, scopeFilter, sessionFilter])
+
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all([
-      Promise.all(canvases.map(async (canvas) => {
-      try {
-        const state = await fetchPlannerGraphState(canvas.id)
-        return {
-          canvas,
-          nodes: state.nodes,
-          artifacts: state.artifacts ?? [],
-        } satisfies CanvasArtifactsSource
-      } catch (err) {
-        return {
-          canvas,
-          nodes: [],
-          artifacts: [],
-          error: (err as Error).message || t('artifacts.loadFailed'),
-        } satisfies CanvasArtifactsSource
-      }
-    })),
-      fetchArtifactCandidates(sessionFilter?.sessionId).catch(() => ({ candidates: [] })),
-    ])
-      .then(([items, candidateEnvelope]) => {
+    fetchArtifactsPage({
+      ...pageParams,
+      limit: ARTIFACT_PAGE_SIZE,
+      status: stateFilter,
+    })
+      .then((page) => {
         if (cancelled) return
-        setSources(items)
-        setCandidateItems(buildCandidateArtifactIndex(candidateEnvelope.candidates))
-        const failures = items.filter((item) => item.error)
-        setError(failures.length ? t('artifacts.groupLoadFailed', { count: failures.length }) : null)
+        setArtifactItems(pageItemsToIndex(page.items))
+        setArtifactTotal(page.total)
+        setCandidateTotal(page.candidateTotal)
+        setCanvasCount(page.canvasCount)
+        setCounts(normalizedGroupCounts(page.groupCounts))
+        setArtifactCursor(page.cursor ?? null)
+        setArtifactHasMore(page.hasMore)
       })
       .catch((err) => {
         if (!cancelled) setError((err as Error).message || t('artifacts.loadFailed'))
@@ -153,7 +171,34 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature, refreshTick, sessionFilter?.sessionId, t])
+  }, [canvasSignature, pageParams, refreshTick, stateFilter, t])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!showCandidates) {
+      setCandidateItems([])
+      setCandidatePageTotal(0)
+      setCandidateCursor(null)
+      setCandidateHasMore(false)
+      return () => { cancelled = true }
+    }
+    fetchArtifactsPage({
+      ...pageParams,
+      limit: CANDIDATE_PAGE_SIZE,
+      status: 'candidate',
+    })
+      .then((page) => {
+        if (cancelled) return
+        setCandidateItems(pageItemsToIndex(page.items))
+        setCandidatePageTotal(page.total)
+        setCandidateCursor(page.cursor ?? null)
+        setCandidateHasMore(page.hasMore)
+      })
+      .catch((err) => {
+        if (!cancelled) setError((err as Error).message || t('artifacts.loadFailed'))
+      })
+    return () => { cancelled = true }
+  }, [pageParams, refreshTick, showCandidates, t])
 
   useEffect(() => {
     const handleArtifactsChanged = (event: Event) => {
@@ -167,41 +212,26 @@ export function ArtifactsView({
   }, [sessionFilter?.sessionId])
 
   const allItems = useMemo(() => [
-    ...buildArtifactIndex(sources),
-    ...candidateItems,
-  ].sort((a, b) => new Date(b.latest.createdAt).getTime() - new Date(a.latest.createdAt).getTime()), [candidateItems, sources])
-  const sessionScopedItems = useMemo(
-    () => sessionFilter?.sessionId
-      ? allItems.filter((item) => artifactMatchesSessionFilter(item, sessionFilter))
-      : allItems,
-    [allItems, sessionFilter],
-  )
-  const counts = useMemo(() => artifactGroupCounts(sessionScopedItems), [sessionScopedItems])
-  const filteredItems = useMemo(
-    () => filterArtifactIndex(sessionScopedItems, {
-      query,
-      groupId: activeGroup,
-      scope: scopeFilter,
-      canvasId: canvasFilter,
-      displayState: stateFilter,
-    }),
-    [activeGroup, canvasFilter, query, scopeFilter, sessionScopedItems, stateFilter],
+    ...artifactItems,
+    ...(showCandidates ? candidateItems : []),
+  ].sort((a, b) => new Date(b.latest.createdAt).getTime() - new Date(a.latest.createdAt).getTime()), [artifactItems, candidateItems, showCandidates])
+  const mountedItems = useMemo(
+    () => allItems.slice(windowStart, windowStart + ARTIFACT_WINDOW_SIZE),
+    [allItems, windowStart],
   )
   const selectedItem = useMemo(
-    () => filteredItems.find((item) => item.key === selectedKey) ?? filteredItems[0] ?? null,
-    [filteredItems, selectedKey],
+    () => allItems.find((item) => item.key === selectedKey) ?? allItems[0] ?? null,
+    [allItems, selectedKey],
   )
   const canvasOptions = useMemo(
     () => canvases.filter((canvas) => (
       (scopeFilter === 'all' || canvas.scope === scopeFilter)
-      && sessionScopedItems.some((item) => item.canvas.id === canvas.id)
     )),
-    [canvases, scopeFilter, sessionScopedItems],
+    [canvases, scopeFilter],
   )
-  const stateOptions = useMemo(
-    () => ARTIFACT_STATE_ORDER.filter((state) => sessionScopedItems.some((item) => item.displayState === state)),
-    [sessionScopedItems],
-  )
+  const stateOptions = ARTIFACT_STATE_ORDER.filter((state) => state !== 'candidate')
+  const combinedTotal = artifactTotal + (showCandidates ? candidatePageTotal : 0)
+  const hasMore = artifactHasMore || (showCandidates && candidateHasMore)
 
   useEffect(() => {
     if (!selectedItem) {
@@ -210,6 +240,58 @@ export function ArtifactsView({
       setSelectedKey(selectedItem.key)
     }
   }, [selectedItem, selectedKey])
+
+  useEffect(() => {
+    setWindowStart(0)
+  }, [activeGroup, canvasFilter, query, scopeFilter, sessionFilter?.sessionId, stateFilter])
+
+  useEffect(() => {
+    if (sessionFilter?.sessionId) setShowCandidates(true)
+  }, [sessionFilter?.sessionId])
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    const requests: Promise<void>[] = []
+    if (artifactHasMore && artifactCursor) {
+      requests.push(fetchArtifactsPage({
+        ...pageParams,
+        cursor: artifactCursor,
+        limit: ARTIFACT_PAGE_SIZE,
+        status: stateFilter,
+      }).then((page) => {
+        setArtifactItems((current) => mergeIndexItems(current, pageItemsToIndex(page.items)))
+        setArtifactCursor(page.cursor ?? null)
+        setArtifactHasMore(page.hasMore)
+      }))
+    }
+    if (showCandidates && candidateHasMore && candidateCursor) {
+      requests.push(fetchArtifactsPage({
+        ...pageParams,
+        cursor: candidateCursor,
+        limit: CANDIDATE_PAGE_SIZE,
+        status: 'candidate',
+      }).then((page) => {
+        setCandidateItems((current) => mergeIndexItems(current, pageItemsToIndex(page.items)))
+        setCandidateCursor(page.cursor ?? null)
+        setCandidateHasMore(page.hasMore)
+      }))
+    }
+    Promise.all(requests)
+      .catch((err) => setError((err as Error).message || t('artifacts.loadFailed')))
+      .finally(() => setLoadingMore(false))
+  }, [
+    artifactCursor,
+    artifactHasMore,
+    candidateCursor,
+    candidateHasMore,
+    hasMore,
+    loadingMore,
+    pageParams,
+    showCandidates,
+    stateFilter,
+    t,
+  ])
 
   const loadContent = useCallback((artifact: PlannerArtifact): Promise<PlannerArtifactContent | undefined> => {
     if (artifact.typedPayload) return Promise.resolve(undefined)
@@ -395,7 +477,7 @@ export function ArtifactsView({
             <p>
               {loading
                 ? t('artifacts.loadingSlots')
-                : t('artifacts.summary', { slots: filteredItems.length, canvases: sources.length })}
+                : t('artifacts.summary', { slots: combinedTotal, canvases: canvasCount })}
             </p>
             {sessionFilter && (
               <button
@@ -410,6 +492,16 @@ export function ArtifactsView({
             )}
           </div>
           <div className="artifacts-workspace__tools">
+            {(candidateTotal > 0 || showCandidates) && (
+              <button
+                type="button"
+                className={`ghost artifacts-candidate-toggle${showCandidates ? ' is-active' : ''}`}
+                aria-pressed={showCandidates}
+                onClick={() => setShowCandidates((value) => !value)}
+              >
+                {t('artifacts.rawCandidates', { count: candidateTotal })}
+              </button>
+            )}
             <label className="artifacts-search">
               <Search size={14} aria-hidden />
               <input
@@ -454,7 +546,14 @@ export function ArtifactsView({
           </div>
         </header>
 
-        {error && <div className="artifacts-banner" role="status">{error}</div>}
+        {error && (
+          <div className="artifacts-banner" role="alert">
+            <span>{error}</span>
+            <button type="button" className="ghost" onClick={() => setRefreshTick((value) => value + 1)}>
+              {t('common.retry')}
+            </button>
+          </div>
+        )}
         {loading && (
           <div className="artifacts-empty" role="status">
             <Loader2 size={15} className="spin" aria-hidden />
@@ -471,7 +570,7 @@ export function ArtifactsView({
                 onClick={() => setActiveGroup('all')}
               >
                 <span>{t('artifacts.typeAll')}</span>
-                <strong>{sessionScopedItems.length}</strong>
+                <strong>{artifactTotal}</strong>
               </button>
               {ARTIFACT_TYPE_GROUPS.map((group) => (
                 <button
@@ -486,8 +585,17 @@ export function ArtifactsView({
               ))}
             </aside>
 
-            <div className="artifacts-index__list" role="region" aria-label={t('artifacts.indexList')}>
-              {filteredItems.length === 0 ? (
+            <div
+              className="artifacts-index__list"
+              role="region"
+              aria-label={t('artifacts.indexList')}
+              onScroll={(event) => {
+                const estimatedStart = Math.floor(event.currentTarget.scrollTop / ARTIFACT_ROW_HEIGHT) - 10
+                const maxStart = Math.max(0, allItems.length - ARTIFACT_WINDOW_SIZE)
+                setWindowStart(Math.min(maxStart, Math.max(0, estimatedStart)))
+              }}
+            >
+              {allItems.length === 0 ? (
                 <div className="artifacts-empty">
                   <Archive size={15} aria-hidden />
                   <span>{t('artifacts.empty')}</span>
@@ -503,7 +611,12 @@ export function ArtifactsView({
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredItems.map((item) => (
+                    {windowStart > 0 && (
+                      <tr className="artifacts-table__spacer" role="presentation" aria-hidden>
+                        <td colSpan={4} style={{ height: windowStart * ARTIFACT_ROW_HEIGHT }} />
+                      </tr>
+                    )}
+                    {mountedItems.map((item) => (
                       <tr
                         key={item.key}
                         className={item.key === selectedItem?.key ? 'is-selected' : ''}
@@ -529,8 +642,36 @@ export function ArtifactsView({
                         </td>
                       </tr>
                     ))}
+                    {windowStart + mountedItems.length < allItems.length && (
+                      <tr className="artifacts-table__spacer" role="presentation" aria-hidden>
+                        <td
+                          colSpan={4}
+                          style={{ height: (allItems.length - windowStart - mountedItems.length) * ARTIFACT_ROW_HEIGHT }}
+                        />
+                      </tr>
+                    )}
                   </tbody>
                 </table>
+              )}
+              {allItems.length > 0 && (
+                <div className="artifacts-index__pagination" role="status" aria-live="polite">
+                  <span>
+                    {t('artifacts.showingCount', {
+                      count: allItems.length,
+                      total: combinedTotal,
+                    })}
+                  </span>
+                  {hasMore && (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={loadingMore}
+                      onClick={loadMore}
+                    >
+                      {loadingMore ? t('common.loading') : t('artifacts.loadMore')}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
@@ -597,42 +738,38 @@ function SelectFilter({
   )
 }
 
-function artifactMatchesSessionFilter(item: ArtifactIndexItem, filter: ArtifactSessionFilter): boolean {
-  const ids = [
-    filter.sessionId,
-    filter.providerResumeSessionId,
-    filter.surfaceId,
-  ].map(normalizeToken).filter(Boolean)
-  const itemSessionId = normalizeToken(item.sessionId)
-  if (itemSessionId && ids.includes(itemSessionId)) return true
-
-  const projectTokens = [
-    filter.project,
-    filter.projectName,
-  ].flatMap(projectMatchTokens)
-  if (projectTokens.length === 0) return false
-
-  const canvasTokens = [
-    item.canvas.workspacePath,
-    item.canvas.name,
-    item.canvas.id,
-  ].flatMap(projectMatchTokens)
-  return canvasTokens.some((token) => projectTokens.includes(token))
+function pageItemsToIndex(items: ArtifactPageItem[]): ArtifactIndexItem[] {
+  return items.flatMap((item) => {
+    if (item.sourceKind === 'candidate') {
+      return item.candidate ? buildCandidateArtifactIndex([item.candidate]) : []
+    }
+    const indexed = buildArtifactIndex([{
+      canvas: item.canvas,
+      nodes: item.node ? [item.node] : [],
+      artifacts: item.artifacts,
+    }])[0]
+    if (!indexed) return []
+    return [{
+      ...indexed,
+      sessionId: item.sessionId ?? indexed.sessionId,
+    }]
+  })
 }
 
-function projectMatchTokens(value: string | null | undefined): string[] {
-  const normalized = normalizePathToken(value)
-  if (!normalized) return []
-  const base = normalized.split('/').filter(Boolean).pop()
-  return [normalized, base].filter((token): token is string => Boolean(token))
+function mergeIndexItems(current: ArtifactIndexItem[], incoming: ArtifactIndexItem[]): ArtifactIndexItem[] {
+  const byKey = new Map(current.map((item) => [item.key, item]))
+  for (const item of incoming) byKey.set(item.key, item)
+  return Array.from(byKey.values()).sort(
+    (a, b) => new Date(b.latest.createdAt).getTime() - new Date(a.latest.createdAt).getTime(),
+  )
 }
 
-function normalizeToken(value: string | null | undefined): string {
-  return value?.trim().toLowerCase() ?? ''
-}
-
-function normalizePathToken(value: string | null | undefined): string {
-  return normalizeToken(value).replace(/\/+$/, '')
+function normalizedGroupCounts(raw: Record<string, number>): Record<ArtifactTypeGroupId, number> {
+  const counts = artifactGroupCounts([])
+  for (const group of ARTIFACT_TYPE_GROUPS) {
+    counts[group.id] = Math.max(0, raw[group.id] ?? 0)
+  }
+  return counts
 }
 
 function ArtifactBadges({

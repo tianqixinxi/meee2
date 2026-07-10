@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// SystemStorageAPI — 给 Settings → Privacy section 用的本地存储统计 + 删除入口。
 ///
@@ -10,16 +11,29 @@ import Foundation
 /// 删除入口走「双确认 + token」流程:UI 先 GET 一个一次性 token,
 /// 然后 POST 同样的 token 才真正删除,避免误点。
 enum SystemStorageAPI {
+    enum DeleteMode: String, Codable {
+        /// Delete generated work data while preserving settings and Keychain.
+        case workData
+        /// Delete work data and all credentials owned by the meee2 Keychain service.
+        case factoryReset
+    }
+
     struct StorageStats: Encodable {
         let root: String
         let canvases: Int64
         let sessions: Int64
         let runbooks: Int64
+        /// Pre-retention-policy terminal history; preview only until confirmed.
+        let reclaimableMessageCount: Int
+        let reclaimableMessageBytes: Int64
         let total: Int64
+        let factoryResetExtra: Int64
+        let factoryResetTotal: Int64
     }
 
     struct DeleteConfirmToken: Encodable {
         let token: String
+        let mode: DeleteMode
         let issuedAt: String
         let expiresAt: String
     }
@@ -28,6 +42,10 @@ enum SystemStorageAPI {
         let ok: Bool
         let removedBytes: Int64
         let removedPaths: [String]
+        let failedPaths: [String]
+        let hooksUnregistered: Bool
+        let mcpUnregistered: Bool
+        let credentialsCleared: Bool
     }
 
     enum APIError: LocalizedError {
@@ -45,7 +63,7 @@ enum SystemStorageAPI {
     // 已签发的一次性 token —— 简化起见用 in-process 缓存即可,
     // 上限 16 个,超过则丢掉最老的。
     private static let tokenLock = NSLock()
-    private static var issuedTokens: [(token: String, expiresAt: Date)] = []
+    private static var issuedTokens: [(token: String, mode: DeleteMode, expiresAt: Date)] = []
     private static let tokenTTL: TimeInterval = 120 // 2 分钟
 
     // MARK: - 路径解析
@@ -53,17 +71,33 @@ enum SystemStorageAPI {
     /// 返回所有需要统计 / 删除的 meee2 本地数据路径。
     /// 不包含 hooks / settings.json,只包含 meee2 自己产出的画布、会话、runbook。
     static func meee2DataRoots() -> (canvases: [URL], sessions: [URL], runbooks: [URL]) {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        let meee2 = home.appendingPathComponent(".meee2", isDirectory: true)
+        let meee2 = StorageRoots.processDefault.baseDirectory
 
         let canvases: [URL] = [
             meee2.appendingPathComponent("board-canvases.json", isDirectory: false),
-            meee2.appendingPathComponent("planner", isDirectory: true)
+            meee2.appendingPathComponent("planner-canvases.json", isDirectory: false),
+            meee2.appendingPathComponent("planner", isDirectory: true),
+            meee2.appendingPathComponent("artifacts", isDirectory: true),
+            meee2.appendingPathComponent("workspaces", isDirectory: true)
         ]
         let sessions: [URL] = [
             meee2.appendingPathComponent("sessions", isDirectory: true),
             meee2.appendingPathComponent("inbox", isDirectory: true),
-            meee2.appendingPathComponent("attachments", isDirectory: true)
+            meee2.appendingPathComponent("messages", isDirectory: true),
+            meee2.appendingPathComponent("channels", isDirectory: true),
+            meee2.appendingPathComponent("queues", isDirectory: true),
+            meee2.appendingPathComponent("unread", isDirectory: true),
+            meee2.appendingPathComponent("attachments", isDirectory: true),
+            meee2.appendingPathComponent("artifact-candidates", isDirectory: true),
+            meee2.appendingPathComponent("assistant", isDirectory: true),
+            meee2.appendingPathComponent("memory", isDirectory: true),
+            meee2.appendingPathComponent("session-controls.json", isDirectory: false),
+            meee2.appendingPathComponent("session-terminals.json", isDirectory: false),
+            meee2.appendingPathComponent("session-projects.json", isDirectory: false),
+            meee2.appendingPathComponent("coordination-groups.json", isDirectory: false),
+            meee2.appendingPathComponent("automations.json", isDirectory: false),
+            meee2.appendingPathComponent("token-rate-history.json", isDirectory: false),
+            CommKitStoragePaths.processDefault.inboxDirectory
         ]
         let runbooks: [URL] = [
             meee2.appendingPathComponent("runbooks", isDirectory: true)
@@ -71,9 +105,30 @@ enum SystemStorageAPI {
         return (canvases, sessions, runbooks)
     }
 
+    static func factoryResetAdditionalRoots() -> [URL] {
+        let meee2 = meee2Root()
+        let logs = StorageRoots.processDefault.logsDirectory
+        return [
+            meee2.appendingPathComponent("settings.json", isDirectory: false),
+            meee2.appendingPathComponent("message-retention-policy.json", isDirectory: false),
+            meee2.appendingPathComponent("mcp-registry-cache.json", isDirectory: false),
+            meee2.appendingPathComponent("board-server.json", isDirectory: false),
+            meee2.appendingPathComponent("debug-exports", isDirectory: true),
+            meee2.appendingPathComponent("connectors", isDirectory: true),
+            meee2.appendingPathComponent("mcp-meee2", isDirectory: true),
+            meee2.appendingPathComponent("audit.log", isDirectory: false),
+            logs.appendingPathComponent("meee2.log", isDirectory: false),
+            logs.appendingPathComponent("meee2.log.1", isDirectory: false),
+            logs.appendingPathComponent("meee2.log.2", isDirectory: false),
+            logs.appendingPathComponent("meee2.log.3", isDirectory: false),
+            logs.appendingPathComponent("meee2.log.4", isDirectory: false),
+            logs.appendingPathComponent("meee2.log.5", isDirectory: false),
+            URL(fileURLWithPath: "/tmp/meee2.log", isDirectory: false)
+        ]
+    }
+
     static func meee2Root() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        StorageRoots.processDefault.baseDirectory
     }
 
     // MARK: - 统计
@@ -83,12 +138,18 @@ enum SystemStorageAPI {
         let canvases = totalSize(of: roots.canvases)
         let sessions = totalSize(of: roots.sessions)
         let runbooks = totalSize(of: roots.runbooks)
+        let factoryResetExtra = totalSize(of: factoryResetAdditionalRoots())
+        let retention = MessageRouter.shared.retentionPreview()
         return StorageStats(
             root: meee2Root().path,
             canvases: canvases,
             sessions: sessions,
             runbooks: runbooks,
-            total: canvases + sessions + runbooks
+            reclaimableMessageCount: retention.protectedHistoryCount,
+            reclaimableMessageBytes: retention.protectedHistoryBytes,
+            total: canvases + sessions + runbooks,
+            factoryResetExtra: factoryResetExtra,
+            factoryResetTotal: canvases + sessions + runbooks + factoryResetExtra
         )
     }
 
@@ -128,7 +189,7 @@ enum SystemStorageAPI {
     // MARK: - 删除 token
 
     /// 签发一次性删除 token,UI 拿到后必须在二次 confirm modal 里回传同样的 token。
-    static func issueDeleteToken() -> DeleteConfirmToken {
+    static func issueDeleteToken(mode: DeleteMode = .workData) -> DeleteConfirmToken {
         let token = UUID().uuidString
         let now = Date()
         let expiresAt = now.addingTimeInterval(tokenTTL)
@@ -139,19 +200,20 @@ enum SystemStorageAPI {
         if issuedTokens.count >= 16 {
             issuedTokens.removeFirst(issuedTokens.count - 15)
         }
-        issuedTokens.append((token: token, expiresAt: expiresAt))
+        issuedTokens.append((token: token, mode: mode, expiresAt: expiresAt))
         tokenLock.unlock()
 
         let formatter = ISO8601DateFormatter()
         return DeleteConfirmToken(
             token: token,
+            mode: mode,
             issuedAt: formatter.string(from: now),
             expiresAt: formatter.string(from: expiresAt)
         )
     }
 
     /// 消费 token —— 一次性,验证通过后会从列表里弹出。
-    private static func consumeToken(_ token: String) throws {
+    private static func consumeToken(_ token: String, mode: DeleteMode) throws {
         let now = Date()
         tokenLock.lock()
         defer { tokenLock.unlock() }
@@ -165,6 +227,10 @@ enum SystemStorageAPI {
         issuedTokens.remove(at: idx)
         if entry.expiresAt < now {
             throw APIError.tokenExpired
+        }
+        guard entry.mode == mode else {
+            // A work-data token must never be escalated into a factory reset.
+            throw APIError.tokenInvalid
         }
     }
 
@@ -180,13 +246,29 @@ enum SystemStorageAPI {
     /// 我们对单个 url 删除失败不抛错（保持原行为，部分成功也算成功），
     /// 但只要至少删了一项就清内存 + 广播；如果一项都没删（不太可能），
     /// 则保持内存原状。
-    static func deleteLocalData(token: String) throws -> DeleteResult {
-        try consumeToken(token)
+    static func deleteLocalData(
+        token: String,
+        mode: DeleteMode = .workData
+    ) throws -> DeleteResult {
+        try consumeToken(token, mode: mode)
 
         let roots = meee2DataRoots()
-        let all = roots.canvases + roots.sessions + roots.runbooks
+        var all = roots.canvases + roots.sessions + roots.runbooks
+        if mode == .factoryReset {
+            // LogManager and AuditLogger own open handles for these two files;
+            // their reset hooks remove/reopen them safely below.
+            let managedLogs = Set([
+                LogManager.shared.logFileURL.standardizedFileURL.path,
+                AuditLogger.shared.logFileURL.standardizedFileURL.path
+            ])
+            all += factoryResetAdditionalRoots().filter {
+                !managedLogs.contains($0.standardizedFileURL.path)
+            }
+        }
+        all = uniqueRoots(all)
 
         var removed: [String] = []
+        var failed: [String] = []
         var removedBytes: Int64 = 0
         let fm = FileManager.default
         for url in all {
@@ -199,6 +281,7 @@ enum SystemStorageAPI {
                 NSLog("[SystemStorageAPI] removed \(url.path) (\(size) bytes)")
             } catch {
                 NSLog("[SystemStorageAPI] failed to remove \(url.path): \(error)")
+                failed.append(url.path)
             }
         }
 
@@ -210,6 +293,8 @@ enum SystemStorageAPI {
             let clearMemory: () -> Void = {
                 SessionStore.shared.clearAllInMemory()
                 BoardLayoutStore.shared.clearInMemoryCache()
+                MessageRouter.shared.clearAllInMemory()
+                ChannelRegistry.shared.clearAllInMemory()
             }
             if Thread.isMainThread {
                 clearMemory()
@@ -222,6 +307,48 @@ enum SystemStorageAPI {
             BoardServer.shared.broadcastStateChanged()
         }
 
-        return DeleteResult(ok: true, removedBytes: removedBytes, removedPaths: removed)
+        var hooksUnregistered = true
+        var mcpUnregistered = true
+        let credentialsCleared: Bool
+        if mode == .factoryReset {
+            credentialsCleared = OnlineProxy.clearAllSecureCredentialsForFactoryReset()
+            hooksUnregistered = SettingsConfigManager.shared.unregisterMeee2Hooks()
+            mcpUnregistered = MCPConfigManager.shared.unregisterMeee2()
+            removedBytes += LogManager.shared.resetForFactoryReset()
+            removedBytes += AuditLogger.shared.resetForFactoryReset()
+            resetUserDefaults()
+            if !credentialsCleared {
+                NSLog("[SystemStorageAPI] factory reset could not clear every Keychain credential")
+            }
+        } else {
+            credentialsCleared = true
+        }
+
+        return DeleteResult(
+            ok: failed.isEmpty && credentialsCleared && hooksUnregistered && mcpUnregistered,
+            removedBytes: removedBytes,
+            removedPaths: removed,
+            failedPaths: failed,
+            hooksUnregistered: hooksUnregistered,
+            mcpUnregistered: mcpUnregistered,
+            credentialsCleared: credentialsCleared
+        )
+    }
+
+    private static func uniqueRoots(_ roots: [URL]) -> [URL] {
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    private static func resetUserDefaults() {
+        let defaults = UserDefaults.standard
+        if let bundleIdentifier = Bundle.main.bundleIdentifier {
+            defaults.removePersistentDomain(forName: bundleIdentifier)
+        } else {
+            for key in defaults.dictionaryRepresentation().keys {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        defaults.synchronize()
     }
 }

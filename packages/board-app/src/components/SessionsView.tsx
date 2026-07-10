@@ -44,7 +44,9 @@ interface Props {
 
 type SessionFilter = 'all' | 'attention' | 'unread'
 type SessionKindTab = 'internal' | 'external'
-type SessionControlFilter = 'active' | 'hidden' | 'archived'
+type SessionControlState = 'active' | 'hidden' | 'archived'
+type SessionVisibilityFilter = 'current' | 'history' | 'hidden' | 'archived'
+type SessionGroup = 'attention' | 'active' | 'recent'
 type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
 const SESSION_TERMINAL_RELEASE_DELAY_MS = 120
@@ -64,7 +66,7 @@ export function SessionsView({
   const { resolvedTheme } = useTheme()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<SessionFilter>('all')
-  const [controlFilter, setControlFilter] = useState<SessionControlFilter>('active')
+  const [controlFilter, setControlFilter] = useState<SessionVisibilityFilter>('current')
   const [activeKindTab, setActiveKindTab] = useState<SessionKindTab>('internal')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
@@ -86,7 +88,8 @@ export function SessionsView({
     [sessions, unreadSids],
   )
   const controlCounts = useMemo(() => ({
-    active: sessions.filter((session) => sessionControlState(session) === 'active').length,
+    current: sessions.filter((session) => sessionControlState(session) === 'active' && !isHistoricalSession(session)).length,
+    history: sessions.filter((session) => sessionControlState(session) === 'active' && isHistoricalSession(session)).length,
     hidden: sessions.filter((session) => sessionControlState(session) === 'hidden').length,
     archived: sessions.filter((session) => sessionControlState(session) === 'archived').length,
   }), [sessions])
@@ -94,7 +97,7 @@ export function SessionsView({
     const normalized = query.trim().toLowerCase()
     return uniqueSessionsByDisplayIdentity(sessions
       .filter(isInternalSession)
-      .filter((session) => sessionControlState(session) === controlFilter)
+      .filter((session) => sessionMatchesVisibility(session, controlFilter))
       .filter((session) => sessionMatchesQuery(session, normalized))
       .filter((session) => {
         if (filter === 'attention') return sessionNeedsAttention(session) || unreadSids.has(session.id)
@@ -115,6 +118,12 @@ export function SessionsView({
   const internalSessions = useMemo(() => {
     return visibleSessions.filter(isInternalSession)
   }, [visibleSessions])
+  const internalSessionGroups = useMemo(
+    () => controlFilter === 'history'
+      ? [{ group: 'recent' as const, sessions: internalSessions }]
+      : groupSessionsForDisplay(internalSessions, unreadSids),
+    [controlFilter, internalSessions, unreadSids],
+  )
   const selectedSessionOnActiveTab = useMemo(() => {
     if (!selectedSession) return null
     return isInternalSession(selectedSession) ? selectedSession : null
@@ -270,7 +279,8 @@ export function SessionsView({
               <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
             </div>
             <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
-              <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
+              <FilterButton label={t('sessions.controlActive')} count={controlCounts.current} active={controlFilter === 'current'} onClick={() => setControlFilter('current')} />
+              <FilterButton label={t('sessions.controlHistory')} count={controlCounts.history} active={controlFilter === 'history'} onClick={() => setControlFilter('history')} />
               <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
               <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
             </div>
@@ -328,19 +338,27 @@ export function SessionsView({
                     emptyText={t('sessions.noInternalSessions')}
                   >
                     <div className="sessions-list sessions-list--internal" aria-label={t('sessions.internalSessions')}>
-                      {internalSessions.map((session) => (
-                        <SessionRow
-                          key={session.id}
-                          session={session}
-                          selected={selectedSessionOnActiveTab?.id === session.id}
-                          opening={openingId === session.id}
-                          openError={openErrorId === session.id}
-                          unread={unreadSids.has(session.id)}
-                          onSelect={selectInternalSession}
-                          onOpen={openSession}
-                          onPrewarm={prewarmSessionRow}
-                          t={t}
-                        />
+                      {internalSessionGroups.map(({ group, sessions: groupedSessions }) => (
+                        <div className="sessions-list__group" key={group}>
+                          <div className="sessions-list__group-heading">
+                            <span>{sessionGroupLabel(group, controlFilter, t)}</span>
+                            <em>{groupedSessions.length}</em>
+                          </div>
+                          {groupedSessions.map((session) => (
+                            <SessionRow
+                              key={session.id}
+                              session={session}
+                              selected={selectedSessionOnActiveTab?.id === session.id}
+                              opening={openingId === session.id}
+                              openError={openErrorId === session.id}
+                              unread={unreadSids.has(session.id)}
+                              onSelect={selectInternalSession}
+                              onOpen={openSession}
+                              onPrewarm={prewarmSessionRow}
+                              t={t}
+                            />
+                          ))}
+                        </div>
                       ))}
                     </div>
                   </SessionsSection>
@@ -1667,10 +1685,60 @@ function scheduleInternalTabPrewarm(
 
 function noopVoid() {}
 
-function sessionControlState(session: Session): SessionControlFilter {
+const SESSION_HISTORY_AGE_MS = 25 * 24 * 60 * 60 * 1000
+
+function sessionControlState(session: Session): SessionControlState {
   return session.controlState === 'hidden' || session.controlState === 'archived'
     ? session.controlState
     : 'active'
+}
+
+function sessionMatchesVisibility(session: Session, visibility: SessionVisibilityFilter): boolean {
+  const controlState = sessionControlState(session)
+  if (visibility === 'hidden' || visibility === 'archived') return controlState === visibility
+  if (controlState !== 'active') return false
+  return visibility === 'history' ? isHistoricalSession(session) : !isHistoricalSession(session)
+}
+
+function isHistoricalSession(session: Session): boolean {
+  const status = (session.surfaceStatus || session.status || '').trim().toLowerCase()
+  if (status === 'exited' || status === 'failed' || status === 'dead') return true
+  const activity = timestamp(session.lastActivity || session.startedAt)
+  return activity > 0 && Date.now() - activity >= SESSION_HISTORY_AGE_MS
+}
+
+function groupSessionsForDisplay(
+  sessions: Session[],
+  unreadSids: Set<string>,
+): Array<{ group: SessionGroup; sessions: Session[] }> {
+  const grouped: Record<SessionGroup, Session[]> = {
+    attention: [],
+    active: [],
+    recent: [],
+  }
+  for (const session of sessions) {
+    if (sessionNeedsAttention(session) || unreadSids.has(session.id)) {
+      grouped.attention.push(session)
+    } else if (isWorkingSession(session) && isLiveInternalSession(session)) {
+      grouped.active.push(session)
+    } else {
+      grouped.recent.push(session)
+    }
+  }
+  return (['attention', 'active', 'recent'] as const)
+    .map((group) => ({ group, sessions: grouped[group] }))
+    .filter(({ sessions: items }) => items.length > 0)
+}
+
+function sessionGroupLabel(
+  group: SessionGroup,
+  visibility: SessionVisibilityFilter,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (visibility === 'history') return t('sessions.groupHistory')
+  if (group === 'attention') return t('sessions.groupNeedsAttention')
+  if (group === 'active') return t('sessions.groupActive')
+  return t('sessions.groupRecent')
 }
 
 function isWorkingSession(session: Session): boolean {

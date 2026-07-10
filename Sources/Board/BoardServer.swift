@@ -2,29 +2,32 @@ import Foundation
 import Combine
 import Swifter
 import Meee2CommKit
+import Security
 
 /// BoardServer —— 本地 HTTP + WebSocket 服务器
 ///
 /// - 静态资源：从 `Sources/Board/WebDist/` (via `Bundle.module`) 提供 React SPA
 /// - REST API：`/api/*` 路径由 `BoardAPI` 处理
-/// - WebSocket：`/api/events` 推送 `{"type":"state.changed","timestamp":"..."}`
+/// - WebSocket：`/api/events` 推送 `state.changed` + 单调递增 `revision`
 ///
-/// 绑定：默认仅 127.0.0.1 （通过 Swifter 的 `listenAddressIPv4` + `forceIPv4: true`）。
-/// 设 env `MEEE2_BOARD_BIND=0.0.0.0` 可暴露到局域网（无 auth，自担风险）。
+/// 绑定：始终仅 127.0.0.1（通过 Swifter 的 `listenAddressIPv4` + `forceIPv4: true`）。
+/// Board API 可以启动/终止进程并读取本地会话，因此不支持 LAN bind。
 public final class BoardServer {
     public static let shared = BoardServer()
     public static let defaultPort: UInt16 = 9876
     public static let defaultBindAddress: String = "127.0.0.1"
     public static let maxAutoPortOffset: UInt16 = 100
     public static let portEnvVar = "MEEE2_BOARD_PORT"
-    public static let bindEnvVar = "MEEE2_BOARD_BIND"
+    public static let legacyBindEnvVar = "MEEE2_BOARD_BIND"
+    public static let devOriginsEnvVar = "MEEE2_BOARD_DEV_ORIGINS"
+    public static let controlTokenHeader = "X-Meee2-Control-Token"
 
     private var server: HttpServer?
     private let stateLock = NSLock()
     private let preferredPort: UInt16
-    /// 实际 bind 的 IPv4 地址。`127.0.0.1` = 仅本机；`0.0.0.0` = 全部接口（LAN 可达）；
-    /// 也可指定具体网卡 IP（比如只暴露给 `192.168.1.0/24`）。
-    private let bindAddress: String
+    private let bindAddress = BoardServer.defaultBindAddress
+    private let configuredDevOrigins: Set<String>
+    private var controlToken = BoardServer.generateControlToken()
 
     public private(set) var isRunning: Bool = false
     public private(set) var port: UInt16 = BoardServer.defaultPort
@@ -33,16 +36,16 @@ public final class BoardServer {
     /// 即使 server 暴露到 0.0.0.0，浏览器在本机访问 `127.0.0.1` 一样能命中。
     public var url: String { "http://127.0.0.1:\(port)" }
 
-    /// LAN 可达 URLs —— 当 bindAddress 非 loopback 时，遍历本机所有 IPv4 网卡。
-    /// 用于启动时打印让用户知道局域网里别的设备该填什么地址。
-    public var lanURLs: [String] {
-        guard bindAddress != Self.defaultBindAddress else { return [] }
-        return Self.enumerateLanIPv4Addresses().map { "http://\($0):\(port)" }
-    }
-
     /// 当前活跃的 WebSocket sessions（broadcast 用）
     private var wsSessions: [WebSocketSession] = []
+    private var wsPendingAuthentication: [WebSocketSession: DispatchWorkItem] = [:]
     private let wsLock = NSLock()
+    private let revisionLock = NSLock()
+    private var stateRevision: UInt64 = 0
+    private var stateGeneratedAt = Date()
+    private var pendingChangedSessionIds = Set<String>()
+    private var pendingRemovedSessionIds = Set<String>()
+    private var pendingSnapshotRequired = false
 
     /// SessionEventBus 订阅，持有期同 server 生命周期
     private var busSubscription: AnyCancellable?
@@ -56,10 +59,9 @@ public final class BoardServer {
         } else {
             self.preferredPort = Self.defaultPort
         }
-        // bind 地址也可通过环境变量覆盖。空串 / 非法值 → 回落 loopback。
-        let envBind = ProcessInfo.processInfo.environment[Self.bindEnvVar]?
-            .trimmingCharacters(in: .whitespaces) ?? ""
-        self.bindAddress = envBind.isEmpty ? Self.defaultBindAddress : envBind
+        self.configuredDevOrigins = Self.parseDevOrigins(
+            ProcessInfo.processInfo.environment[Self.devOriginsEnvVar]
+        )
     }
 
     // MARK: - 生命周期
@@ -73,6 +75,23 @@ public final class BoardServer {
             return
         }
 
+        // A token belongs to one listening lifetime. Restarting the same
+        // singleton invalidates every browser/MCP client from the old launch.
+        controlToken = Self.generateControlToken()
+        revisionLock.lock()
+        stateRevision = 0
+        stateGeneratedAt = Date()
+        pendingChangedSessionIds.removeAll()
+        pendingRemovedSessionIds.removeAll()
+        pendingSnapshotRequired = false
+        revisionLock.unlock()
+
+        if let legacyBind = ProcessInfo.processInfo.environment[Self.legacyBindEnvVar],
+           !legacyBind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           legacyBind != Self.defaultBindAddress {
+            MWarn("[BoardServer] ignoring MEEE2_BOARD_BIND=\(legacyBind); the local control plane is loopback-only")
+        }
+
         // Opt-in: route planner agent events through the meee2-online TS
         // runtime when both env vars are set. Otherwise the in-process
         // DefaultPlannerAgentRuntime keeps serving requests.
@@ -81,8 +100,7 @@ public final class BoardServer {
         var lastError: Error?
         for candidate in candidatePorts() {
             let server = HttpServer()
-            // 默认只监听环回地址；用户设置 MEEE2_BOARD_BIND=0.0.0.0 可暴露到 LAN
-            // （API 没 auth，等于完全开放，仅家里 / 私有 WiFi 用）。
+            // Never expose the process/session control plane to a network interface.
             server.listenAddressIPv4 = bindAddress
 
             registerRoutes(on: server)
@@ -92,18 +110,13 @@ public final class BoardServer {
                 self.server = server
                 self.port = candidate
                 self.isRunning = true
-                if bindAddress == Self.defaultBindAddress {
-                    MInfo("[BoardServer] listening on \(url) (bound to 127.0.0.1)")
-                } else {
-                    MWarn("[BoardServer] LAN-exposed: bound to \(bindAddress):\(candidate). " +
-                          "BoardAPI has no auth — anyone on the network can spawn / inject / kill sessions.")
-                    MInfo("[BoardServer] loopback: \(url)")
-                    for lurl in lanURLs {
-                        MInfo("[BoardServer] LAN reachable: \(lurl)")
-                    }
-                }
+                MInfo("[BoardServer] listening on \(url) (loopback-only, control auth enabled)")
                 writeRuntimeInfo()
                 subscribeToEventBus()
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    BoardAPI.reconcileStateBeforeBroadcast()
+                    self?.broadcastStateChanged()
+                }
                 PlannerScheduleRunner.shared.start()
                 return
             } catch {
@@ -125,10 +138,13 @@ public final class BoardServer {
         PlannerScheduleRunner.shared.stop()
 
         wsLock.lock()
-        for ws in wsSessions {
+        let sockets = wsSessions + Array(wsPendingAuthentication.keys)
+        for timeout in wsPendingAuthentication.values { timeout.cancel() }
+        for ws in sockets {
             ws.writeCloseFrame()
         }
         wsSessions.removeAll()
+        wsPendingAuthentication.removeAll()
         wsLock.unlock()
 
         server?.stop()
@@ -169,12 +185,19 @@ public final class BoardServer {
                 "host": bindAddress,
                 "port": Int(port),
                 "url": url,
-                "lanUrls": lanURLs,
+                // Same-user local clients (the MCP shim and diagnostic scripts)
+                // read this 0600 file. Never expose the token through /api/health
+                // or logs.
+                "controlToken": controlToken,
                 "pid": Int(ProcessInfo.processInfo.processIdentifier),
                 "updatedAt": BoardDTOBuilder.iso(Date())
             ]
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: fileURL, options: [.atomic])
+            guard chmod(fileURL.path, S_IRUSR | S_IWUSR) == 0 else {
+                try? FileManager.default.removeItem(at: fileURL)
+                throw CocoaError(.fileWriteNoPermission)
+            }
         } catch {
             MWarn("[BoardServer] failed to write runtime info: \(error)")
         }
@@ -206,51 +229,36 @@ public final class BoardServer {
             .appendingPathComponent("board-server.json", isDirectory: false)
     }
 
-    /// 列出本机所有非 loopback IPv4 地址（en0/en1/Wi-Fi/以太网/USB-C 网卡等）。
-    /// 用 `getifaddrs()` —— BSD 标准 API，不需要额外依赖。过滤掉 link-local
-    /// （169.254.x）和 utun / awdl0 / llw0 这些不是真 LAN 的虚拟接口。
-    static func enumerateLanIPv4Addresses() -> [String] {
-        var results: [String] = []
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return results }
-        defer { freeifaddrs(ifaddrPtr) }
-
-        var cursor: UnsafeMutablePointer<ifaddrs>? = first
-        while let ptr = cursor {
-            defer { cursor = ptr.pointee.ifa_next }
-            let flags = Int32(ptr.pointee.ifa_flags)
-            // 必须 UP + RUNNING + 非 loopback
-            guard (flags & IFF_UP) != 0,
-                  (flags & IFF_RUNNING) != 0,
-                  (flags & IFF_LOOPBACK) == 0,
-                  let addr = ptr.pointee.ifa_addr else { continue }
-            guard addr.pointee.sa_family == UInt8(AF_INET) else { continue }
-
-            // 接口名过滤：utun*（VPN）、awdl0 / llw0（Apple Wireless Direct Link）跳过
-            let ifname = String(cString: ptr.pointee.ifa_name)
-            if ifname.hasPrefix("utun") || ifname == "awdl0" || ifname == "llw0" { continue }
-
-            var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let saLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let rc = getnameinfo(addr, saLen, &hostBuf, socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST)
-            guard rc == 0 else { continue }
-            let host = String(cString: hostBuf)
-            // 169.254.x 是 link-local 自分配地址，没用
-            if host.hasPrefix("169.254.") { continue }
-            results.append(host)
-        }
-        return results
+    /// Authorize an in-process URLSession call back into BoardServer. This is
+    /// intentionally narrower than exposing the token as a public property.
+    public func authorizeControlRequest(_ request: inout URLRequest) {
+        request.setValue(controlToken, forHTTPHeaderField: Self.controlTokenHeader)
     }
 
     // MARK: - 广播
 
     /// 广播 state.changed 事件到所有 WS 客户端
     public func broadcastStateChanged() {
-        let payload: [String: Any] = [
-            "type": "state.changed",
-            "timestamp": BoardDTOBuilder.iso(Date())
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+        let version = advanceStateRevision()
+        let changedIds = Set(version.changedSessionIds)
+        let changedSessions = changedIds.isEmpty ? [] : BoardSessionSnapshotProvider
+            .currentBoardSessions(reconcileTerminalStatuses: false)
+            .filter { session in
+                changedIds.contains(session.id)
+                    || session.surfaceId.map(changedIds.contains) == true
+                    || session.providerResumeSessionId.map(changedIds.contains) == true
+            }
+        let payload = StateChangedFrame(
+            type: "state.changed",
+            timestamp: BoardDTOBuilder.iso(version.generatedAt),
+            revision: version.revision,
+            changedSessionIds: version.changedSessionIds,
+            removedSessionIds: version.removedSessionIds,
+            changedSessions: changedSessions,
+            snapshotRequired: version.snapshotRequired
+                || (!version.changedSessionIds.isEmpty && changedSessions.isEmpty)
+        )
+        guard let data = try? JSONEncoder().encode(payload),
               let text = String(data: data, encoding: .utf8) else {
             return
         }
@@ -264,17 +272,210 @@ public final class BoardServer {
         }
     }
 
+    func currentStateVersion() -> (revision: UInt64, generatedAt: Date) {
+        revisionLock.lock()
+        defer { revisionLock.unlock() }
+        return (stateRevision, stateGeneratedAt)
+    }
+
+    private func advanceStateRevision() -> (
+        revision: UInt64,
+        generatedAt: Date,
+        changedSessionIds: [String],
+        removedSessionIds: [String],
+        snapshotRequired: Bool
+    ) {
+        revisionLock.lock()
+        stateRevision &+= 1
+        stateGeneratedAt = Date()
+        let version = (
+            stateRevision,
+            stateGeneratedAt,
+            pendingChangedSessionIds.sorted(),
+            pendingRemovedSessionIds.sorted(),
+            pendingSnapshotRequired || (pendingChangedSessionIds.isEmpty && pendingRemovedSessionIds.isEmpty)
+        )
+        pendingChangedSessionIds.removeAll()
+        pendingRemovedSessionIds.removeAll()
+        pendingSnapshotRequired = false
+        revisionLock.unlock()
+        return version
+    }
+
+    private func recordStateDelta(_ event: SessionEvent) {
+        revisionLock.lock()
+        switch event {
+        case .sessionAdded(let sessionId),
+             .sessionMetadataChanged(let sessionId),
+             .transcriptAppended(let sessionId):
+            pendingRemovedSessionIds.remove(sessionId)
+            pendingChangedSessionIds.insert(sessionId)
+        case .sessionRemoved(let sessionId):
+            pendingChangedSessionIds.remove(sessionId)
+            pendingRemovedSessionIds.insert(sessionId)
+        default:
+            pendingSnapshotRequired = true
+        }
+        revisionLock.unlock()
+    }
+
+    private struct StateChangedFrame: Encodable {
+        let type: String
+        let timestamp: String
+        let revision: UInt64
+        let changedSessionIds: [String]
+        let removedSessionIds: [String]
+        let changedSessions: [SessionDTO]
+        let snapshotRequired: Bool
+    }
+
     // MARK: - 路由注册
 
-    /// CORS 头：允许 meee2 (localhost:3000 / Vercel deploy) 跨域 fetch
-    /// `/api/*`。无 wildcard scope 限制——所有 origin 都允许，因为这个
-    /// server 已经只 bind 到 127.0.0.1，只能从同机访问。
-    private static let corsHeaders: [String: String] = [
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Max-Age": "600"
-    ]
+    enum ControlPlaneDecision: Equatable {
+        case allow
+        case forbiddenOrigin
+        case unauthorized
+    }
+
+    /// Only an explicitly configured loopback dev server may call across
+    /// origins. Production always uses the BoardServer's actual bound origin.
+    static func parseDevOrigins(_ raw: String?) -> Set<String> {
+        guard let raw else { return [] }
+        return Set(raw.split(separator: ",").compactMap { item -> String? in
+            let candidate = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let components = URLComponents(string: candidate),
+                  components.scheme?.lowercased() == "http",
+                  let host = components.host?.lowercased(),
+                  host == "127.0.0.1" || host == "localhost",
+                  let port = components.port,
+                  components.path.isEmpty || components.path == "/",
+                  components.query == nil,
+                  components.fragment == nil,
+                  components.user == nil,
+                  components.password == nil else {
+                return nil
+            }
+            return "http://\(host):\(port)"
+        })
+    }
+
+    static func allowedOrigins(port: UInt16, devOrigins: Set<String>) -> Set<String> {
+        var origins: Set<String> = [
+            "http://127.0.0.1:\(port)",
+            "http://localhost:\(port)"
+        ]
+        origins.formUnion(devOrigins)
+        return origins
+    }
+
+    private var allowedOrigins: Set<String> {
+        Self.allowedOrigins(port: port, devOrigins: configuredDevOrigins)
+    }
+
+    static func isMutatingMethod(_ method: String) -> Bool {
+        switch method.uppercased() {
+        case "POST", "PUT", "PATCH", "DELETE": return true
+        default: return false
+        }
+    }
+
+    static func requestRequiresControlToken(_ request: HttpRequest) -> Bool {
+        if isMutatingMethod(request.method) { return true }
+        guard request.method.uppercased() == "GET",
+              request.path.hasPrefix("/api/sessions/"),
+              request.path.hasSuffix("/inbox") else { return false }
+        let drain = request.queryParams.first { $0.0 == "drain" }?.1.lowercased()
+        return drain == "true" || drain == "1"
+    }
+
+    private static func header(_ name: String, in request: HttpRequest) -> String? {
+        request.headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
+    static func requestOriginIsAllowed(_ request: HttpRequest, allowedOrigins: Set<String>) -> Bool {
+        if let origin = header("Origin", in: request), !origin.isEmpty {
+            return allowedOrigins.contains(origin)
+        }
+
+        // Modern browsers send this even on requests that omit Origin. Treat
+        // an explicitly cross-site request as hostile rather than falling back
+        // to the command-line/local-process path.
+        if header("Sec-Fetch-Site", in: request)?.lowercased() == "cross-site" {
+            return false
+        }
+
+        if let referer = header("Referer", in: request), !referer.isEmpty,
+           let url = URL(string: referer),
+           let origin = normalizedOrigin(of: url) {
+            return allowedOrigins.contains(origin)
+        }
+        return true
+    }
+
+    static func requestHasControlToken(_ request: HttpRequest, expectedToken: String) -> Bool {
+        guard let supplied = header(controlTokenHeader, in: request) else { return false }
+        return constantTimeEqual(supplied, expectedToken)
+    }
+
+    static func controlPlaneDecision(
+        for request: HttpRequest,
+        allowedOrigins: Set<String>,
+        expectedToken: String
+    ) -> ControlPlaneDecision {
+        guard requestOriginIsAllowed(request, allowedOrigins: allowedOrigins) else {
+            return .forbiddenOrigin
+        }
+        guard !requestRequiresControlToken(request)
+                || requestHasControlToken(request, expectedToken: expectedToken) else {
+            return .unauthorized
+        }
+        return .allow
+    }
+
+    private static func normalizedOrigin(of url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(),
+              let port = url.port else { return nil }
+        return "\(scheme)://\(host):\(port)"
+    }
+
+    private static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.utf8)
+        let right = Array(rhs.utf8)
+        guard left.count == right.count else { return false }
+        var difference: UInt8 = 0
+        for index in left.indices {
+            difference |= left[index] ^ right[index]
+        }
+        return difference == 0
+    }
+
+    private static func generateControlToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            // UUIDs are still unpredictable enough for the same-user fallback,
+            // while avoiding a process crash if the system RNG is unavailable.
+            return UUID().uuidString.replacingOccurrences(of: "-", with: "")
+                + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func corsHeaders(for request: HttpRequest) -> [String: String] {
+        var headers: [String: String] = [
+            "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, \(controlTokenHeader)",
+            "Access-Control-Max-Age": "600",
+            "Vary": "Origin"
+        ]
+        if let origin = header("Origin", in: request), !origin.isEmpty {
+            headers["Access-Control-Allow-Origin"] = origin
+        }
+        return headers
+    }
 
     /// Re-emit a HttpResponse with the CORS headers merged in. Wraps any
     /// existing status code / phrase / body — doesn't change semantics, just
@@ -283,9 +484,14 @@ public final class BoardServer {
     /// `HttpResponse.content()` is internal in swifter, so we route by case
     /// instead of generic re-wrap. All paths produce `.raw` responses with
     /// CORS headers attached.
-    private static func withCORS(_ response: HttpResponse) -> HttpResponse {
+    private static func withCORS(_ response: HttpResponse, request: HttpRequest) -> HttpResponse {
         var headers = response.headers()
-        for (k, v) in corsHeaders { headers[k] = v }
+        for (k, v) in corsHeaders(for: request) { headers[k] = v }
+        if request.path == "/api/control/bootstrap" {
+            headers["Cache-Control"] = "no-store"
+            headers["Pragma"] = "no-cache"
+            headers["X-Content-Type-Options"] = "nosniff"
+        }
         let status = response.statusCode
         let phrase = response.reasonPhrase
 
@@ -334,183 +540,93 @@ public final class BoardServer {
 
     /// Wrap a route handler so its response carries CORS headers.
     private static func cors(_ handler: @escaping (HttpRequest) -> HttpResponse) -> (HttpRequest) -> HttpResponse {
-        return { request in withCORS(handler(request)) }
+        return { request in withCORS(handler(request), request: request) }
     }
 
-    // MARK: - Same-origin / local UI guard
-    //
-    // The board server binds to 127.0.0.1 by default, but because the CORS
-    // policy on `/api/*` is wildcard (`Access-Control-Allow-Origin: *`), any
-    // website the user visits in their browser can fetch our localhost
-    // endpoints cross-origin. Most endpoints only return / mutate canvas
-    // state, but the data-wipe endpoints (issue token + delete local data)
-    // are destructive and must NOT be reachable from arbitrary origins —
-    // the in-app confirmation token alone is not a defense against a
-    // malicious page that simply calls the token route first.
-    //
-    // requireLocalUIOrigin gates a route behind an Origin / Referer
-    // whitelist (loopback meee2 board UI + the React dev server on
-    // localhost:5002). It also echoes the exact request Origin back in
-    // `Access-Control-Allow-Origin` (never `*`) so the browser only allows
-    // the response to be read by the trusted UIs.
-
-    /// Origins allowed to call the destructive local-data routes. Same
-    /// list is used for OPTIONS preflight and the actual POST.
-    private static let localUIAllowedOrigins: Set<String> = [
-        "http://localhost:9876",
-        "http://127.0.0.1:9876",
-        "http://localhost:5002",
-        "http://127.0.0.1:5002"
-    ]
-
-    /// Inspect Origin / Referer and decide whether the request came from
-    /// the trusted local meee2 UI. Same-origin fetches from the bundled
-    /// React app may omit the Origin header entirely — that's allowed
-    /// (the request still hits 127.0.0.1 via the bound socket). A
-    /// foreign Origin (anything outside the whitelist) is rejected.
-    static func isLocalUIRequest(_ request: HttpRequest) -> Bool {
-        let headers = request.headers
-        let origin = headers["origin"] ?? headers["Origin"] ?? ""
-        if origin.isEmpty {
-            // Same-origin fetch (most common): no Origin header. Fall
-            // back to Referer if present — must also be on the allow list.
-            let referer = headers["referer"] ?? headers["Referer"] ?? ""
-            if referer.isEmpty { return true }
-            return Self.localUIAllowedOrigins.contains { allowed in
-                referer.hasPrefix(allowed + "/") || referer == allowed
-            }
-        }
-        return Self.localUIAllowedOrigins.contains(origin)
-    }
-
-    /// Build a CORS header dict that echoes the request Origin (instead of
-    /// `*`) for the routes guarded by `requireLocalUIOrigin`. Empty Origin
-    /// (same-origin) → omit the header; otherwise mirror it exactly.
-    private static func localUICORSHeaders(for request: HttpRequest) -> [String: String] {
-        var headers: [String: String] = [
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "600",
-            "Vary": "Origin"
+    private static func securityError(
+        status: Int,
+        reason: String,
+        code: String,
+        message: String,
+        request: HttpRequest
+    ) -> HttpResponse {
+        let payload: [String: Any] = [
+            "error": ["code": code, "message": message]
         ]
-        let origin = request.headers["origin"] ?? request.headers["Origin"] ?? ""
-        if !origin.isEmpty, Self.localUIAllowedOrigins.contains(origin) {
-            headers["Access-Control-Allow-Origin"] = origin
-        }
-        return headers
-    }
-
-    /// Wrap a route handler so the request is only forwarded when Origin /
-    /// Referer points at the local meee2 UI. Foreign callers get a 403
-    /// `forbidden_origin` instead of the wildcard-CORS response that
-    /// `cors()` would emit.
-    private static func requireLocalUIOrigin(_ handler: @escaping (HttpRequest) -> HttpResponse) -> (HttpRequest) -> HttpResponse {
-        return { request in
-            guard Self.isLocalUIRequest(request) else {
-                let origin = request.headers["origin"] ?? request.headers["Origin"] ?? "<none>"
-                MWarn("[BoardServer] rejected cross-origin call to \(request.path) from origin=\(origin)")
-                let body: [String: Any] = [
-                    "error": "forbidden_origin",
-                    "message": "This endpoint is restricted to the local meee2 UI."
-                ]
-                let bodyData = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
-                let headers = [
-                    "Content-Type": "application/json; charset=utf-8",
-                    "Vary": "Origin"
-                ]
-                return .raw(403, "Forbidden", headers) { writer in
-                    try writer.write(bodyData)
-                }
-            }
-            let response = handler(request)
-            return Self.withLocalUICORS(response, request: request)
+        let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+        var headers = corsHeaders(for: request)
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        headers["Cache-Control"] = "no-store"
+        headers["X-Content-Type-Options"] = "nosniff"
+        return .raw(status, reason, headers) { writer in
+            try writer.write(data)
         }
     }
 
-    /// Like `withCORS`, but echoes the specific allowed Origin instead of
-    /// `*`. Used by `requireLocalUIOrigin`.
-    private static func withLocalUICORS(_ response: HttpResponse, request: HttpRequest) -> HttpResponse {
-        var headers = response.headers()
-        for (k, v) in Self.localUICORSHeaders(for: request) { headers[k] = v }
-        let status = response.statusCode
-        let phrase = response.reasonPhrase
-
-        switch response {
-        case .ok(let body):
-            let bodyData = serializeBody(body)
-            return .raw(status, phrase, headers) { writer in
-                try writer.write(bodyData)
-            }
-        case .badRequest(let body):
-            let bodyData = body.map { serializeBody($0) } ?? Data()
-            return .raw(status, phrase, headers) { writer in
-                try writer.write(bodyData)
-            }
-        case .raw(_, _, let originalHeaders, let originalWriter):
-            if let extras = originalHeaders {
-                for (k, v) in extras where headers[k] == nil { headers[k] = v }
-            }
-            return .raw(status, phrase, headers) { writer in
-                if let originalWriter = originalWriter { try originalWriter(writer) }
-            }
-        default:
-            return .raw(status, phrase, headers) { _ in }
+    static func websocketAuthToken(in text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["type"] as? String == "auth",
+              let token = object["controlToken"] as? String,
+              !token.isEmpty else {
+            return nil
         }
-    }
-
-    /// Paths that must NOT be exposed under wildcard CORS — they map to
-    /// destructive local-data operations and need a same-origin guard.
-    /// Checked by the OPTIONS preflight middleware so the browser doesn't
-    /// even cache a permissive preflight for a foreign origin.
-    private static let localUIOnlyPaths: Set<String> = [
-        "/api/system/delete-local-data",
-        "/api/system/delete-local-data/token"
-    ]
-
-    /// True for paths that must not be reachable cross-origin (no wildcard CORS).
-    /// Exact members of `localUIOnlyPaths`, plus the parameterized connector
-    /// credential/preauth routes — `POST /api/integrations/:id/credentials`
-    /// writes a secret to disk and `/preauth` spawns a process + opens a browser,
-    /// so a foreign origin must fail at preflight (same posture as delete-local-data).
-    static func isLocalUIOnlyPath(_ path: String) -> Bool {
-        if localUIOnlyPaths.contains(path) { return true }
-        return path.hasPrefix("/api/integrations/")
-            && (path.hasSuffix("/credentials") || path.hasSuffix("/preauth"))
+        return token
     }
 
     private func registerRoutes(on server: HttpServer) {
-        // CORS preflight (OPTIONS) — meee2 browser sends a preflight before
-        // POSTs with custom Content-Type / Authorization. Middleware short-
-        // circuits with 204 + the CORS headers so the actual request goes
-        // through. Any non-OPTIONS falls through to the route handlers below.
-        server.middleware.append { request in
-            guard request.method.uppercased() == "OPTIONS" else { return nil }
-            // Destructive endpoints (local-data wipe) must NOT be advertised
-            // under wildcard CORS — a foreign origin should fail at preflight
-            // already. Echo the request Origin only when it's on the local-UI
-            // allow list; otherwise reply with empty Allow-Origin so the
-            // browser refuses to send the real request.
-            if BoardServer.isLocalUIOnlyPath(request.path) {
-                let headers = BoardServer.localUICORSHeaders(for: request)
-                return .raw(204, "No Content", headers) { _ in }
+        // One gate covers every current and future /api route. Origin validation
+        // protects both reads and writes from browser-based localhost attacks;
+        // every mutation additionally requires this launch's control token.
+        server.middleware.append { [weak self] request in
+            guard let self, request.path.hasPrefix("/api/") else { return nil }
+
+            guard Self.requestOriginIsAllowed(request, allowedOrigins: self.allowedOrigins) else {
+                let origin = Self.header("Origin", in: request) ?? "<none>"
+                MWarn("[BoardServer] rejected origin for \(request.method) \(request.path): \(origin)")
+                return Self.securityError(
+                    status: 403,
+                    reason: "Forbidden",
+                    code: "forbidden_origin",
+                    message: "This local control plane does not allow the request origin.",
+                    request: request
+                )
             }
-            return .raw(204, "No Content", BoardServer.corsHeaders) { _ in }
+
+            if request.method.uppercased() == "OPTIONS" {
+                return .raw(204, "No Content", Self.corsHeaders(for: request)) { _ in }
+            }
+
+            guard !Self.requestRequiresControlToken(request)
+                    || Self.requestHasControlToken(request, expectedToken: self.controlToken) else {
+                MWarn("[BoardServer] rejected unauthenticated mutation \(request.method) \(request.path)")
+                return Self.securityError(
+                    status: 401,
+                    reason: "Unauthorized",
+                    code: "control_token_required",
+                    message: "A current meee2 control token is required.",
+                    request: request
+                )
+            }
+            return nil
         }
 
         // --- WebSocket ---
-        server["/api/events"] = websocket(
-            text: { [weak self] ws, _ in
-                // 收到客户端文本：MVP 不处理任何入站指令，只是保持连接
-                _ = ws
-                _ = self
+        let eventSocket = websocket(
+            text: { [weak self] ws, text in
+                self?.wsHandleClientText(ws, text: text)
             },
             connected: { [weak self] ws in
-                self?.wsAttach(ws)
+                self?.wsBeginAuthentication(ws)
             },
             disconnected: { [weak self] ws in
                 self?.wsDetach(ws)
             }
         )
+        // The browser WebSocket API cannot set custom headers. Authentication
+        // therefore happens in the first application frame, keeping the token
+        // out of URLs, access logs and browser history.
+        server["/api/events"] = eventSocket
 
         // --- REST API ---
         // CORS-wrapped: meee2 in the browser hits these cross-origin.
@@ -524,6 +640,12 @@ public final class BoardServer {
                 "pid": Int(ProcessInfo.processInfo.processIdentifier)
             ]))
         }
+        server.GET["/api/control/bootstrap"] = BoardServer.cors { [weak self] _ in
+            guard let self else {
+                return .raw(503, "Service Unavailable", [:]) { _ in }
+            }
+            return .ok(.json(["controlToken": self.controlToken]))
+        }
         server.GET["/api/state"]   = BoardServer.cors(BoardAPI.getState)
         server.GET["/api/system/meee2-mcp-status"] = BoardServer.cors(BoardAPI.getMeee2MCPStatus)
         server.GET["/api/system/meee2-agent-runtime-status"] = BoardServer.cors(BoardAPI.getMeee2AgentRuntimeStatus)
@@ -536,14 +658,16 @@ public final class BoardServer {
         // foreign Origin (e.g. a website the user visits while board is
         // running) is rejected with 403 before BoardAPI sees the request.
         // See SECURITY.md → "Local data wipe endpoints" for rationale.
-        server.POST["/api/system/delete-local-data/token"] = BoardServer.requireLocalUIOrigin(BoardAPI.issueDeleteLocalDataToken)
-        server.POST["/api/system/delete-local-data"] = BoardServer.requireLocalUIOrigin(BoardAPI.deleteLocalData)
+        server.POST["/api/system/delete-local-data/token"] = BoardServer.cors(BoardAPI.issueDeleteLocalDataToken)
+        server.POST["/api/system/delete-local-data"] = BoardServer.cors(BoardAPI.deleteLocalData)
+        server.POST["/api/system/legacy-message-cleanup/token"] = BoardServer.cors(BoardAPI.issueLegacyMessageCleanupToken)
+        server.POST["/api/system/legacy-message-cleanup"] = BoardServer.cors(BoardAPI.cleanUpLegacyMessages)
         server.GET["/api/sessions/intake-diagnostics"] = BoardServer.cors(BoardAPI.getSessionIntakeDiagnostics)
         server.GET["/api/session-projects"] = BoardServer.cors(BoardAPI.listSessionProjects)
         server.POST["/api/session-projects"] = BoardServer.cors(BoardAPI.createSessionProject)
         server.POST["/api/session-projects/pick-directory"] = BoardServer.cors(BoardAPI.pickSessionProjectDirectory)
-        server.POST["/api/session-launcher/pick-attachments"] = BoardServer.requireLocalUIOrigin(BoardAPI.pickSessionLaunchAttachments)
-        server.POST["/api/session-launcher/attachments"] = BoardServer.requireLocalUIOrigin(BoardAPI.uploadSessionLaunchAttachment)
+        server.POST["/api/session-launcher/pick-attachments"] = BoardServer.cors(BoardAPI.pickSessionLaunchAttachments)
+        server.POST["/api/session-launcher/attachments"] = BoardServer.cors(BoardAPI.uploadSessionLaunchAttachment)
         server.PATCH["/api/session-projects/:id"] = BoardServer.cors(BoardAPI.updateSessionProject)
         server.POST["/api/session-projects/:id/reveal"] = BoardServer.cors(BoardAPI.revealSessionProject)
         server.DELETE["/api/session-projects/:id"] = BoardServer.cors(BoardAPI.forgetSessionProject)
@@ -565,12 +689,13 @@ public final class BoardServer {
         server.DELETE["/api/automations/:id"] = BoardServer.cors(BoardAPI.deleteAutomation)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
         server.POST["/api/sessions/:id/open-workspace"] = BoardServer.cors(BoardAPI.openSessionWorkspace)
-        server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
+        server.POST["/api/sessions/:id/inject"] = BoardServer.cors(BoardAPI.injectToSession)
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.POST["/api/sessions/:id/control"] = BoardServer.cors(BoardAPI.updateSessionControl)
         server.POST["/api/sessions/:id/permission"] = BoardServer.cors(BoardAPI.respondToSessionPermission)
         server.GET["/api/sessions/:id/artifacts"] = BoardServer.cors(BoardAPI.getSessionArtifacts)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
+        server.GET["/api/artifacts"] = BoardServer.cors(BoardAPI.listArtifacts)
         server.GET["/api/artifact-candidates"] = BoardServer.cors(BoardAPI.listArtifactCandidates)
         server.POST["/api/artifact-candidates/hook"] = BoardServer.cors(BoardAPI.ingestArtifactCandidateHook)
         server.POST["/api/artifact-candidates/:id/promote"] = BoardServer.cors(BoardAPI.promoteArtifactCandidate)
@@ -596,7 +721,7 @@ public final class BoardServer {
         server.POST["/api/_e2e/team-sync"] = BoardServer.cors(BoardAPI.e2eSyncTeamCanvases)
         server.POST["/api/_e2e/sessions/:id"] = BoardServer.cors(BoardAPI.e2eUpsertSession)
         server.POST["/api/_e2e/sessions/:id/messages"] = BoardServer.cors(BoardAPI.e2eAppendSessionMessage)
-        server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
+        server.POST["/api/sessions/:id/attachments"] = BoardServer.cors(AttachmentsAPI.upload)
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)
         server.POST["/api/sessions/spawn"] = BoardServer.cors(BoardAPI.spawnSession)
@@ -731,31 +856,34 @@ public final class BoardServer {
         server.POST["/api/external-sessions/upsert"] = BoardServer.cors(BoardAPI.upsertExternalSession)
         server.POST["/api/external-sessions/:sid/append-message"] = BoardServer.cors(BoardAPI.appendExternalMessage)
         server.DELETE["/api/external-sessions/:sid"] = BoardServer.cors(BoardAPI.deleteExternalSession)
-        server.POST["/api/channels"] = BoardAPI.createChannel
-        server.DELETE["/api/channels/:name"] = BoardAPI.deleteChannel
-        server.POST["/api/channels/:name/members"] = BoardAPI.addMember
-        server.DELETE["/api/channels/:name/members/:alias"] = BoardAPI.removeMember
-        server.POST["/api/channels/:name/mode"] = BoardAPI.setChannelMode
-        server.POST["/api/channels/:name/rename"] = BoardAPI.renameChannel
-        server.GET["/api/channels/:name/messages"] = BoardAPI.listMessages
-        server.POST["/api/messages/send"] = BoardAPI.sendMessage
-        server.POST["/api/messages/:id/hold"] = BoardAPI.holdMessage
-        server.POST["/api/messages/:id/deliver"] = BoardAPI.deliverMessage
-        server.POST["/api/messages/:id/drop"] = BoardAPI.dropMessage
+        server.POST["/api/channels"] = BoardServer.cors(BoardAPI.createChannel)
+        server.DELETE["/api/channels/:name"] = BoardServer.cors(BoardAPI.deleteChannel)
+        server.POST["/api/channels/:name/members"] = BoardServer.cors(BoardAPI.addMember)
+        server.DELETE["/api/channels/:name/members/:alias"] = BoardServer.cors(BoardAPI.removeMember)
+        server.POST["/api/channels/:name/mode"] = BoardServer.cors(BoardAPI.setChannelMode)
+        server.POST["/api/channels/:name/rename"] = BoardServer.cors(BoardAPI.renameChannel)
+        server.GET["/api/channels/:name/messages"] = BoardServer.cors(BoardAPI.listMessages)
+        server.POST["/api/messages/send"] = BoardServer.cors(BoardAPI.sendMessage)
+        server.POST["/api/messages/:id/hold"] = BoardServer.cors(BoardAPI.holdMessage)
+        server.POST["/api/messages/:id/deliver"] = BoardServer.cors(BoardAPI.deliverMessage)
+        server.POST["/api/messages/:id/drop"] = BoardServer.cors(BoardAPI.dropMessage)
 
         // --- Global assistant (claude -p driven "ask & spawn") ---
-        server.POST["/api/assistant/chat"] = AssistantAPI.chat
+        server.POST["/api/assistant/chat"] = BoardServer.cors(AssistantAPI.chat)
         server.GET["/api/assistant/local-session/messages"] = BoardServer.cors(AssistantAPI.localSessionMessages)
+        server.GET["/api/assistant/secret"] = BoardServer.cors(AssistantAPI.secretStatus)
+        server.PUT["/api/assistant/secret"] = BoardServer.cors(AssistantAPI.updateSecret)
+        server.DELETE["/api/assistant/secret"] = BoardServer.cors(AssistantAPI.deleteSecret)
 
         // --- Card Templates ---
-        server.GET["/api/card-templates"]         = BoardAPI.listCardTemplates
-        server.GET["/api/card-templates/:id"]     = BoardAPI.getCardTemplate
-        server.PUT["/api/card-templates/:id"]     = BoardAPI.putCardTemplate
-        server.DELETE["/api/card-templates/:id"]  = BoardAPI.deleteCardTemplate
+        server.GET["/api/card-templates"]         = BoardServer.cors(BoardAPI.listCardTemplates)
+        server.GET["/api/card-templates/:id"]     = BoardServer.cors(BoardAPI.getCardTemplate)
+        server.PUT["/api/card-templates/:id"]     = BoardServer.cors(BoardAPI.putCardTemplate)
+        server.DELETE["/api/card-templates/:id"]  = BoardServer.cors(BoardAPI.deleteCardTemplate)
 
         // --- Board Layout (session 卡片 + channel hub 坐标) ---
-        server.GET["/api/board/layout"] = BoardAPI.getBoardLayout
-        server.PUT["/api/board/layout"] = BoardAPI.putBoardLayout
+        server.GET["/api/board/layout"] = BoardServer.cors(BoardAPI.getBoardLayout)
+        server.PUT["/api/board/layout"] = BoardServer.cors(BoardAPI.putBoardLayout)
 
         // --- meee2 callback (OAuth-style auto-connect) ---
         server.GET["/meee2/callback"] = Meee2OnlineCallbackAPI.handleCallback
@@ -806,8 +934,20 @@ public final class BoardServer {
             }
         }
 
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: finalPath)) else {
+        guard var data = try? Data(contentsOf: URL(fileURLWithPath: finalPath)) else {
             return errorPage404()
+        }
+
+        // The bundled app receives the launch-scoped token without putting it
+        // in a URL, history entry, referrer, or log. Vite development pages use
+        // /api/control/bootstrap instead.
+        if finalPath.hasSuffix("index.html"),
+           var html = String(data: data, encoding: .utf8) {
+            let meta = "<meta name=\"meee2-control-token\" content=\"\(controlToken)\">"
+            if html.contains("</head>") {
+                html = html.replacingOccurrences(of: "</head>", with: "  \(meta)\n  </head>")
+                data = Data(html.utf8)
+            }
         }
 
         let contentType = mimeType(for: finalPath)
@@ -815,7 +955,14 @@ public final class BoardServer {
             "Content-Type": contentType,
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
-            "Expires": "0"
+            "Expires": "0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'self'; connect-src 'self' ws: wss:; " +
+                "img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
+                "script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; " +
+                "base-uri 'self'; object-src 'none'"
         ]
         if finalPath.hasSuffix(".woff") || finalPath.hasSuffix(".woff2") || finalPath.hasSuffix(".ttf") {
             headers["Cache-Control"] = "public, max-age=3600"
@@ -860,20 +1007,66 @@ public final class BoardServer {
 
     // MARK: - WebSocket session 管理
 
-    private func wsAttach(_ ws: WebSocketSession) {
+    private func wsBeginAuthentication(_ ws: WebSocketSession) {
+        let timeout = DispatchWorkItem { [weak self, weak ws] in
+            guard let self, let ws else { return }
+            self.wsLock.lock()
+            let wasPending = self.wsPendingAuthentication.removeValue(forKey: ws) != nil
+            self.wsLock.unlock()
+            if wasPending {
+                MWarn("[BoardServer] ws authentication timed out")
+                ws.writeCloseFrame()
+            }
+        }
         wsLock.lock()
+        wsPendingAuthentication[ws] = timeout
+        wsLock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3, execute: timeout)
+    }
+
+    private func wsHandleClientText(_ ws: WebSocketSession, text: String) {
+        let supplied = Self.websocketAuthToken(in: text)
+        wsLock.lock()
+        guard let timeout = wsPendingAuthentication.removeValue(forKey: ws) else {
+            let authenticated = wsSessions.contains { $0 === ws }
+            wsLock.unlock()
+            if !authenticated { ws.writeCloseFrame() }
+            return
+        }
+        timeout.cancel()
+        guard let supplied, Self.constantTimeEqual(supplied, controlToken) else {
+            wsLock.unlock()
+            MWarn("[BoardServer] rejected websocket first-frame authentication")
+            ws.writeCloseFrame()
+            return
+        }
         wsSessions.append(ws)
         let total = wsSessions.count
         wsLock.unlock()
+
+        if let data = try? JSONSerialization.data(withJSONObject: ["type": "auth.ok"]),
+           let text = String(data: data, encoding: .utf8) {
+            ws.writeText(text)
+        }
+        wsAttachAuthenticated(ws, total: total)
+    }
+
+    private func wsAttachAuthenticated(_ ws: WebSocketSession, total: Int) {
         MInfo("[BoardServer] ws connected (total=\(total))")
         // issue #25 诊断：与 client 端的 [StateTrace][board-ws] reconnected 配对，
         // 用来确认 board flash 之前是否伴随一次 WS reconnect。
         MInfo("[StateTrace][ws-connect] /api/events client connected (total clients=\(total))")
 
         // 连上立即发一条初始 state.changed，让客户端主动拉 /api/state
+        let version = currentStateVersion()
         let payload: [String: Any] = [
             "type": "state.changed",
-            "timestamp": BoardDTOBuilder.iso(Date())
+            "timestamp": BoardDTOBuilder.iso(version.generatedAt),
+            "revision": version.revision,
+            "changedSessionIds": [],
+            "removedSessionIds": [],
+            "changedSessions": [],
+            "snapshotRequired": true
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload),
            let text = String(data: data, encoding: .utf8) {
@@ -883,6 +1076,7 @@ public final class BoardServer {
 
     private func wsDetach(_ ws: WebSocketSession) {
         wsLock.lock()
+        wsPendingAuthentication.removeValue(forKey: ws)?.cancel()
         wsSessions.removeAll { $0 === ws }
         let remaining = wsSessions.count
         wsLock.unlock()
@@ -898,7 +1092,8 @@ public final class BoardServer {
     /// 打爆 WS 客户端。与 BoardAPI.* 里直接触发的 broadcastStateChanged() 天然合并。
     private func subscribeToEventBus() {
         busSubscription = SessionEventBus.shared.publisher
-            .handleEvents(receiveOutput: { event in
+            .handleEvents(receiveOutput: { [weak self] event in
+                self?.recordStateDelta(event)
                 BoardPerfProbe.shared.recordEvent(
                     "eventbus.\(event.perfProbeName)",
                     title: event.perfProbeName,
@@ -908,6 +1103,7 @@ public final class BoardServer {
             })
             .debounce(for: .milliseconds(200), scheduler: DispatchQueue.global(qos: .utility))
             .sink { [weak self] _ in
+                BoardAPI.reconcileStateBeforeBroadcast()
                 self?.broadcastStateChanged()
             }
     }

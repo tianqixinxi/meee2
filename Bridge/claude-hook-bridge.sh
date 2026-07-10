@@ -6,6 +6,18 @@
 # meee2 Unix Socket 路径
 PEER_ISLAND_SOCKET="/tmp/meee2.sock"
 
+# One permission timeout contract shared with HookSocketServer. The server
+# completes at this deadline; nc waits five seconds longer so it can receive
+# the server's deny response instead of abandoning the socket first.
+PERMISSION_TIMEOUT_SECONDS="${MEEE2_PERMISSION_TIMEOUT_SECONDS:-300}"
+case "$PERMISSION_TIMEOUT_SECONDS" in
+    ''|*[!0-9]*) PERMISSION_TIMEOUT_SECONDS=300 ;;
+esac
+if [ "$PERMISSION_TIMEOUT_SECONDS" -le 0 ]; then
+    PERMISSION_TIMEOUT_SECONDS=300
+fi
+BRIDGE_PERMISSION_TIMEOUT_SECONDS=$((PERMISSION_TIMEOUT_SECONDS + 5))
+
 # 获取事件类型 (从环境变量或 stdin)
 HOOK_EVENT="${CLAUDE_HOOK_EVENT_NAME:-}"
 
@@ -23,10 +35,12 @@ if [ -n "$INPUT" ] && command -v jq &> /dev/null; then
     if [ "$BRIDGE_DEBUG" = "1" ]; then
         echo "  json.hook_event_name=$_peek" >> /tmp/meee2-bridge-debug.log
     fi
-    # Temporary tap：dump full payload of Notification + PermissionRequest
-    # so we can see the exact message field shape. Remove once we've captured.
-    if [ "$_peek" = "Notification" ] || [ "$_peek" = "PermissionRequest" ]; then
-        echo "$(date +%H:%M:%S) PAYLOAD event=$_peek $INPUT" >> /tmp/meee2-permission-payload.log
+    # Permission debugging is metadata-only. Never persist tool input, command
+    # arguments, file content, or the full PermissionRequest payload.
+    if [ "$BRIDGE_DEBUG" = "1" ] && [ "$_peek" = "PermissionRequest" ]; then
+        _permission_sid=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
+        _permission_tool=$(echo "$INPUT" | jq -r '.tool_name // "unknown"' 2>/dev/null)
+        echo "$(date +%H:%M:%S) PERMISSION sid=$_permission_sid tool=$_permission_tool payload=redacted" >> /tmp/meee2-bridge-debug.log
     fi
 fi
 
@@ -244,7 +258,7 @@ if [ -S "$PEER_ISLAND_SOCKET" ]; then
 
     case "$HOOK_EVENT" in
         PermissionRequest)
-            RESPONSE=$(echo "$INPUT" | nc -U -w 60 "$PEER_ISLAND_SOCKET" 2>/dev/null)
+            RESPONSE=$(echo "$INPUT" | nc -U -w "$BRIDGE_PERMISSION_TIMEOUT_SECONDS" "$PEER_ISLAND_SOCKET" 2>/dev/null)
             [ -n "$RESPONSE" ] && echo "$RESPONSE"
             ;;
         UserPromptSubmit)

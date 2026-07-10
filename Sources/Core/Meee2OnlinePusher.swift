@@ -86,7 +86,24 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     /// Start listening to SessionEventBus and periodic heartbeat
     public func activate() {
-        _ = settingsSnapshot(force: true)
+        let identity = OnlineProxy.loadIdentityMetadata()
+        guard identity.connected else {
+            MLog("[Meee2OnlinePusher] Not connected to Meee2 Online, skipping activation")
+            return
+        }
+        // Keychain + settings migration is disk/security I/O. Never run it on
+        // the launch/main path: a locked or newly-created login Keychain can
+        // otherwise hold the Board and every native terminal snapshot hostage.
+        syncQueue.async { [weak self] in
+            guard let self else { return }
+            _ = self.settingsSnapshot(force: true)
+            DispatchQueue.main.async { [weak self] in
+                self?.activateUsingCachedSettings()
+            }
+        }
+    }
+
+    private func activateUsingCachedSettings() {
         guard shouldStayActive else {
             MLog("[Meee2OnlinePusher] Not connected to Meee2 Online, skipping activation")
             return
@@ -159,11 +176,17 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     public func refreshActivation() {
-        _ = settingsSnapshot(force: true)
-        if shouldStayActive {
-            activate()
-        } else {
-            deactivate()
+        syncQueue.async { [weak self] in
+            guard let self else { return }
+            _ = self.settingsSnapshot(force: true)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.shouldStayActive {
+                    self.activateUsingCachedSettings()
+                } else {
+                    self.deactivate()
+                }
+            }
         }
     }
 
@@ -1287,6 +1310,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        BoardServer.shared.authorizeControlRequest(&request)
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: ["content": content])
         } catch {

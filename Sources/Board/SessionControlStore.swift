@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 public enum SessionControlState: String, Codable {
     case active
@@ -20,8 +21,7 @@ public final class SessionControlStore {
     private var records: [String: SessionControlRecord] = [:]
 
     private init() {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let base = StorageRoots.processDefault.baseDirectory
         self.fileURL = base.appendingPathComponent("session-controls.json")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         load()

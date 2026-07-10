@@ -30,6 +30,9 @@ import sys
 import time
 import urllib.request
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+from board_control import HEADER_NAME, control_token  # noqa: E402
+
 BASE = "http://localhost:9876"
 RUN = str(int(time.time()))
 CANVAS_NAME = f"e2e-dispatch-prompt-{RUN}"
@@ -41,13 +44,19 @@ NODE_ID = f"n_prompt_{RUN}"
 # write a transcript, so line-count alone is insufficient).
 MARKER = f"PONGPROOF{RUN}"
 PROMPT_TIMEOUT_S = 45  # claude boot + workspace-trust accept + prompt submit
+CONTROL_TOKEN = None
 
 
 def api(method, path, body=None):
+    global CONTROL_TOKEN
     data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"}
+    if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        CONTROL_TOKEN = CONTROL_TOKEN or control_token(BASE)
+        headers[HEADER_NAME] = CONTROL_TOKEN
     req = urllib.request.Request(
         BASE + path, data=data, method=method,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     try:
         r = urllib.request.urlopen(req, timeout=30)

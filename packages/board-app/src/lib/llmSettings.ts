@@ -134,7 +134,15 @@ export function readLlmSettings(): LlmSettings {
 }
 
 export function writeLlmSettings(settings: LlmSettings): void {
-  window.localStorage.setItem(LLM_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+  // Hosted credentials live in macOS Keychain via /api/assistant/secret.
+  // Never mirror them back into browser storage after the legacy migration.
+  const persisted = {
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    enabledTools: settings.enabledTools,
+  }
+  window.localStorage.setItem(LLM_SETTINGS_STORAGE_KEY, JSON.stringify(persisted))
   window.dispatchEvent(new Event('meee2:llm-settings-changed'))
 }
 

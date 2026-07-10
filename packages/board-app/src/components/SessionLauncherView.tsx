@@ -37,6 +37,7 @@ import type {
   SetStateAction,
 } from 'react'
 import {
+  activateSession,
   createProjectSession,
   createSessionProject,
   createTemporarySession,
@@ -93,12 +94,14 @@ export type SessionArtifactFilterPayload = {
 
 const DEFAULT_PROMPT = ''
 const PROVIDERS: SpawnProvider[] = ['codex', 'claude']
-const DEFAULT_PERMISSION_MODE: AgentPermissionMode = 'fullAccess'
+const DEFAULT_PERMISSION_MODE: AgentPermissionMode = 'onRequest'
 const DEFAULT_VISIBLE_SESSIONS = 8
 const TEMPORARY_GROUP_ID = 'temporary'
 const SIDEBAR_WIDTH_KEY = 'meee2.sessionLauncher.sidebarWidth'
 const SIDEBAR_COLLAPSED_KEY = 'meee2.sessionLauncher.sidebarCollapsed'
 const LAST_SELECTION_KEY = 'meee2.sessionLauncher.lastSelection'
+const PROJECT_PERMISSION_MODES_KEY = 'meee2.sessionLauncher.permissionModes.v1'
+const PROJECT_FULL_ACCESS_REMEMBERED_KEY = 'meee2.sessionLauncher.rememberedFullAccess.v1'
 const LEGACY_DEFAULT_SIDEBAR_WIDTH = 324
 const DEFAULT_SIDEBAR_WIDTH = 280
 const MIN_SIDEBAR_WIDTH = 248
@@ -118,6 +121,41 @@ function readStoredSidebarWidth(): number {
 function readStoredSidebarCollapsed(): boolean {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+}
+
+function readStoredProjectPermissionModes(): Record<string, AgentPermissionMode> {
+  if (typeof window === 'undefined') return {}
+  const raw = window.localStorage.getItem(PROJECT_PERMISSION_MODES_KEY)
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const rememberedFullAccess = readRememberedFullAccessProjectIds()
+    const allowed = new Set<AgentPermissionMode>(['fullAccess', 'default', 'acceptEdits', 'onRequest', 'readOnly'])
+    return Object.fromEntries(Object.entries(parsed).filter(
+      (entry): entry is [string, AgentPermissionMode] => (
+        Boolean(entry[0])
+        && allowed.has(entry[1] as AgentPermissionMode)
+        && (entry[1] !== 'fullAccess' || rememberedFullAccess.has(entry[0]))
+      ),
+    ))
+  } catch {
+    window.localStorage.removeItem(PROJECT_PERMISSION_MODES_KEY)
+    return {}
+  }
+}
+
+function readRememberedFullAccessProjectIds(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(PROJECT_FULL_ACCESS_REMEMBERED_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())))
+  } catch {
+    window.localStorage.removeItem(PROJECT_FULL_ACCESS_REMEMBERED_KEY)
+    return new Set()
+  }
 }
 
 function clampSidebarWidth(width: number): number {
@@ -201,17 +239,17 @@ const PERMISSION_OPTIONS: Record<SpawnProvider, PermissionOption[]> = {
     {
       value: 'fullAccess',
       labelKey: 'sessions.launcher.permission.codexFullAccess',
-      command: 'codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust',
+      command: 'codex --dangerously-bypass-approvals-and-sandbox',
     },
     {
       value: 'onRequest',
       labelKey: 'sessions.launcher.permission.codexOnRequest',
-      command: 'codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust',
+      command: 'codex --sandbox workspace-write --ask-for-approval on-request',
     },
     {
       value: 'readOnly',
       labelKey: 'sessions.launcher.permission.codexReadOnly',
-      command: 'codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust',
+      command: 'codex --sandbox read-only --ask-for-approval on-request',
     },
   ],
   claude: [
@@ -221,7 +259,7 @@ const PERMISSION_OPTIONS: Record<SpawnProvider, PermissionOption[]> = {
       command: 'claude --dangerously-skip-permissions',
     },
     {
-      value: 'default',
+      value: 'onRequest',
       labelKey: 'sessions.launcher.permission.claudeDefault',
       command: 'claude --permission-mode default',
     },
@@ -254,7 +292,12 @@ export function SessionLauncherView({
   const [expandedSessionGroups, setExpandedSessionGroups] = useState<Set<string>>(() => new Set())
   const [promptByProjectId, setPromptByProjectId] = useState<Record<string, string>>({})
   const [providerByProjectId, setProviderByProjectId] = useState<Record<string, SpawnProvider>>({})
-  const [permissionModeByProjectId, setPermissionModeByProjectId] = useState<Record<string, AgentPermissionMode>>({})
+  const [permissionModeByProjectId, setPermissionModeByProjectId] = useState<Record<string, AgentPermissionMode>>(
+    () => readStoredProjectPermissionModes(),
+  )
+  const [rememberedFullAccessProjectIds, setRememberedFullAccessProjectIds] = useState<Set<string>>(
+    () => readRememberedFullAccessProjectIds(),
+  )
   const [planModeByProjectId, setPlanModeByProjectId] = useState<Record<string, boolean>>({})
   const [attachmentsByProjectId, setAttachmentsByProjectId] = useState<Record<string, SessionLaunchAttachment[]>>({})
   const [temporaryPrompt, setTemporaryPrompt] = useState(DEFAULT_PROMPT)
@@ -287,7 +330,6 @@ export function SessionLauncherView({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
   const initializedSelectionRef = useRef(initialSelection !== null)
   const handledOpenTargetRef = useRef<string | null>(null)
-  const autoRestoreAttemptedRef = useRef<Set<string>>(new Set())
   const pointerSidebarResizeActiveRef = useRef(false)
   const sessions = state?.sessions ?? []
 
@@ -439,11 +481,17 @@ export function SessionLauncherView({
   const reopenLauncherSessionForSession = useCallback((session: Session) => {
     const resumeSessionId = providerResumeTargetForSession(session)
     if (!sessionCanBeReopened(session) || reopeningSessionId === session.id) return
+    const provider = launcherProviderForSession(session) ?? 'claude'
+    const project = projectByPath.get(normalizePath(session.project))
+    const permissionMode = project
+      ? normalizePermissionMode(provider, permissionModeByProjectId[project.id])
+      : DEFAULT_PERMISSION_MODE
     setReopeningSessionId(session.id)
     reopenLauncherSession({
       sessionId: session.id,
       providerResumeSessionId: resumeSessionId,
-      provider: launcherProviderForSession(session),
+      provider,
+      permissionMode,
       cwd: session.project || undefined,
     })
       .then((result) => {
@@ -470,7 +518,7 @@ export function SessionLauncherView({
         onToast?.('error', err.message || t('sessions.launcher.noTerminalSurface'))
       })
       .finally(() => setReopeningSessionId((current) => current === session.id ? null : current))
-  }, [onSessionCreated, onToast, reopeningSessionId, t, titleOverrides])
+  }, [onSessionCreated, onToast, permissionModeByProjectId, projectByPath, reopeningSessionId, t, titleOverrides])
 
   useEffect(() => {
     if (selection || initializedSelectionRef.current || state === null) return
@@ -478,7 +526,6 @@ export function SessionLauncherView({
     if (latestSession) {
       initializedSelectionRef.current = true
       setSelection({ kind: 'session', sessionId: latestSession.id, surfaceId: latestSession.surfaceId })
-      reopenLauncherSessionForSession(latestSession)
       return
     }
     const first = sortedProjects[0]
@@ -487,7 +534,7 @@ export function SessionLauncherView({
       setSelection({ kind: 'project', projectId: first.id })
       setExpandedProjectIds(new Set([first.id]))
     }
-  }, [launcherSessions, reopenLauncherSessionForSession, selection, sortedProjects, state])
+  }, [launcherSessions, selection, sortedProjects, state])
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
@@ -496,6 +543,25 @@ export function SessionLauncherView({
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0')
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    const persisted = Object.fromEntries(Object.entries(permissionModeByProjectId).filter(([projectId, mode]) => (
+      mode !== 'fullAccess' || rememberedFullAccessProjectIds.has(projectId)
+    )))
+    if (Object.keys(persisted).length > 0) {
+      window.localStorage.setItem(PROJECT_PERMISSION_MODES_KEY, JSON.stringify(persisted))
+    } else {
+      window.localStorage.removeItem(PROJECT_PERMISSION_MODES_KEY)
+    }
+    if (rememberedFullAccessProjectIds.size > 0) {
+      window.localStorage.setItem(
+        PROJECT_FULL_ACCESS_REMEMBERED_KEY,
+        JSON.stringify(Array.from(rememberedFullAccessProjectIds).sort()),
+      )
+    } else {
+      window.localStorage.removeItem(PROJECT_FULL_ACCESS_REMEMBERED_KEY)
+    }
+  }, [permissionModeByProjectId, rememberedFullAccessProjectIds])
 
   useEffect(() => {
     if (!selection) {
@@ -546,16 +612,6 @@ export function SessionLauncherView({
       return Boolean(selectedRestoredTarget.surfaceId && session.surfaceId === selectedRestoredTarget.surfaceId)
     }) ?? null
   }, [selectedRestoredTarget, sessions])
-
-  useEffect(() => {
-    if (selection?.kind !== 'session' || !selectedSession || selectedRestoredTarget) return
-    if (!sessionCanBeReopened(selectedSession)) return
-    const resumeTarget = providerResumeTargetForSession(selectedSession)
-    const restoreKey = `${selection.sessionId}:${resumeTarget ?? ''}`
-    if (autoRestoreAttemptedRef.current.has(restoreKey)) return
-    autoRestoreAttemptedRef.current.add(restoreKey)
-    reopenLauncherSessionForSession(selectedSession)
-  }, [reopenLauncherSessionForSession, selectedRestoredTarget, selectedSession, selection])
 
   const selectedProjectProvider = selectedProject
     ? providerByProjectId[selectedProject.id] ?? selectedProject.preferredProvider
@@ -721,6 +777,13 @@ export function SessionLauncherView({
         sessionId: result.surface.sessionId,
         surfaceId: result.surface.surfaceId,
       })
+      setRestoredSessionTargets((current) => ({
+        ...current,
+        [result.surface.sessionId]: {
+          sessionId: result.surface.sessionId,
+          surfaceId: result.surface.surfaceId,
+        },
+      }))
       setExpandedProjectIds((current) => addToSet(current, result.project.id))
       onSessionCreated?.()
       onToast?.('success', t('sessions.launcher.startedInProject', {
@@ -752,6 +815,13 @@ export function SessionLauncherView({
         sessionId: result.surface.sessionId,
         surfaceId: result.surface.surfaceId,
       })
+      setRestoredSessionTargets((current) => ({
+        ...current,
+        [result.surface.sessionId]: {
+          sessionId: result.surface.sessionId,
+          surfaceId: result.surface.surfaceId,
+        },
+      }))
       setTemporaryPrompt(DEFAULT_PROMPT)
       setTemporaryAttachments([])
       setExpandedSessionGroups((current) => new Set([...current, TEMPORARY_GROUP_ID]))
@@ -767,15 +837,27 @@ export function SessionLauncherView({
   const handleSelectSession = useCallback((session: Session) => {
     setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
-    reopenLauncherSessionForSession(session)
-  }, [reopenLauncherSessionForSession])
+  }, [])
 
   const handleOpenSessionArtifactsTab = useCallback((session: Session) => {
     setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
     setSessionPanelTabs((current) => ({ ...current, [session.id]: 'artifact' }))
-    reopenLauncherSessionForSession(session)
-  }, [reopenLauncherSessionForSession])
+  }, [])
+
+  const handleRetrySessionAttachment = useCallback(() => {
+    onSessionCreated?.()
+  }, [onSessionCreated])
+
+  const handleOpenExternalTerminal = useCallback(async (session: Session) => {
+    const opened = await activateSession(session.id)
+    if (!opened) onToast?.('error', t('sessions.launcher.noTerminalSurface'))
+  }, [onToast, t])
+
+  const handleCancelSessionSelection = useCallback((session: Session) => {
+    const project = projectForSession(session, projects)
+    setSelection(project ? { kind: 'project', projectId: project.id } : { kind: 'temporaryDraft' })
+  }, [projects])
 
   const handleTogglePinned = useCallback((session: Session) => {
     setSessionMenu(null)
@@ -1101,6 +1183,10 @@ export function SessionLauncherView({
             titleOverrides={titleOverrides}
             theme={resolvedTheme}
             onOpenSessionArtifacts={onOpenSessionArtifacts}
+            onResume={() => selectedSession && reopenLauncherSessionForSession(selectedSession)}
+            onRetryAttach={handleRetrySessionAttachment}
+            onOpenExternal={() => selectedSession && void handleOpenExternalTerminal(selectedSession)}
+            onCancel={() => selectedSession && handleCancelSessionSelection(selectedSession)}
             activeTab={sessionPanelTabs[selection.sessionId] ?? 'terminal'}
             onActiveTabChange={(tab) => setSessionPanelTabs((current) => ({ ...current, [selection.sessionId]: tab }))}
           />
@@ -1131,6 +1217,7 @@ export function SessionLauncherView({
             prompt={currentProjectPrompt}
             provider={selectedProjectProvider}
             permissionMode={selectedProjectPermissionMode}
+            rememberFullAccess={rememberedFullAccessProjectIds.has(selectedProject.id)}
             planMode={selectedProjectPlanMode}
             attachments={currentProjectAttachments}
             starting={startingProjectId === selectedProject.id}
@@ -1145,10 +1232,26 @@ export function SessionLauncherView({
                 [selectedProject.id]: normalizePermissionMode(provider, current[selectedProject.id]),
               }))
             }}
-            onPermissionModeChange={(permissionMode) => setPermissionModeByProjectId((current) => ({
-              ...current,
-              [selectedProject.id]: normalizePermissionMode(selectedProjectProvider, permissionMode),
-            }))}
+            onPermissionModeChange={(permissionMode) => {
+              const normalized = normalizePermissionMode(selectedProjectProvider, permissionMode)
+              setPermissionModeByProjectId((current) => ({
+                ...current,
+                [selectedProject.id]: normalized,
+              }))
+              if (normalized !== 'fullAccess') {
+                setRememberedFullAccessProjectIds((current) => {
+                  const next = new Set(current)
+                  next.delete(selectedProject.id)
+                  return next
+                })
+              }
+            }}
+            onRememberFullAccessChange={(remember) => setRememberedFullAccessProjectIds((current) => {
+              const next = new Set(current)
+              if (remember) next.add(selectedProject.id)
+              else next.delete(selectedProject.id)
+              return next
+            })}
             onPlanModeChange={(planMode) => setPlanModeByProjectId((current) => ({
               ...current,
               [selectedProject.id]: planMode,
@@ -1754,12 +1857,14 @@ function SessionComposer({
   prompt,
   provider,
   permissionMode,
+  rememberFullAccess = false,
   planMode,
   attachments,
   starting,
   onPromptChange,
   onProviderChange,
   onPermissionModeChange,
+  onRememberFullAccessChange,
   onPlanModeChange,
   onPickAttachments,
   onUploadPastedImage,
@@ -1770,12 +1875,14 @@ function SessionComposer({
   prompt: string
   provider: SpawnProvider
   permissionMode: AgentPermissionMode
+  rememberFullAccess?: boolean
   planMode: boolean
   attachments: SessionLaunchAttachment[]
   starting: boolean
   onPromptChange: (value: string) => void
   onProviderChange: (provider: SpawnProvider) => void
   onPermissionModeChange: (permissionMode: AgentPermissionMode) => void
+  onRememberFullAccessChange?: (remember: boolean) => void
   onPlanModeChange: (planMode: boolean) => void
   onPickAttachments: () => Promise<void>
   onUploadPastedImage: (file: File) => Promise<void>
@@ -2038,6 +2145,16 @@ function SessionComposer({
                     </div>
                   )}
                 </div>
+                {normalizedPermissionMode === 'fullAccess' && onRememberFullAccessChange && (
+                  <label className="session-launcher__remember-full-access">
+                    <input
+                      type="checkbox"
+                      checked={rememberFullAccess}
+                      onChange={(event) => onRememberFullAccessChange(event.target.checked)}
+                    />
+                    <span>{t('sessions.launcher.rememberFullAccess')}</span>
+                  </label>
+                )}
                 <button
                   type="button"
                   className={`session-launcher__plan-mode${planMode ? ' is-on' : ''}`}
@@ -2106,6 +2223,10 @@ function SessionLauncherTerminal({
   titleOverrides,
   theme,
   onOpenSessionArtifacts,
+  onResume,
+  onRetryAttach,
+  onOpenExternal,
+  onCancel,
   activeTab,
   onActiveTabChange,
 }: {
@@ -2118,6 +2239,10 @@ function SessionLauncherTerminal({
   titleOverrides: Record<string, string>
   theme: 'light' | 'dark'
   onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
+  onResume?: () => void
+  onRetryAttach?: () => void
+  onOpenExternal?: () => void
+  onCancel?: () => void
   activeTab: SessionPanelTab
   onActiveTabChange: (tab: SessionPanelTab) => void
 }) {
@@ -2127,13 +2252,32 @@ function SessionLauncherTerminal({
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const switchTraceIdRef = useRef<string>('')
   const switchStartedAtRef = useRef<number>(Date.now())
+  const [showRecovery, setShowRecovery] = useState(false)
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
-  const targetSurfaceId = liveTarget.surfaceId ?? suppliedSurfaceId
+  const targetSurfaceId = liveTarget.surfaceId ?? (usingRestoredSurface ? suppliedSurfaceId : undefined)
   const targetSessionId = liveTarget.sessionId ?? (targetSurfaceId ? sessionId : undefined)
   const canOpenNativeTerminal = Boolean(targetSurfaceId && targetSessionId)
   const terminalTabActive = activeTab === 'terminal'
   const targetKey = `${targetSessionId ?? 'missing'}:${targetSurfaceId ?? 'missing'}`
+
+  useEffect(() => {
+    setShowDiagnostics(false)
+    if (canOpenNativeTerminal || !terminalTabActive) {
+      setShowRecovery(false)
+      return undefined
+    }
+    const rawStatus = (session?.surfaceStatus ?? session?.status ?? '').toLowerCase()
+    const historical = rawStatus === 'exited' || rawStatus === 'dead' || rawStatus === 'failed'
+    if (historical) {
+      setShowRecovery(true)
+      return undefined
+    }
+    setShowRecovery(false)
+    const timer = window.setTimeout(() => setShowRecovery(true), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [canOpenNativeTerminal, session?.id, session?.status, session?.surfaceStatus, terminalTabActive])
 
   useLayoutEffect(() => {
     const startedAt = Date.now()
@@ -2289,6 +2433,24 @@ function SessionLauncherTerminal({
           <strong>{session ? title : t('rail.session')}</strong>
           {reopening ? <Loader2 size={16} className="spin" aria-hidden /> : null}
           <span>{fallbackMessage}</span>
+          {showRecovery && !reopening && (
+            <div className="session-launcher-terminal__recovery-actions">
+              {session && sessionCanBeReopened(session) && onResume ? (
+                <button type="button" className="primary" onClick={onResume}>{t('sessions.launcher.resumeSession')}</button>
+              ) : null}
+              {onRetryAttach ? <button type="button" onClick={onRetryAttach}>{t('sessions.launcher.retryAttach')}</button> : null}
+              {onOpenExternal ? <button type="button" onClick={onOpenExternal}>{t('sessions.launcher.openExternalTerminal')}</button> : null}
+              {onCancel ? <button type="button" onClick={onCancel}>{t('common.cancel')}</button> : null}
+              <button type="button" onClick={() => setShowDiagnostics((value) => !value)}>{t('sessions.launcher.viewDiagnostics')}</button>
+            </div>
+          )}
+          {showDiagnostics && session ? (
+            <dl className="session-launcher-terminal__diagnostics">
+              <div><dt>session</dt><dd>{session.id}</dd></div>
+              <div><dt>status</dt><dd>{session.surfaceStatus ?? session.status}</dd></div>
+              <div><dt>surface</dt><dd>{session.surfaceId ?? 'none'}</dd></div>
+            </dl>
+          ) : null}
         </div>
       ) : null}
       {activeTab === 'artifact' && session && artifactTarget && (

@@ -23,6 +23,7 @@ import { useI18n } from '../lib/i18n'
  */
 const POLL_INTERVAL_MS = 8 * 60 * 1000
 const DISMISS_KEY = 'meee2.updateBanner.dismissedVersion'
+const IS_DEBUG_BUILD = (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true
 
 const COPY = {
   en: {
@@ -65,6 +66,7 @@ export function UpdateBanner() {
   }, [])
 
   useEffect(() => {
+    if (IS_DEBUG_BUILD) return undefined
     refresh()
     const id = window.setInterval(refresh, POLL_INTERVAL_MS)
     // 切回 tab 时也刷一次:用户离开很久回来时立即同步状态。
@@ -102,7 +104,7 @@ export function UpdateBanner() {
     setDismissedVersion(v)
   }
 
-  if (!info || !info.hasUpdate || !info.latest) return null
+  if (IS_DEBUG_BUILD || info?.debugBuild || !info || !info.hasUpdate || !info.latest) return null
   // 用户已忽略过这个版本 → 不再打扰,直到远端出更高版本(latest 变了)。
   if (dismissedVersion && dismissedVersion === info.latest) return null
 

@@ -18,7 +18,7 @@ fi
 
 echo ""
 echo "=== 2/5 Tests ==="
-if swift test 2>&1 | tail -5; then
+if ./scripts/test-isolated-home.sh -- swift test 2>&1 | tail -8; then
     echo "✓ Tests passed"
 else
     echo "✗ Tests failed"

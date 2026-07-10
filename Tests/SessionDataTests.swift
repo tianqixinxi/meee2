@@ -208,4 +208,19 @@ final class SessionDataTests: XCTestCase {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["schema_version"] as? Int, SessionData.currentSchemaVersion)
     }
+
+    func testFrozenV2FixtureMigratesToRevisionSchema() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/SessionData/v2.json")
+        let decoded = try JSONDecoder().decode(SessionData.self, from: Data(contentsOf: fixture))
+        XCTAssertEqual(decoded.schemaVersion, 2)
+        XCTAssertEqual(decoded.revision, 0)
+
+        let migrated = SessionDataMigrations.apply(to: decoded, from: decoded.schemaVersion)
+        XCTAssertEqual(migrated.schemaVersion, SessionData.currentSchemaVersion)
+        XCTAssertEqual(migrated.revision, 0)
+        XCTAssertEqual(migrated.sessionId, "frozen-v2")
+        XCTAssertEqual(migrated.providerResumeSessionId, "provider-v2")
+    }
 }

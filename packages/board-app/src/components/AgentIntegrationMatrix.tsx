@@ -340,6 +340,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               disabled={busyId === row.id}
               onClick={() => handleCompleteAuth(row.id)}
               title={t('integrations.finishOauth')}
+              aria-label={`${t('integrations.completeAuth')} ${row.name}`}
             >
               {busyId === row.id ? t('integrations.openingBrowser') : t('integrations.completeAuth')}
             </button>
@@ -355,6 +356,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                     disabled={busyId === row.id}
                     onClick={() => handleInstall(row.id)}
                     title={t('integrations.oneClickInstall')}
+                    aria-label={`${t('integrations.install')} ${row.name}`}
                   >
                     {busyId === row.id ? '...' : t('integrations.install')}
                   </button>
@@ -368,6 +370,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                     disabled={busyId === row.id}
                     onClick={() => handleInstall(row.id)}
                     title={t('integrations.oneClickInstallRemote')}
+                    aria-label={`${t('integrations.install')} ${row.name}`}
                   >
                     {busyId === row.id ? '...' : t('integrations.install')}
                   </button>
@@ -389,6 +392,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                     disabled={busyId === row.id}
                     onClick={() => handleConnectLocalStdio(row.id, install)}
                     title={needsCredentials ? t('integrations.connectOAuthHint') : t('integrations.oneClickInstall')}
+                    aria-label={`${t('integrations.connect')} ${row.name}`}
                   >
                     {busyId === row.id ? '...' : t('integrations.connect')}
                   </button>
@@ -400,6 +404,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                   className="agent-matrix__setup"
                   disabled={busyId === row.id}
                   onClick={() => handleSetup(row.id)}
+                  aria-label={`${t('common.setUp')} ${row.name}`}
                 >
                   {busyId === row.id ? '...' : t('common.setUp')}
                 </button>

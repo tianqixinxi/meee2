@@ -13,9 +13,18 @@ import {
   Upload,
   Users,
   Wrench,
+  X,
   type LucideIcon,
 } from 'lucide-react'
-import { type ChangeEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
+import {
+  type ChangeEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { BoardState, CanvasInfo, CanvasObject, CanvasRelation, CanvasScope } from '../types'
 import {
   fetchClaudeWorkflows,
@@ -611,12 +620,82 @@ function TemplateModal({
   children: ReactNode
   wide?: boolean
 }) {
+  const titleId = useId()
+  const subtitleId = useId()
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    closeButtonRef.current?.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute('hidden'))
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previouslyFocused?.focus()
+    }
+  }, [])
+
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className={`modal canvas-confirm-modal template-gallery__apply-modal${wide ? ' template-gallery__apply-modal--wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        ref={dialogRef}
+        className={`modal canvas-confirm-modal template-gallery__apply-modal${wide ? ' template-gallery__apply-modal--wide' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={subtitleId}
+        tabIndex={-1}
+      >
         <div className="modal-header">
-          <div className="modal-title">{title}</div>
-          <div className="modal-subtitle">{subtitle}</div>
+          <div className="modal-title" id={titleId}>{title}</div>
+          <div className="modal-subtitle" id={subtitleId}>{subtitle}</div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="modal-close-button"
+            onClick={onClose}
+            aria-label={`Close ${title}`}
+          >
+            <X size={16} aria-hidden />
+          </button>
         </div>
         <div className="modal-body col" style={{ gap: 10 }}>{children}</div>
       </div>

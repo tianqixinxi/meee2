@@ -18,7 +18,30 @@ export default defineConfig(({ mode }) => ({
     outDir: '../../Sources/Board/WebDist',
     emptyOutDir: true,
     sourcemap: false,
-    chunkSizeWarningLimit: 2000,
+    chunkSizeWarningLimit: 500,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('/node_modules/')) return undefined
+          if (id.includes('/@xyflow/')) return 'vendor-xyflow'
+          if (
+            id.includes('/react/') ||
+            id.includes('/react-dom/') ||
+            id.includes('/scheduler/')
+          ) return 'vendor-react'
+          if (
+            id.includes('/react-markdown/') ||
+            id.includes('/remark-') ||
+            id.includes('/rehype-') ||
+            id.includes('/unified@') ||
+            id.includes('/micromark') ||
+            id.includes('/mdast-') ||
+            id.includes('/hast-')
+          ) return 'vendor-markdown'
+          return undefined
+        },
+      },
+    },
   },
   server: {
     host: '127.0.0.1',

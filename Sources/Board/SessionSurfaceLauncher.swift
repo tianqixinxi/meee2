@@ -121,6 +121,7 @@ enum SessionSurfaceLauncher {
         sessionId: String,
         providerResumeSessionId providerResumeSessionIdOverride: String? = nil,
         provider providerOverride: String? = nil,
+        permissionMode: String? = nil,
         cwd cwdOverride: String? = nil
     ) throws -> SessionSurfaceRestoreResult {
         let sessionData = SessionStore.shared.get(sessionId)
@@ -157,8 +158,14 @@ enum SessionSurfaceLauncher {
         return try restoreSessionSurface(
             sessionId: resumeSessionId,
             cwd: cwd,
-            freshCommand: AgentLaunchCommand.fullAccessCommand(forProvider: provider),
-            resumeCommand: { AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: $0) },
+            freshCommand: AgentLaunchCommand.defaultCommand(forProvider: provider),
+            resumeCommand: {
+                AgentLaunchCommand.resumeCommand(
+                    forProvider: provider,
+                    sessionId: $0,
+                    permissionMode: permissionMode
+                )
+            },
             createIfMissing: true,
             canvasId: terminalInfo?.canvasId,
             nodeId: terminalInfo?.nodeId,

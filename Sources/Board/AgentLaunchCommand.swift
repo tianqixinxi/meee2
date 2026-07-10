@@ -7,7 +7,11 @@ struct AgentLaunchAttachment: Codable, Equatable {
 }
 
 enum AgentLaunchCommand {
-    static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+    static let codexFullAccessFlags = "--dangerously-bypass-approvals-and-sandbox"
+
+    static func defaultCommand(forProvider provider: String) -> String {
+        launchCommand(forProvider: provider, permissionMode: "onRequest")
+    }
 
     static func fullAccessCommand(forProvider provider: String) -> String {
         launchCommand(forProvider: provider, permissionMode: "fullAccess")
@@ -19,15 +23,15 @@ enum AgentLaunchCommand {
         let planRequested = planMode || mode == "plan"
         if provider == "codex" {
             let command: String
-            switch mode == "plan" ? "fullAccess" : mode {
+            switch mode == "plan" ? "onRequest" : mode {
             case "readOnly":
-                command = "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+                command = "codex --sandbox read-only --ask-for-approval on-request"
             case "onRequest", "default":
-                command = "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+                command = "codex --sandbox workspace-write --ask-for-approval on-request"
             case "acceptEdits":
-                command = "codex --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust"
+                command = "codex --sandbox workspace-write --ask-for-approval never"
             default:
-                command = "codex \(codexAutomationFlags)"
+                command = "codex \(codexFullAccessFlags)"
             }
             return command
         }
@@ -44,11 +48,17 @@ enum AgentLaunchCommand {
         }
     }
 
-    static func resumeCommand(forProvider provider: String, sessionId: String) -> String {
+    static func resumeCommand(
+        forProvider provider: String,
+        sessionId: String,
+        permissionMode: String? = "onRequest"
+    ) -> String {
         let quotedSessionId = "'\(sessionId.replacingOccurrences(of: "'", with: "'\\''"))'"
-        return normalizedProvider(provider) == "codex"
-            ? "codex \(codexAutomationFlags) resume \(quotedSessionId)"
-            : "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+        let provider = normalizedProvider(provider)
+        let base = launchCommand(forProvider: provider, permissionMode: permissionMode)
+        return provider == "codex"
+            ? "\(base) resume \(quotedSessionId)"
+            : "\(base) --resume \(quotedSessionId)"
     }
 
     static func launcherInitialPrompt(
@@ -115,7 +125,7 @@ enum AgentLaunchCommand {
         case "fullaccess", "full_access", "full-access", "bypasspermissions", "bypass", "danger":
             return "fullAccess"
         default:
-            return "fullAccess"
+            return "onRequest"
         }
     }
 
@@ -159,7 +169,7 @@ enum AgentLaunchCommand {
         let trimmed = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             let provider = normalizedProvider(fallbackProvider)
-            return (provider, fullAccessCommand(forProvider: provider))
+            return (provider, defaultCommand(forProvider: provider))
         }
 
         let lower = trimmed.lowercased()
@@ -172,28 +182,29 @@ enum AgentLaunchCommand {
             inferredProvider = normalizedProvider(fallbackProvider)
         }
         if commandUsesInternalResumeId(trimmed) {
-            return (inferredProvider, fullAccessCommand(forProvider: inferredProvider))
+            return (inferredProvider, defaultCommand(forProvider: inferredProvider))
         }
         if lower.hasPrefix("codex") {
-            return ("codex", commandWithCodexAutomationFlags(trimmed))
+            return ("codex", commandWithCodexSafetyDefaults(trimmed))
         }
         if lower.hasPrefix("claude") {
-            if lower.contains("--dangerously-skip-permissions") || lower.contains("--permission-mode bypasspermissions") {
+            if lower.contains("--dangerously-skip-permissions") || lower.contains("--permission-mode") {
                 return ("claude", trimmed)
             }
-            return ("claude", "\(trimmed) --dangerously-skip-permissions")
+            return ("claude", "\(trimmed) --permission-mode default")
         }
         return (normalizedProvider(fallbackProvider), trimmed)
     }
 
-    private static func commandWithCodexAutomationFlags(_ command: String) -> String {
+    private static func commandWithCodexSafetyDefaults(_ command: String) -> String {
         var parts = [command]
         let lower = command.lowercased()
-        if !lower.contains("--dangerously-bypass-approvals-and-sandbox") {
-            parts.append("--dangerously-bypass-approvals-and-sandbox")
+        let explicitlyBypassesApprovals = lower.contains("--dangerously-bypass-approvals-and-sandbox")
+        if !explicitlyBypassesApprovals && !lower.contains("--sandbox") {
+            parts.append("--sandbox workspace-write")
         }
-        if !lower.contains("--dangerously-bypass-hook-trust") {
-            parts.append("--dangerously-bypass-hook-trust")
+        if !explicitlyBypassesApprovals && !lower.contains("--ask-for-approval") {
+            parts.append("--ask-for-approval on-request")
         }
         return parts.joined(separator: " ")
     }

@@ -112,8 +112,12 @@ class ClaudePlugin: SessionPlugin {
             onEvent: { [weak self] event in
                 self?.handleHookEvent(event)
             },
-            onPermissionFailure: { [weak self] sessionId, toolUseId in
-                self?.handlePermissionFailure(sessionId: sessionId, toolUseId: toolUseId)
+            onPermissionCompletion: { [weak self] sessionId, toolUseId, outcome in
+                self?.handlePermissionCompletion(
+                    sessionId: sessionId,
+                    toolUseId: toolUseId,
+                    outcome: outcome
+                )
             }
         )
 
@@ -835,33 +839,53 @@ class ClaudePlugin: SessionPlugin {
         return nil
     }
 
-    private func handlePermissionFailure(sessionId: String, toolUseId: String) {
+    private func handlePermissionCompletion(
+        sessionId: String,
+        toolUseId: String,
+        outcome: PermissionTerminalOutcome
+    ) {
+        guard clearPendingPermissionState(sessionId: sessionId, toolUseId: toolUseId) else { return }
+        MDebug("[ClaudePlugin] Permission completed sid=\(sessionId.prefix(8)) tool=\(toolUseId.prefix(12)) outcome=\(outcome.rawValue)")
+    }
+
+    @discardableResult
+    private func clearPendingPermissionState(sessionId: String, toolUseId: String) -> Bool {
         pendingPermissionsLock.lock()
+        guard pendingPermissions[sessionId]?.toolUseId == toolUseId else {
+            pendingPermissionsLock.unlock()
+            return false
+        }
         pendingPermissions.removeValue(forKey: sessionId)
         pendingPermissionsLock.unlock()
+
+        sessionStatusesLock.lock()
+        if sessionStatuses[sessionId] == .permissionRequired {
+            sessionStatuses[sessionId] = .idle
+        }
+        sessionStatusesLock.unlock()
         notifySessionsUpdated()
+        return true
     }
 
     // MARK: - 权限响应
 
     private func respondToPermission(sessionId: String, decision: PermissionDecision) {
         pendingPermissionsLock.lock()
-        guard pendingPermissions[sessionId] != nil else {
+        guard let pending = pendingPermissions[sessionId] else {
             pendingPermissionsLock.unlock()
             return
         }
-        pendingPermissions.removeValue(forKey: sessionId)
         pendingPermissionsLock.unlock()
+
+        guard clearPendingPermissionState(sessionId: sessionId, toolUseId: pending.toolUseId) else { return }
 
         // 发送响应
         switch decision {
         case .allow:
-            hookServer.respondToPermissionBySession(sessionId: sessionId, decision: "allow")
+            hookServer.respondToPermission(toolUseId: pending.toolUseId, decision: "allow")
         case .deny(let reason):
-            hookServer.respondToPermissionBySession(sessionId: sessionId, decision: "deny", reason: reason)
+            hookServer.respondToPermission(toolUseId: pending.toolUseId, decision: "deny", reason: reason)
         }
-
-        notifySessionsUpdated()
     }
 
     // MARK: - 辅助方法

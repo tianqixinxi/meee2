@@ -31,6 +31,7 @@ public final class MCPConfigManager {
     private let serverName = "meee2"
     private let serverJsName = "server.js"
     private let subdir = "mcp-meee2"
+    private let homeDirectory: URL
 
     /// meee2 MCP server 暴露的全部 tool 名（必须跟 Bridge/mcp-meee2/server.js
     /// 里 TOOLS 数组里的 name 字段保持同步——加新 tool 时两边都要改）。
@@ -51,25 +52,31 @@ public final class MCPConfigManager {
     ]
 
     private var configPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")
+        homeDirectory.appendingPathComponent(".claude.json")
     }
 
     /// permissions.allow 的归属文件——与 hooks 同源（settings.json，不是
     /// 那个 200KB 的 .claude.json 大杂烩）。
     private var settingsPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
+        homeDirectory
             .appendingPathComponent(".claude")
             .appendingPathComponent("settings.json")
     }
 
     /// Codex CLI / Desktop 读取的全局配置。
     private var codexConfigPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
+        homeDirectory
             .appendingPathComponent(".codex")
             .appendingPathComponent("config.toml")
     }
 
-    private init() {}
+    private convenience init() {
+        self.init(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    init(homeDirectory: URL) {
+        self.homeDirectory = homeDirectory.standardizedFileURL
+    }
 
     public func diagnoseMeee2Server() -> Meee2MCPStatus {
         let expectedServerPath = resolveServerScriptPath()
@@ -85,7 +92,7 @@ public final class MCPConfigManager {
         // readiness 的 mcpCheck 因 configured=false 永远报红并循环触发修复。
         let pluginManaged = !selfConfigured && Meee2AgentRuntimeInstaller.meee2ClaudePluginActive()
         let configured = selfConfigured || pluginManaged
-        let stagedServerPath = URL(fileURLWithPath: NSHomeDirectory())
+        let stagedServerPath = homeDirectory
             .appendingPathComponent(".meee2", isDirectory: true)
             .appendingPathComponent(subdir, isDirectory: true)
             .appendingPathComponent(serverJsName).path
@@ -206,6 +213,16 @@ public final class MCPConfigManager {
         ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
     }
 
+    /// Remove only meee2's self-registered Claude/Codex MCP entries and its
+    /// permission allowlist. Third-party MCP servers and user settings remain.
+    @discardableResult
+    public func unregisterMeee2() -> Bool {
+        let claudeRemoved = deregisterClaudeSelfEntry()
+        let allowlistRemoved = removeMeee2Allowlist()
+        let codexRemoved = removeCodexMCPServer()
+        return claudeRemoved && allowlistRemoved && codexRemoved
+    }
+
     /// 自注册路径:把 `mcpServers.meee2` 写进 ~/.claude.json(读→merge→原子写)。
     /// 仅当 Claude 插件不在时调用。env 里仅当用户显式配置 self-hosted base URL 时
     /// 才注入 MEEE2_API_URL,默认 SaaS 保留 MCP server 的本地优先 discovery。
@@ -251,17 +268,38 @@ public final class MCPConfigManager {
 
     /// 插件接管 Claude 侧时,清掉历史上自注册的 `mcpServers.meee2`(若有),
     /// 避免与 mcp__plugin_meee2_meee2__* 双注册。幂等。
-    private func deregisterClaudeSelfEntry() {
+    @discardableResult
+    private func deregisterClaudeSelfEntry() -> Bool {
         guard var rootObject = readConfig(),
               var mcpServers = rootObject["mcpServers"] as? [String: Any],
               mcpServers[serverName] != nil else {
-            return
+            return true
         }
         mcpServers.removeValue(forKey: serverName)
         rootObject["mcpServers"] = mcpServers
         if writeConfigAtomic(rootObject) {
             NSLog("[MCPConfigManager] removed legacy self-registered meee2 entry from ~/.claude.json (plugin active)")
+            return true
         }
+        return false
+    }
+
+    @discardableResult
+    private func removeMeee2Allowlist() -> Bool {
+        guard var rootObject = readSettings() else { return true }
+        guard var permissions = rootObject["permissions"] as? [String: Any],
+              let allow = permissions["allow"] as? [String] else { return true }
+        let retained = allow.filter {
+            !$0.hasPrefix("mcp__meee2__") && !$0.hasPrefix("mcp__plugin_meee2_meee2__")
+        }
+        guard retained.count != allow.count else { return true }
+        permissions["allow"] = retained
+        rootObject["permissions"] = permissions
+        guard writeSettingsAtomic(rootObject) else {
+            NSLog("[MCPConfigManager] failed to remove meee2 permissions allowlist")
+            return false
+        }
+        return true
     }
 
     /// Generic upsert of a stdio MCP server into `~/.claude.json` mcpServers —
@@ -321,7 +359,7 @@ public final class MCPConfigManager {
             )
         }
         let sourceDir = source.deletingLastPathComponent()
-        let targetDir = URL(fileURLWithPath: NSHomeDirectory())
+        let targetDir = homeDirectory
             .appendingPathComponent(".meee2", isDirectory: true)
             .appendingPathComponent(subdir, isDirectory: true)
         try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
@@ -446,6 +484,24 @@ public final class MCPConfigManager {
         }
     }
 
+    @discardableResult
+    private func removeCodexMCPServer() -> Bool {
+        guard let original = try? String(contentsOf: codexConfigPath, encoding: .utf8) else { return true }
+        let next = removeTomlTableBlock(
+            in: original,
+            tableHeader: "[mcp_servers.\(serverName)]"
+        )
+        guard next != original else { return true }
+        do {
+            try next.write(to: codexConfigPath, atomically: true, encoding: .utf8)
+            NSLog("[MCPConfigManager] removed Codex meee2 MCP server")
+            return true
+        } catch {
+            NSLog("[MCPConfigManager] failed to remove Codex meee2 MCP server: \(error)")
+            return false
+        }
+    }
+
     private func upsertTomlTableBlock(in content: String, tableHeader: String, block: String) -> String {
         let normalizedBlock = block.hasSuffix("\n") ? block : block + "\n"
         var lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -469,6 +525,21 @@ public final class MCPConfigManager {
 
         let replacement = normalizedBlock.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         lines.replaceSubrange(start..<end, with: replacement)
+        return lines.joined(separator: "\n")
+    }
+
+    private func removeTomlTableBlock(in content: String, tableHeader: String) -> String {
+        var lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == tableHeader }) else {
+            return content
+        }
+        var end = start + 1
+        while end < lines.count {
+            let trimmed = lines[end].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") { break }
+            end += 1
+        }
+        lines.removeSubrange(start..<end)
         return lines.joined(separator: "\n")
     }
 
@@ -522,7 +593,7 @@ public final class MCPConfigManager {
         }
 
         // 2) Scan known install locations. nvm: newest version wins.
-        let nvmRoot = "\(NSHomeDirectory())/.nvm/versions/node"
+        let nvmRoot = homeDirectory.appendingPathComponent(".nvm/versions/node").path
         if let versions = try? fm.contentsOfDirectory(atPath: nvmRoot) {
             let newestFirst = versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
             for version in newestFirst {

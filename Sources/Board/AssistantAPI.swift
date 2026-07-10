@@ -111,6 +111,54 @@ enum AssistantAPI {
         return BoardAPI.jsonResponse(envelope)
     }
 
+    /// GET /api/assistant/secret?provider=openai|anthropic
+    /// Returns only whether a Keychain value exists; secret material never
+    /// crosses back into the WebView.
+    static func secretStatus(_ req: HttpRequest) -> HttpResponse {
+        let provider = req.queryParams.first(where: { $0.0 == "provider" })?.1
+            .removingPercentEncoding ?? ""
+        guard let account = credentialAccount(provider: provider) else {
+            return BoardAPI.errorResponse("bad_request", "provider must be openai or anthropic", status: 400)
+        }
+        struct SecretStatusDTO: Encodable {
+            let provider: String
+            let configured: Bool
+        }
+        return BoardAPI.jsonResponse(SecretStatusDTO(
+            provider: provider,
+            configured: SecureCredentialStore.shared.read(account: account) != nil
+        ))
+    }
+
+    /// PUT /api/assistant/secret — stores a hosted-provider API key in Keychain.
+    static func updateSecret(_ req: HttpRequest) -> HttpResponse {
+        let data = Data(req.body)
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let provider = json["provider"] as? String,
+              let account = credentialAccount(provider: provider),
+              let apiKey = json["apiKey"] as? String,
+              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "provider and non-empty apiKey are required", status: 400)
+        }
+        guard SecureCredentialStore.shared.write(apiKey, account: account) else {
+            return BoardAPI.errorResponse("keychain_write_failed", "Unable to save the API key in macOS Keychain", status: 500)
+        }
+        return BoardAPI.jsonResponse(["ok": true, "configured": true])
+    }
+
+    /// DELETE /api/assistant/secret?provider=openai|anthropic
+    static func deleteSecret(_ req: HttpRequest) -> HttpResponse {
+        let provider = req.queryParams.first(where: { $0.0 == "provider" })?.1
+            .removingPercentEncoding ?? ""
+        guard let account = credentialAccount(provider: provider) else {
+            return BoardAPI.errorResponse("bad_request", "provider must be openai or anthropic", status: 400)
+        }
+        guard SecureCredentialStore.shared.delete(account: account) else {
+            return BoardAPI.errorResponse("keychain_delete_failed", "Unable to remove the API key from macOS Keychain", status: 500)
+        }
+        return BoardAPI.jsonResponse(["ok": true, "configured": false])
+    }
+
     // MARK: - Orchestration loop
 
     /// Drives the conversation: call provider → relay events → if tool
@@ -217,7 +265,12 @@ enum AssistantAPI {
         let dict = raw ?? [:]
         let providerStr = (dict["provider"] as? String) ?? "local"
         let provider = AssistantSettings.Provider(rawValue: providerStr) ?? .local
-        let apiKey = (dict["apiKey"] as? String) ?? ""
+        let suppliedApiKey = ((dict["apiKey"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = suppliedApiKey.isEmpty
+            ? credentialAccount(provider: provider.rawValue)
+                .flatMap { SecureCredentialStore.shared.read(account: $0) } ?? ""
+            : suppliedApiKey
         let baseUrl = (dict["baseUrl"] as? String) ?? ""
         let model = (dict["model"] as? String) ?? ""
         let enabledList = dict["enabledTools"] as? [String]
@@ -242,6 +295,14 @@ enum AssistantAPI {
             localRunPurpose: localRunPurpose,
             selectedElements: selectedElements
         )
+    }
+
+    private static func credentialAccount(provider: String) -> String? {
+        switch provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "openai": return "assistant.openai.api-key"
+        case "anthropic": return "assistant.anthropic.api-key"
+        default: return nil
+        }
     }
 
     private static func parseSelectedElements(_ raw: [[String: Any]]?) -> [AssistantSelectedElement] {

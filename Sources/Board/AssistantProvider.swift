@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 // MARK: - Shared types
 
@@ -1125,8 +1126,8 @@ final class AssistantLocalCodexSessionStore {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".meee2/assistant/codex-sessions.json")
+            self.fileURL = StorageRoots.processDefault.baseDirectory
+                .appendingPathComponent("assistant/codex-sessions.json")
         }
     }
 

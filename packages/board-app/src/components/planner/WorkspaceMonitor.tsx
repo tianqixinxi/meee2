@@ -164,7 +164,14 @@ export function WorkspaceMonitor({
           <span className="planner-monitor__result-count">{t('monitor.resultCount', { count: String(totalItems) })}</span>
         </div>
 
-        {error && <div className="planner-proposal-panel__error">{error}</div>}
+        {error && (
+          <div className="planner-proposal-panel__error planner-monitor__error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="ghost" onClick={loadMonitor}>
+              {t('common.retry')}
+            </button>
+          </div>
+        )}
         {!monitor && !error ? (
           <div className="planner-empty-state">
             <div className="boot-spinner" />

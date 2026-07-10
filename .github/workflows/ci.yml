@@ -44,12 +44,8 @@ jobs:
       - name: Typecheck board packages
         run: pnpm typecheck
 
-  # Informational only — NOT a required status check, so a test failure or low
-  # coverage never blocks merge (deliberately no gate). Runs the board-app
-  # vitest suite, surfaces the coverage table in the run summary, and uploads
-  # the HTML report as an artifact.
   board-tests:
-    name: Board Packages · Test · Coverage
+    name: Board Packages · Test · Coverage Gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -77,10 +73,6 @@ jobs:
         run: pnpm build
 
       - name: Run board-app tests with coverage
-        # Informational only — a test failure surfaces as a red STEP but must
-        # not fail the job (the job itself is already non-required, but this
-        # keeps it honestly green so it never reads as a merge gate).
-        continue-on-error: true
         working-directory: packages/board-app
         run: pnpm test:cov 2>&1 | tee /tmp/vitest-cov.txt
 
@@ -90,7 +82,7 @@ jobs:
           {
             echo "## board-app test coverage (planner)"
             echo ""
-            echo "> Informational only — not a merge gate."
+            echo "> Test failures block this CI job; coverage remains diagnostic."
             echo ""
             echo '```'
             awk '/Coverage report from v8/{p=1} p' /tmp/vitest-cov.txt || cat /tmp/vitest-cov.txt
@@ -158,6 +150,9 @@ jobs:
           # their .d.ts before tsc on board-app can resolve the imports.
           pnpm build
 
+      - name: Enforce Board bundle budgets
+        run: ./scripts/check-board-bundle-size.sh
+
       - name: Install SwiftLint
         run: |
           if ! command -v swiftlint >/dev/null 2>&1; then
@@ -168,8 +163,20 @@ jobs:
       - name: Build (debug)
         run: swift build
 
+      - name: Verify isolated HOME gate
+        run: ./scripts/tests/test-isolated-home-gate.sh
+
       - name: Test
-        run: swift test --parallel
+        # One isolated storage root is intentionally shared by the test
+        # process and any CLI children it launches. Keep this gate serial so
+        # separate XCTest workers cannot race on that root.
+        run: ./scripts/test-isolated-home.sh -- swift test
+
+      - name: Session mutation Thread Sanitizer
+        run: ./scripts/test-isolated-home.sh -- swift test --sanitize=thread --filter SessionStoreConcurrencyTests
+
+      - name: Test control-token helper
+        run: python3 scripts/tests/test_board_control.py
 
       - name: SwiftLint (strict)
         run: swiftlint lint --strict --quiet

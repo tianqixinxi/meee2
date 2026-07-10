@@ -35,9 +35,7 @@ public final class CardTemplateStore {
     private let queue = DispatchQueue(label: "com.meee2.CardTemplateStore", qos: .utility)
 
     private init() {
-        let home = NSHomeDirectory()
-        self.dir = URL(fileURLWithPath: home)
-            .appendingPathComponent(".meee2")
+        self.dir = StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("card-templates")
         // 创建目录（若不存在）
         do {

@@ -342,6 +342,20 @@ async function apiFromRuntimeInfo() {
   }
 }
 
+async function controlTokenForAPI(api) {
+  if (process.env.MEEE2_CONTROL_TOKEN) return process.env.MEEE2_CONTROL_TOKEN
+  try {
+    const raw = await fs.readFile(runtimeInfoPath(), 'utf8')
+    const json = JSON.parse(raw)
+    if (json?.url === api && typeof json?.controlToken === 'string') {
+      return json.controlToken
+    }
+  } catch {
+    // The request below will return a precise 401 if runtime info is absent.
+  }
+  return null
+}
+
 async function discoverAPI(force = false) {
   if (process.env.MEEE2_API_URL) return process.env.MEEE2_API_URL
 
@@ -369,21 +383,23 @@ async function discoverAPI(force = false) {
 async function callApi(method, path, body) {
   let res
   let api = await discoverAPI()
-  try {
-    res = await fetch(`${api}${path}`, {
+  const request = async () => {
+    const headers = { 'content-type': 'application/json' }
+    const token = await controlTokenForAPI(api)
+    if (token) headers['X-Meee2-Control-Token'] = token
+    return fetch(`${api}${path}`, {
       method,
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     })
+  }
+  try {
+    res = await request()
   } catch (e) {
     cachedAPI = null
     api = await discoverAPI(true)
     try {
-      res = await fetch(`${api}${path}`, {
-        method,
-        headers: { 'content-type': 'application/json' },
-        body: body ? JSON.stringify(body) : undefined,
-      })
+      res = await request()
     } catch (retryError) {
       throw new Error(
         `meee2 BoardServer unreachable at ${api} — is the meee2 app running? ` +

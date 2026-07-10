@@ -102,7 +102,7 @@ export interface Meee2AgentRuntimeInstallResult {
   status: Meee2AgentRuntimeStatus
 }
 
-export type ReadinessStatus = 'pass' | 'fail' | 'warn' | 'info'
+export type ReadinessStatus = 'pass' | 'fail' | 'warn'
 export type ReadinessSeverity = 'required' | 'recommended' | 'informational'
 export type ReadinessOverallStatus = 'ready' | 'needsSetup' | 'broken'
 
@@ -119,9 +119,13 @@ export interface ReadinessCheck {
   status: ReadinessStatus
   severity: ReadinessSeverity
   detail: string
+  message: string
   recoveryAction: ReadinessAction | null
+  settingsSection: SettingsSection
   metadata: Record<string, string>
 }
+
+export type SettingsSection = 'general' | 'dynamicIsland' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer' | string
 
 export interface ReadinessReport {
   overall: ReadinessOverallStatus
@@ -337,6 +341,10 @@ export interface CoordinationGroup {
 }
 
 export interface BoardState {
+  /** Monotonic within one BoardServer launch; absent when talking to an older server. */
+  revision?: number
+  /** ISO8601 timestamp for the revision's latest state.changed broadcast. */
+  generatedAt?: string
   sessions: Session[]
   channels: Channel[]
   coordinationGroups: CoordinationGroup[]
@@ -1006,6 +1014,25 @@ export interface SessionArtifactsEnvelope {
 
 export interface ArtifactCandidateListEnvelope {
   candidates: SessionArtifactCandidate[]
+}
+
+export interface ArtifactPageItem {
+  sourceKind: 'artifact' | 'candidate'
+  canvas: CanvasInfo
+  node?: PlanningNode | null
+  sessionId?: string | null
+  artifacts: PlannerArtifact[]
+  candidate?: SessionArtifactCandidate | null
+}
+
+export interface ArtifactPageEnvelope {
+  items: ArtifactPageItem[]
+  cursor?: string | null
+  total: number
+  hasMore: boolean
+  candidateTotal: number
+  canvasCount: number
+  groupCounts: Record<string, number>
 }
 
 export interface ArtifactCandidateMutationEnvelope {

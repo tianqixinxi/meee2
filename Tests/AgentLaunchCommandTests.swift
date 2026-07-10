@@ -9,7 +9,7 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(launch.provider, "claude")
-        XCTAssertEqual(launch.command, "claude --dangerously-skip-permissions")
+        XCTAssertEqual(launch.command, "claude --permission-mode default")
     }
 
     func testNormalizeDowngradesCodexInternalResumeToFreshCommand() {
@@ -19,7 +19,7 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(launch.provider, "codex")
-        XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust")
+        XCTAssertEqual(launch.command, "codex --sandbox workspace-write --ask-for-approval on-request")
     }
 
     func testNormalizeDowngradesGhosttySurfaceResumeToFreshCommand() {
@@ -29,7 +29,7 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(launch.provider, "claude")
-        XCTAssertEqual(launch.command, "claude --dangerously-skip-permissions")
+        XCTAssertEqual(launch.command, "claude --permission-mode default")
     }
 
     func testNormalizeKeepsProviderResumeIds() {
@@ -39,27 +39,27 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(launch.provider, "claude")
-        XCTAssertEqual(launch.command, "claude --resume 8db44e39-685d-47ab-bd0e-5e97386ded80 --dangerously-skip-permissions")
+        XCTAssertEqual(launch.command, "claude --resume 8db44e39-685d-47ab-bd0e-5e97386ded80 --permission-mode default")
     }
 
-    func testNormalizeAddsCodexHookTrustBypassForAutomation() {
+    func testNormalizePreservesExplicitFullAccessWithoutSilentlyBypassingHookTrust() {
         let launch = AgentLaunchCommand.normalize(
             command: "codex --dangerously-bypass-approvals-and-sandbox",
             fallbackProvider: "codex"
         )
 
         XCTAssertEqual(launch.provider, "codex")
-        XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust")
+        XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox")
     }
 
     func testLaunchCommandUsesProviderSpecificPermissionModes() {
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest"),
-            "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            "codex --sandbox workspace-write --ask-for-approval on-request"
         )
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "readOnly"),
-            "codex --sandbox read-only --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            "codex --sandbox read-only --ask-for-approval on-request"
         )
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: "default"),
@@ -82,11 +82,11 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "onRequest", planMode: true),
-            "codex --sandbox workspace-write --ask-for-approval on-request --dangerously-bypass-hook-trust"
+            "codex --sandbox workspace-write --ask-for-approval on-request"
         )
         XCTAssertEqual(
             AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "plan"),
-            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+            "codex --sandbox workspace-write --ask-for-approval on-request"
         )
     }
 
@@ -182,11 +182,34 @@ final class AgentLaunchCommandTests: XCTestCase {
     func testResumeCommandUsesProviderResumeSyntax() {
         XCTAssertEqual(
             AgentLaunchCommand.resumeCommand(forProvider: "claude", sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"),
-            "claude --resume '8db44e39-685d-47ab-bd0e-5e97386ded80' --dangerously-skip-permissions"
+            "claude --permission-mode default --resume '8db44e39-685d-47ab-bd0e-5e97386ded80'"
         )
         XCTAssertEqual(
             AgentLaunchCommand.resumeCommand(forProvider: "codex", sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80"),
-            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust resume '8db44e39-685d-47ab-bd0e-5e97386ded80'"
+            "codex --sandbox workspace-write --ask-for-approval on-request resume '8db44e39-685d-47ab-bd0e-5e97386ded80'"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.resumeCommand(
+                forProvider: "codex",
+                sessionId: "8db44e39-685d-47ab-bd0e-5e97386ded80",
+                permissionMode: "fullAccess"
+            ),
+            "codex --dangerously-bypass-approvals-and-sandbox resume '8db44e39-685d-47ab-bd0e-5e97386ded80'"
+        )
+    }
+
+    func testMissingOrUnknownPermissionModeDefaultsToOnRequest() {
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "claude", permissionMode: nil),
+            "claude --permission-mode default"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.launchCommand(forProvider: "codex", permissionMode: "legacy-unknown"),
+            "codex --sandbox workspace-write --ask-for-approval on-request"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.fullAccessCommand(forProvider: "codex"),
+            "codex --dangerously-bypass-approvals-and-sandbox"
         )
     }
 

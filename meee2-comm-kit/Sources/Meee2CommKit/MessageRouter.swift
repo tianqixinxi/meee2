@@ -33,6 +33,77 @@ public enum MessageRouterError: Error, CustomStringConvertible {
     }
 }
 
+/// Persisted retention contract for terminal (delivered/dropped) A2A records.
+/// The activation boundary is safety-critical: records created before it are
+/// preview-only until an explicit cleanup request opts in to legacy history.
+public struct MessageRetentionPolicy: Codable, Sendable, Equatable {
+    public let activatedAt: Date
+    public let terminalMaxAge: TimeInterval
+    public let telemetryMaxAge: TimeInterval
+    public let maxRecordCount: Int
+    public let maxTotalBytes: Int64
+
+    public init(
+        activatedAt: Date,
+        terminalMaxAge: TimeInterval = 30 * 24 * 60 * 60,
+        telemetryMaxAge: TimeInterval = 7 * 24 * 60 * 60,
+        maxRecordCount: Int = 100_000,
+        maxTotalBytes: Int64 = 250 * 1_024 * 1_024
+    ) {
+        self.activatedAt = activatedAt
+        self.terminalMaxAge = Swift.max(0, terminalMaxAge)
+        self.telemetryMaxAge = Swift.max(0, telemetryMaxAge)
+        self.maxRecordCount = Swift.max(0, maxRecordCount)
+        self.maxTotalBytes = Swift.max(0, maxTotalBytes)
+    }
+
+    public static func production(activatedAt: Date) -> MessageRetentionPolicy {
+        MessageRetentionPolicy(activatedAt: activatedAt)
+    }
+}
+
+public struct MessageRetentionPreview: Sendable, Equatable {
+    public let policy: MessageRetentionPolicy
+    public let automaticCount: Int
+    public let automaticBytes: Int64
+    public let protectedHistoryCount: Int
+    public let protectedHistoryBytes: Int64
+}
+
+public struct MessageRetentionResult: Sendable, Equatable {
+    public let removedCount: Int
+    public let reclaimedBytes: Int64
+    public let failedCount: Int
+}
+
+/// Result of the explicit legacy-history cleanup flow. The backup is a
+/// timestamped directory whose contents mirror the original
+/// `messages/<channel>/<message>.json` paths byte-for-byte.
+public struct LegacyMessageCleanupResult: Sendable, Equatable {
+    public let backupPath: String
+    public let removedCount: Int
+    public let reclaimedBytes: Int64
+    public let failedCount: Int
+}
+
+public enum LegacyMessageCleanupError: Error, LocalizedError, Equatable {
+    case noCandidates
+    case previewChanged(expectedCount: Int, expectedBytes: Int64, actualCount: Int, actualBytes: Int64)
+    case archiveFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .noCandidates:
+            return "there are no legacy message files to clean up"
+        case .previewChanged(let expectedCount, let expectedBytes, let actualCount, let actualBytes):
+            return "legacy message cleanup preview changed "
+                + "(expected \(expectedCount)/\(expectedBytes)B, actual \(actualCount)/\(actualBytes)B); review it again"
+        case .archiveFailed(let detail):
+            return "legacy message backup failed; original files were preserved: \(detail)"
+        }
+    }
+}
+
 /// MessageRouter - 管理 A2A 消息的投递与人机协同
 ///
 /// 持久化：
@@ -42,21 +113,68 @@ public enum MessageRouterError: Error, CustomStringConvertible {
 ///      约定；人被视为"operator" agent，走同一个 inbox 协议）
 /// 线程安全：所有公开方法通过串行 DispatchQueue 同步。
 public final class MessageRouter {
-    public static let shared = MessageRouter()
+    public static let shared: MessageRouter = {
+        let router = MessageRouter(
+            storage: .processDefault,
+            channelRegistry: .shared
+        )
+        router.scheduleProductionRetention()
+        return router
+    }()
 
     /// 一段对话允许的最大 hop count。超过 → send() throw hopLimitExceeded。
     /// 类比 IP TTL：50 大到不会误伤任何合理工作流（plan-verify-fix 一般 < 20 跳），
     /// 但小到不会让两个 agent 互相递归打爆磁盘 / Ghostty。
     public static let maxHopsHard: Int = 50
 
-    private let fileManager = FileManager.default
-    private let baseDir: URL
+    private let fileManager: FileManager
     private let messagesDir: URL
     private let inboxDir: URL
     private let legacyInboxDir: URL
+    private let channelRegistry: ChannelRegistry
+    private let auditLogger: AuditLogger
+    private let diskIndex: MessageDiskIndex?
+    private let terminalCacheLimit: Int
+    public let storagePaths: CommKitStoragePaths
 
     /// 内存缓存：msgId -> A2AMessage。所有访问须持 queue
     private var cache: [String: A2AMessage] = [:]
+    private var cacheOrder: [String] = []
+
+    /// Lightweight on-disk index. Startup decodes only envelope metadata and
+    /// pins mutable pending/held messages; terminal payloads are loaded lazily.
+    private struct MessageIndexEntry {
+        let id: String
+        let channel: String
+        let createdAt: Date
+        let fileModifiedAt: Date
+        let fileSizeBytes: Int64
+        let status: MessageStatus
+        /// Present for filesystem scans and fresh writes. Warm SQLite rows
+        /// derive the URL only when their payload is actually requested.
+        let fileURL: URL?
+
+        var isTelemetry: Bool {
+            // Current envelopes have no retention-class field. Restrict the
+            // shorter window to the reserved telemetry namespace so ordinary
+            // operator/A2A channels can never be guessed into 7-day cleanup.
+            channel == "__telemetry" || channel.hasPrefix("__telemetry-")
+        }
+    }
+
+    private struct PersistedMessageIndexRecord: Decodable {
+        let id: String
+        let channel: String
+        let createdAt: Date
+        let status: MessageStatus
+    }
+
+    private struct RetentionPlan {
+        let automatic: [MessageIndexEntry]
+        let protectedHistory: [MessageIndexEntry]
+    }
+
+    private var messageIndex: [String: MessageIndexEntry] = [:]
 
     private let queue = DispatchQueue(label: "com.meee2.message-router", qos: .userInitiated)
 
@@ -65,22 +183,32 @@ public final class MessageRouter {
     /// 可以注册自己的实现。
     private var pushDelegates: [WeakInboxPushDelegate] = []
 
-    private init() {
-        let home = NSHomeDirectory()
-        baseDir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        messagesDir = baseDir.appendingPathComponent("messages")
-        // 新路径：~/.claude/teams/meee2/inboxes/<sid>.json
-        // oh-my-claudecode 和 Claude Code 原生 Agent Teams 都用这个根
-        let claudeDir = URL(fileURLWithPath: home).appendingPathComponent(".claude")
-        inboxDir = claudeDir
-            .appendingPathComponent("teams")
-            .appendingPathComponent("meee2")
-            .appendingPathComponent("inboxes")
-        // 旧路径：用于首次启动迁移 legacy .jsonl 文件
-        legacyInboxDir = baseDir.appendingPathComponent("inbox")
+    public init(
+        storage: CommKitStoragePaths,
+        channelRegistry: ChannelRegistry,
+        auditLogger: AuditLogger? = nil,
+        fileManager: FileManager = .default,
+        terminalCacheLimit: Int = 512
+    ) {
+        storagePaths = storage
+        self.channelRegistry = channelRegistry
+        self.fileManager = fileManager
+        self.auditLogger = auditLogger ?? AuditLogger(storage: storage, fileManager: fileManager)
+        self.terminalCacheLimit = max(0, terminalCacheLimit)
+        messagesDir = storage.messagesDirectory
+        inboxDir = storage.inboxDirectory
+        legacyInboxDir = storage.legacyInboxDirectory
 
         try? fileManager.createDirectory(at: messagesDir, withIntermediateDirectories: true)
         try? fileManager.createDirectory(at: inboxDir, withIntermediateDirectories: true)
+        do {
+            diskIndex = try MessageDiskIndex(
+                fileURL: messagesDir.appendingPathComponent(MessageDiskIndex.fileName)
+            )
+        } catch {
+            diskIndex = nil
+            commLog(.warning, "[MessageRouter] durable message index unavailable: \(error)")
+        }
 
         migrateLegacyInboxes()
         loadAll()
@@ -220,7 +348,7 @@ public final class MessageRouter {
             throw MessageRouterError.unknownSender(alias: "*", channel: channel)
         }
 
-        guard let ch = ChannelRegistry.shared.get(channel) else {
+        guard let ch = channelRegistry.get(channel) else {
             throw MessageRouterError.channelNotFound(channel)
         }
 
@@ -258,14 +386,14 @@ public final class MessageRouter {
         // 有 replyTo → 继承 parent 的 traceId，hopCount = parent.hopCount + 1
         // 没 replyTo → 新对话根，traceId = 自己的 id（init 默认会处理），hopCount = 0
         let parentMsg: A2AMessage? = replyTo.flatMap { id in
-            queue.sync { cache[id] }
+            queue.sync { loadMessageLocked(id) }
         }
         let derivedTraceId: String? = parentMsg?.traceId
         let derivedHopCount: Int = (parentMsg?.hopCount ?? -1) + 1
         if derivedHopCount > Self.maxHopsHard {
             // 不持久化、不进 cache、不写 inbox。直接 throw + 写一条 dropped
             // audit 让 forensics 能看到曾经有人撞这堵墙。
-            AuditLogger.shared.log(AuditEvent(
+            auditLogger.log(AuditEvent(
                 event: .dropped,
                 msgId: "rejected-hop-overflow",
                 channel: channel,
@@ -292,14 +420,14 @@ public final class MessageRouter {
 
         try queue.sync {
             try persist(msg)
-            cache[msg.id] = msg
+            cacheMessageLocked(msg)
         }
 
         commLog(.info, "[MessageRouter] send \(msg.id) channel=\(channel) \(fromAlias) -> \(toAlias) mode=\(ch.mode.rawValue)")
 
         // 审计：人工注入发一条 .injected，agent 自发送发一条 .created
         if injectedByHuman {
-            AuditLogger.shared.log(AuditEvent(
+            auditLogger.log(AuditEvent(
                 event: .injected,
                 msgId: msg.id,
                 channel: channel,
@@ -308,7 +436,7 @@ public final class MessageRouter {
                 actor: "human"
             ))
         } else {
-            AuditLogger.shared.log(AuditEvent(
+            auditLogger.log(AuditEvent(
                 event: .created,
                 msgId: msg.id,
                 channel: channel,
@@ -342,19 +470,207 @@ public final class MessageRouter {
     /// 列出消息，可按频道 / 状态过滤（按 createdAt 升序）
     public func listMessages(channel: String? = nil, statuses: Set<MessageStatus>? = nil) -> [A2AMessage] {
         queue.sync {
-            cache.values
-                .filter { msg in
-                    if let channel = channel, msg.channel != channel { return false }
-                    if let statuses = statuses, !statuses.contains(msg.status) { return false }
+            let indexedEntries: [MessageIndexEntry]
+            if channel != nil || statuses != nil,
+               let ids = try? diskIndex?.queryIDs(channel: channel, statuses: statuses) {
+                indexedEntries = ids.compactMap { messageIndex[$0] }
+            } else {
+                indexedEntries = messageIndex.values
+                    .filter { entry in
+                        if let channel = channel, entry.channel != channel { return false }
+                        if let statuses = statuses, !statuses.contains(entry.status) { return false }
+                        return true
+                    }
+                    .sorted { lhs, rhs in
+                        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                        if lhs.fileModifiedAt != rhs.fileModifiedAt { return lhs.fileModifiedAt < rhs.fileModifiedAt }
+                        return lhs.id < rhs.id
+                    }
+            }
+            return indexedEntries
+                .filter { entry in
+                    // Defend against a stale/corrupt auxiliary index. The
+                    // in-memory envelope remains authoritative for this launch.
+                    if let channel = channel, entry.channel != channel { return false }
+                    if let statuses = statuses, !statuses.contains(entry.status) { return false }
                     return true
                 }
-                .sorted { $0.createdAt < $1.createdAt }
+                .compactMap { loadMessageLocked($0.id) }
         }
     }
 
     /// 按 ID 获取消息
     public func get(_ id: String) -> A2AMessage? {
-        queue.sync { cache[id] }
+        queue.sync { loadMessageLocked(id) }
+    }
+
+    /// Diagnostics for validating that startup indexes history without keeping
+    /// every terminal payload resident in memory.
+    public var indexedMessageCount: Int {
+        queue.sync { messageIndex.count }
+    }
+
+    public var cachedMessageCount: Int {
+        queue.sync { cache.count }
+    }
+
+    /// Clear process-local message state after the host deletes messages and
+    /// inboxes on disk. Push delegates are runtime wiring, not user data, so
+    /// they remain registered.
+    public func clearAllInMemory() {
+        queue.sync {
+            cache.removeAll()
+            cacheOrder.removeAll()
+            messageIndex.removeAll()
+        }
+        commLog(.info, "[MessageRouter] Cleared in-memory message index and cache")
+    }
+
+    // MARK: - Retention
+
+    /// Persist the first activation boundary. Existing policy always wins so
+    /// later launches cannot move the boundary backwards and auto-delete legacy
+    /// history. Corrupt policy files fail safe by activating at the supplied
+    /// (normally current) time.
+    @discardableResult
+    public func installRetentionPolicyIfNeeded(
+        _ candidate: MessageRetentionPolicy
+    ) -> MessageRetentionPolicy {
+        queue.sync {
+            if let existing = loadRetentionPolicyLocked() {
+                return existing
+            }
+            persistRetentionPolicyLocked(candidate)
+            return candidate
+        }
+    }
+
+    /// Preview automatic candidates and pre-activation history that requires
+    /// an explicit user-confirmed cleanup. No payload decoding is required.
+    public func retentionPreview(now: Date = Date()) -> MessageRetentionPreview {
+        queue.sync {
+            let policy = loadRetentionPolicyLocked()
+                ?? installRetentionPolicyWithoutQueueLocked(at: now)
+            let plan = retentionPlanLocked(policy: policy, now: now)
+            return MessageRetentionPreview(
+                policy: policy,
+                automaticCount: plan.automatic.count,
+                automaticBytes: plan.automatic.reduce(0) { $0 + $1.fileSizeBytes },
+                protectedHistoryCount: plan.protectedHistory.count,
+                protectedHistoryBytes: plan.protectedHistory.reduce(0) { $0 + $1.fileSizeBytes }
+            )
+        }
+    }
+
+    /// Apply automatic post-activation retention synchronously. Production
+    /// calls this on a utility queue. Legacy history is deliberately
+    /// unreachable from this API; it can only be removed through the verified
+    /// backup flow in `backupAndCleanLegacyHistory`.
+    @discardableResult
+    public func applyRetention(now: Date = Date()) -> MessageRetentionResult {
+        queue.sync {
+            let policy = loadRetentionPolicyLocked()
+                ?? installRetentionPolicyWithoutQueueLocked(at: now)
+            let plan = retentionPlanLocked(policy: policy, now: now)
+            return removeRetentionEntriesLocked(plan.automatic)
+        }
+    }
+
+    /// Export and then remove only the pre-activation terminal history shown
+    /// by `retentionPreview`. This is intentionally separate from automatic
+    /// retention: callers must bind the operation to the exact count and byte
+    /// scope the user confirmed. The router queue covers preview, archive and
+    /// deletion so in-process mutations cannot change that scope mid-flight.
+    ///
+    /// The archive is staged under the target backup directory and becomes
+    /// visible with one same-directory rename only after every source file has
+    /// been copied and verified byte-for-byte. Any archive error happens before
+    /// deletion, so all original files remain in place. Pending and held
+    /// records never enter the retention plan.
+    @discardableResult
+    public func backupAndCleanLegacyHistory(
+        now: Date = Date(),
+        backupsDirectory: URL? = nil,
+        expectedCount: Int,
+        expectedBytes: Int64
+    ) throws -> LegacyMessageCleanupResult {
+        try queue.sync {
+            let policy = loadRetentionPolicyLocked()
+                ?? installRetentionPolicyWithoutQueueLocked(at: now)
+            let plan = retentionPlanLocked(policy: policy, now: now)
+            let candidates = deduplicated(plan.protectedHistory)
+            let actualBytes = candidates.reduce(Int64(0)) { $0 + $1.fileSizeBytes }
+
+            guard !candidates.isEmpty else {
+                throw LegacyMessageCleanupError.noCandidates
+            }
+            let existingCandidates = candidates.filter {
+                fileManager.fileExists(atPath: messageFileURL(for: $0).path)
+            }
+            let currentBytes = existingCandidates.reduce(Int64(0)) {
+                $0 + fileMetadata(at: messageFileURL(for: $1), fallbackDate: $1.createdAt).sizeBytes
+            }
+            guard candidates.count == expectedCount,
+                  actualBytes == expectedBytes,
+                  existingCandidates.count == expectedCount,
+                  currentBytes == expectedBytes else {
+                throw LegacyMessageCleanupError.previewChanged(
+                    expectedCount: expectedCount,
+                    expectedBytes: expectedBytes,
+                    actualCount: existingCandidates.count,
+                    actualBytes: currentBytes
+                )
+            }
+
+            let backupRoot = (backupsDirectory
+                ?? storagePaths.baseDirectory.appendingPathComponent("backups", isDirectory: true))
+                .standardizedFileURL
+            return try archiveAndRemoveLegacyEntriesLocked(
+                candidates,
+                backupRoot: backupRoot,
+                now: now,
+                expectedBytes: expectedBytes
+            )
+        }
+    }
+
+    /// Startup hook used by `shared`. It captures the activation boundary on
+    /// the caller thread, then moves all indexing/deletion work off the main
+    /// thread. Legacy history is previewed and logged, never auto-deleted.
+    public func scheduleProductionRetention(activationTime: Date = Date()) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let policy = self.installRetentionPolicyIfNeeded(
+                .production(activatedAt: activationTime)
+            )
+            let preview = self.retentionPreview(now: Date())
+            let result = self.applyRetention(now: Date())
+            commLog(
+                .info,
+                "[MessageRouter] retention activated=\(policy.activatedAt) "
+                    + "auto=\(preview.automaticCount)/\(preview.automaticBytes)B "
+                    + "legacyPreview=\(preview.protectedHistoryCount)/\(preview.protectedHistoryBytes)B "
+                    + "removed=\(result.removedCount) reclaimed=\(result.reclaimedBytes)B "
+                    + "failed=\(result.failedCount)"
+            )
+        }
+    }
+
+    /// Explicit post-activation disk-retention hook. Pending, held, and legacy
+    /// pre-activation messages are never removed through this shortcut.
+    /// Legacy history must use `backupAndCleanLegacyHistory`.
+    @discardableResult
+    public func pruneTerminalMessages(olderThan cutoff: Date) -> Int {
+        queue.sync {
+            let policy = loadRetentionPolicyLocked()
+                ?? installRetentionPolicyWithoutQueueLocked(at: Date())
+            let candidates = messageIndex.values.filter {
+                ($0.status == .delivered || $0.status == .dropped)
+                    && $0.createdAt > policy.activatedAt
+                    && $0.createdAt < cutoff
+            }
+            return removeRetentionEntriesLocked(candidates).removedCount
+        }
     }
 
     // MARK: - Human Actions
@@ -365,7 +681,7 @@ public final class MessageRouter {
         let msg = try mutateNonTerminal(id) { msg in
             msg.status = .held
         }
-        AuditLogger.shared.log(AuditEvent(
+        auditLogger.log(AuditEvent(
             event: .held,
             msgId: msg.id,
             channel: msg.channel,
@@ -383,7 +699,7 @@ public final class MessageRouter {
         let msg = try mutateNonTerminal(id) { msg in
             msg.status = .dropped
         }
-        AuditLogger.shared.log(AuditEvent(
+        auditLogger.log(AuditEvent(
             event: .dropped,
             msgId: msg.id,
             channel: msg.channel,
@@ -399,12 +715,12 @@ public final class MessageRouter {
     @discardableResult
     public func edit(_ id: String, newContent: String) throws -> A2AMessage {
         // 捕获编辑前长度用于审计（不记录内容 —— 可能含敏感信息）
-        let oldLen = queue.sync { cache[id]?.content.count }
+        let oldLen = queue.sync { loadMessageLocked(id)?.content.count }
         let msg = try mutateNonTerminal(id) { msg in
             msg.content = newContent
         }
         let details = "len old=\(oldLen ?? -1) new=\(newContent.count)"
-        AuditLogger.shared.log(AuditEvent(
+        auditLogger.log(AuditEvent(
             event: .edited,
             msgId: msg.id,
             channel: msg.channel,
@@ -437,13 +753,13 @@ public final class MessageRouter {
     private func deliverPending(_ id: String, force: Bool) throws -> A2AMessage {
         // 1) 先在队列内检查与解析，然后释放队列再写 inbox（inbox 写入是独立文件）
         let (msgToDeliver, recipientMembers) = try queue.sync { () -> (A2AMessage, [ChannelMember]) in
-            guard var msg = cache[id] else {
+            guard var msg = loadMessageLocked(id) else {
                 throw MessageRouterError.messageNotFound(id)
             }
             if msg.status == .delivered || msg.status == .dropped {
                 throw MessageRouterError.alreadyTerminal(id)
             }
-            guard let ch = ChannelRegistry.shared.get(msg.channel) else {
+            guard let ch = channelRegistry.get(msg.channel) else {
                 throw MessageRouterError.channelNotFound(msg.channel)
             }
             // paused 频道：除非 force，否则拒绝
@@ -467,7 +783,7 @@ public final class MessageRouter {
             msg.deliveredAt = Date()
             msg.deliveredTo = recipients.map { $0.alias }
             try persist(msg)
-            cache[id] = msg
+            cacheMessageLocked(msg)
             return (msg, recipients)
         }
 
@@ -498,7 +814,7 @@ public final class MessageRouter {
         if msgToDeliver.toAlias == "*" {
             auditDetails = "fanout=[\(msgToDeliver.deliveredTo.joined(separator: ","))]"
         }
-        AuditLogger.shared.log(AuditEvent(
+        auditLogger.log(AuditEvent(
             event: .delivered,
             msgId: msgToDeliver.id,
             channel: msgToDeliver.channel,
@@ -603,7 +919,7 @@ public final class MessageRouter {
     @discardableResult
     public func ensureOperatorChannel(sessionId: String) throws -> String {
         let name = Self.operatorChannelName(for: sessionId)
-        let reg = ChannelRegistry.shared
+        let reg = channelRegistry
         if let existing = reg.get(name) {
             if let member = existing.memberByAlias("session"), member.sessionId != sessionId {
                 throw ChannelRegistryError.aliasTaken("session")
@@ -658,7 +974,7 @@ public final class MessageRouter {
 
     private func mutateNonTerminal(_ id: String, _ change: (inout A2AMessage) -> Void) throws -> A2AMessage {
         try queue.sync {
-            guard var msg = cache[id] else {
+            guard var msg = loadMessageLocked(id) else {
                 throw MessageRouterError.messageNotFound(id)
             }
             if msg.status == .delivered || msg.status == .dropped {
@@ -666,7 +982,7 @@ public final class MessageRouter {
             }
             change(&msg)
             try persist(msg)
-            cache[id] = msg
+            cacheMessageLocked(msg)
             return msg
         }
     }
@@ -683,6 +999,328 @@ public final class MessageRouter {
         inboxDir.appendingPathComponent("\(sessionId).json")
     }
 
+    // MARK: Retention helpers (must be called on queue)
+
+    private func installRetentionPolicyWithoutQueueLocked(at activationTime: Date) -> MessageRetentionPolicy {
+        let policy = MessageRetentionPolicy.production(activatedAt: activationTime)
+        persistRetentionPolicyLocked(policy)
+        return policy
+    }
+
+    private func loadRetentionPolicyLocked() -> MessageRetentionPolicy? {
+        guard let data = try? Data(contentsOf: storagePaths.messageRetentionPolicyFile) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let policy = try? decoder.decode(MessageRetentionPolicy.self, from: data) else {
+            commLog(.warning, "[MessageRouter] invalid retention policy; resetting activation safely")
+            return nil
+        }
+        return policy
+    }
+
+    private func persistRetentionPolicyLocked(_ policy: MessageRetentionPolicy) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(policy) else {
+            commLog(.warning, "[MessageRouter] failed to encode retention policy")
+            return
+        }
+        do {
+            try fileManager.createDirectory(
+                at: storagePaths.baseDirectory,
+                withIntermediateDirectories: true
+            )
+            try data.write(to: storagePaths.messageRetentionPolicyFile, options: .atomic)
+        } catch {
+            commLog(.warning, "[MessageRouter] failed to persist retention activation: \(error)")
+        }
+    }
+
+    private func retentionPlanLocked(
+        policy: MessageRetentionPolicy,
+        now: Date
+    ) -> RetentionPlan {
+        let terminal = messageIndex.values.filter {
+            $0.status == .delivered || $0.status == .dropped
+        }
+        // Strictly newer than activation. Equality fails safe into preview-only.
+        let postActivation = terminal.filter { $0.createdAt > policy.activatedAt }
+        let automatic = selectRetentionEntriesLocked(
+            from: postActivation,
+            policy: policy,
+            now: now
+        )
+        let fullCleanup = selectRetentionEntriesLocked(
+            from: terminal,
+            policy: policy,
+            now: now
+        )
+        let protectedHistory = fullCleanup.filter { $0.createdAt <= policy.activatedAt }
+        return RetentionPlan(
+            automatic: automatic,
+            protectedHistory: protectedHistory
+        )
+    }
+
+    private func selectRetentionEntriesLocked(
+        from entries: [MessageIndexEntry],
+        policy: MessageRetentionPolicy,
+        now: Date
+    ) -> [MessageIndexEntry] {
+        let normalCutoff = now.addingTimeInterval(-policy.terminalMaxAge)
+        let telemetryCutoff = now.addingTimeInterval(-policy.telemetryMaxAge)
+        var selectedIds = Set<String>()
+
+        for entry in entries {
+            let cutoff = entry.isTelemetry ? telemetryCutoff : normalCutoff
+            if entry.createdAt < cutoff {
+                selectedIds.insert(entry.id)
+            }
+        }
+
+        let remaining = entries
+            .filter { !selectedIds.contains($0.id) }
+            .sorted(by: retentionOrder)
+        var remainingCount = remaining.count
+        var remainingBytes = remaining.reduce(Int64(0)) { $0 + $1.fileSizeBytes }
+        for entry in remaining {
+            guard remainingCount > policy.maxRecordCount
+                    || remainingBytes > policy.maxTotalBytes else {
+                break
+            }
+            selectedIds.insert(entry.id)
+            remainingCount -= 1
+            remainingBytes = Swift.max(0, remainingBytes - entry.fileSizeBytes)
+        }
+
+        return entries
+            .filter { selectedIds.contains($0.id) }
+            .sorted(by: retentionOrder)
+    }
+
+    private func retentionOrder(_ lhs: MessageIndexEntry, _ rhs: MessageIndexEntry) -> Bool {
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+        if lhs.fileModifiedAt != rhs.fileModifiedAt { return lhs.fileModifiedAt < rhs.fileModifiedAt }
+        return lhs.id < rhs.id
+    }
+
+    private func deduplicated(_ entries: [MessageIndexEntry]) -> [MessageIndexEntry] {
+        var seen = Set<String>()
+        return entries.filter { seen.insert($0.id).inserted }
+    }
+
+    private struct LegacyBackupRecord {
+        let entry: MessageIndexEntry
+        let relativePath: String
+        let contents: Data
+    }
+
+    private func archiveAndRemoveLegacyEntriesLocked(
+        _ entries: [MessageIndexEntry],
+        backupRoot: URL,
+        now: Date,
+        expectedBytes: Int64
+    ) throws -> LegacyMessageCleanupResult {
+        let fileManager = self.fileManager
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+
+        let archiveStem = "legacy-messages-\(formatter.string(from: now))-\(UUID().uuidString.prefix(8))"
+        let staging = backupRoot.appendingPathComponent(".\(archiveStem).partial", isDirectory: true)
+        let archive = backupRoot.appendingPathComponent(archiveStem, isDirectory: true)
+        var visibleArchive = false
+
+        do {
+            try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
+
+            let messagesRoot = messagesDir.resolvingSymlinksInPath().standardizedFileURL
+            let messagesPrefix = messagesRoot.path.hasSuffix("/")
+                ? messagesRoot.path
+                : messagesRoot.path + "/"
+            var records: [LegacyBackupRecord] = []
+            records.reserveCapacity(entries.count)
+            var sourceAllocatedBytes: Int64 = 0
+
+            for entry in entries {
+                let source = messageFileURL(for: entry).resolvingSymlinksInPath().standardizedFileURL
+                guard source.path.hasPrefix(messagesPrefix) else {
+                    throw LegacyMessageCleanupError.archiveFailed(
+                        "candidate is outside the message storage root"
+                    )
+                }
+                let relativePath = String(source.path.dropFirst(messagesPrefix.count))
+                let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+                guard !relativePath.isEmpty,
+                      !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+                    throw LegacyMessageCleanupError.archiveFailed("candidate path is unsafe")
+                }
+                let contents = try Data(contentsOf: source)
+                guard !contents.isEmpty else {
+                    throw LegacyMessageCleanupError.archiveFailed(
+                        "candidate \(entry.id) is empty"
+                    )
+                }
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                guard let currentMessage = try? decoder.decode(A2AMessage.self, from: contents),
+                      currentMessage.id == entry.id,
+                      currentMessage.channel == entry.channel,
+                      currentMessage.status == .delivered || currentMessage.status == .dropped else {
+                    throw LegacyMessageCleanupError.archiveFailed(
+                        "candidate \(entry.id) is no longer an eligible terminal message"
+                    )
+                }
+                sourceAllocatedBytes += fileMetadata(
+                    at: source,
+                    fallbackDate: entry.createdAt
+                ).sizeBytes
+
+                let destination = staging.appendingPathComponent(relativePath, isDirectory: false)
+                try fileManager.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try fileManager.copyItem(at: source, to: destination)
+                guard try Data(contentsOf: destination) == contents else {
+                    throw LegacyMessageCleanupError.archiveFailed(
+                        "backup verification failed for \(entry.id)"
+                    )
+                }
+                records.append(LegacyBackupRecord(
+                    entry: entry,
+                    relativePath: relativePath,
+                    contents: contents
+                ))
+            }
+
+            let archivedBytes = records.reduce(Int64(0)) { $0 + Int64($1.contents.count) }
+            guard records.count == entries.count, archivedBytes > 0 else {
+                throw LegacyMessageCleanupError.archiveFailed("backup archive is empty")
+            }
+            guard sourceAllocatedBytes == expectedBytes else {
+                throw LegacyMessageCleanupError.previewChanged(
+                    expectedCount: entries.count,
+                    expectedBytes: expectedBytes,
+                    actualCount: records.count,
+                    actualBytes: sourceAllocatedBytes
+                )
+            }
+
+            // Same-parent rename is the visibility boundary: users never see a
+            // half-populated archive directory.
+            try fileManager.moveItem(at: staging, to: archive)
+            visibleArchive = true
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: archive.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw LegacyMessageCleanupError.archiveFailed("backup archive was not created")
+            }
+            for record in records {
+                let archivedFile = archive.appendingPathComponent(record.relativePath)
+                guard try Data(contentsOf: archivedFile) == record.contents else {
+                    throw LegacyMessageCleanupError.archiveFailed(
+                        "final backup verification failed for \(record.entry.id)"
+                    )
+                }
+            }
+
+            var removed = 0
+            var reclaimedBytes: Int64 = 0
+            var failed = 0
+            for record in records {
+                let entry = record.entry
+                do {
+                    let fileURL = messageFileURL(for: entry)
+                    if fileManager.fileExists(atPath: fileURL.path) {
+                        // Never remove a file that another process replaced
+                        // after the archive snapshot was taken.
+                        guard try Data(contentsOf: fileURL) == record.contents else {
+                            failed += 1
+                            commLog(.warning, "[MessageRouter] legacy cleanup skipped changed file \(entry.id)")
+                            continue
+                        }
+                        try fileManager.removeItem(at: fileURL)
+                        reclaimedBytes += entry.fileSizeBytes
+                    }
+                    messageIndex.removeValue(forKey: entry.id)
+                    cache.removeValue(forKey: entry.id)
+                    cacheOrder.removeAll { $0 == entry.id }
+                    removed += 1
+                } catch {
+                    failed += 1
+                    commLog(.warning, "[MessageRouter] legacy cleanup failed for \(entry.id): \(error)")
+                }
+            }
+            let removedIds = records.map(\.entry.id).filter { messageIndex[$0] == nil }
+            do { try diskIndex?.remove(ids: removedIds) } catch {
+                commLog(.warning, "[MessageRouter] failed to update legacy cleanup index: \(error)")
+            }
+
+            return LegacyMessageCleanupResult(
+                backupPath: archive.path,
+                removedCount: removed,
+                reclaimedBytes: reclaimedBytes,
+                failedCount: failed
+            )
+        } catch let error as LegacyMessageCleanupError {
+            if visibleArchive {
+                try? fileManager.removeItem(at: archive)
+            } else {
+                try? fileManager.removeItem(at: staging)
+            }
+            throw error
+        } catch {
+            if visibleArchive {
+                try? fileManager.removeItem(at: archive)
+            } else {
+                try? fileManager.removeItem(at: staging)
+            }
+            throw LegacyMessageCleanupError.archiveFailed(error.localizedDescription)
+        }
+    }
+
+    private func removeRetentionEntriesLocked(
+        _ entries: [MessageIndexEntry]
+    ) -> MessageRetentionResult {
+        var removed = 0
+        var reclaimedBytes: Int64 = 0
+        var failed = 0
+        var removedIds: [String] = []
+        for entry in deduplicated(entries) {
+            do {
+                let fileURL = messageFileURL(for: entry)
+                if fileManager.fileExists(atPath: fileURL.path) {
+                    try fileManager.removeItem(at: fileURL)
+                    reclaimedBytes += entry.fileSizeBytes
+                }
+                messageIndex.removeValue(forKey: entry.id)
+                cache.removeValue(forKey: entry.id)
+                cacheOrder.removeAll { $0 == entry.id }
+                removedIds.append(entry.id)
+                removed += 1
+            } catch {
+                failed += 1
+                commLog(.warning, "[MessageRouter] retention failed for \(entry.id): \(error)")
+            }
+        }
+        do { try diskIndex?.remove(ids: removedIds) } catch {
+            commLog(.warning, "[MessageRouter] failed to update retention index: \(error)")
+        }
+        return MessageRetentionResult(
+            removedCount: removed,
+            reclaimedBytes: reclaimedBytes,
+            failedCount: failed
+        )
+    }
+
     /// 原子写入单条消息到磁盘
     private func persist(_ msg: A2AMessage) throws {
         let dir = channelDir(msg.channel)
@@ -693,7 +1331,24 @@ public final class MessageRouter {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(msg)
 
-        try data.write(to: messagePath(msg), options: .atomic)
+        let path = messagePath(msg)
+        try data.write(to: path, options: .atomic)
+        let metadata = fileMetadata(at: path, fallbackDate: msg.createdAt)
+        let entry = MessageIndexEntry(
+            id: msg.id,
+            channel: msg.channel,
+            createdAt: msg.createdAt,
+            fileModifiedAt: metadata.modifiedAt,
+            fileSizeBytes: metadata.sizeBytes,
+            status: msg.status,
+            fileURL: path
+        )
+        messageIndex[msg.id] = entry
+        do { try diskIndex?.upsert(diskRecord(for: entry)) } catch {
+            // The payload is already durable. A background reconciliation will
+            // repair the index; never report a false message-write failure.
+            commLog(.warning, "[MessageRouter] failed to update message index for \(msg.id): \(error)")
+        }
     }
 
     /// 把一条消息追加到 inbox 的 JSON 数组里。读-改-写；调用方须持 queue。
@@ -730,29 +1385,212 @@ public final class MessageRouter {
         return out
     }
 
-    /// 启动时加载已有消息到缓存
+    /// 启动时只建立 metadata index。Pending/held 是可变状态，保持在热缓存；
+    /// delivered/dropped payload 在 query/get 时按需读取，并受 LRU 上限约束。
     private func loadAll() {
         queue.sync {
             cache.removeAll()
-            guard let channelDirs = try? fileManager.contentsOfDirectory(at: messagesDir, includingPropertiesForKeys: [.isDirectoryKey]) else {
+            cacheOrder.removeAll()
+            messageIndex.removeAll()
+            if let persisted = try? diskIndex?.loadAll(), !persisted.isEmpty {
+                messageIndex.reserveCapacity(persisted.count)
+                for record in persisted {
+                    let entry = messageEntry(for: record)
+                    messageIndex[entry.id] = entry
+                    loadMutableMessageIfNeeded(entry)
+                }
+                commLog(.debug, "[MessageRouter] Loaded durable index \(messageIndex.count) message(s), hot=\(cache.count)")
+                scheduleFilesystemIndexReconciliation()
                 return
             }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            var count = 0
-            for chDir in channelDirs {
-                var isDir: ObjCBool = false
-                guard fileManager.fileExists(atPath: chDir.path, isDirectory: &isDir), isDir.boolValue else { continue }
-                guard let files = try? fileManager.contentsOfDirectory(at: chDir, includingPropertiesForKeys: nil) else { continue }
-                for file in files where file.pathExtension == "json" {
-                    guard let data = try? Data(contentsOf: file) else { continue }
-                    if let msg = try? decoder.decode(A2AMessage.self, from: data) {
-                        cache[msg.id] = msg
-                        count += 1
-                    }
+
+            let scan = scanMessageFiles()
+            messageIndex = scan.entries
+            for message in scan.mutableMessages { cacheMessageLocked(message) }
+            do { try diskIndex?.replaceAll(with: scan.entries.values.map(diskRecord)) } catch {
+                commLog(.warning, "[MessageRouter] failed to build durable message index: \(error)")
+            }
+            commLog(.debug, "[MessageRouter] Indexed \(messageIndex.count) message(s), hot=\(cache.count)")
+        }
+    }
+
+    private func scanMessageFiles() -> (
+        entries: [String: MessageIndexEntry],
+        mutableMessages: [A2AMessage]
+    ) {
+        guard let channelDirs = try? fileManager.contentsOfDirectory(
+            at: messagesDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return ([:], []) }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var entries: [String: MessageIndexEntry] = [:]
+        var mutableMessages: [A2AMessage] = []
+        for channelDirectory in channelDirs {
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: channelDirectory.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue,
+                  let files = try? fileManager.contentsOfDirectory(
+                    at: channelDirectory,
+                    includingPropertiesForKeys: nil
+                  ) else { continue }
+            for file in files where file.pathExtension == "json" {
+                guard let data = try? Data(contentsOf: file),
+                      let record = try? decoder.decode(PersistedMessageIndexRecord.self, from: data) else {
+                    continue
+                }
+                let metadata = fileMetadata(at: file, fallbackDate: record.createdAt)
+                entries[record.id] = MessageIndexEntry(
+                    id: record.id,
+                    channel: record.channel,
+                    createdAt: record.createdAt,
+                    fileModifiedAt: metadata.modifiedAt,
+                    fileSizeBytes: metadata.sizeBytes,
+                    status: record.status,
+                    fileURL: file
+                )
+                if record.status == .pending || record.status == .held,
+                   let message = try? decoder.decode(A2AMessage.self, from: data) {
+                    mutableMessages.append(message)
                 }
             }
-            commLog(.debug, "[MessageRouter] Loaded \(count) message(s)")
+        }
+        return (entries, mutableMessages)
+    }
+
+    private func scheduleFilesystemIndexReconciliation() {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            let scan = self.scanMessageFiles()
+            self.queue.async {
+                let scannedIds = Set(scan.entries.keys)
+                for (id, scanned) in scan.entries {
+                    if let current = self.messageIndex[id],
+                       current.fileModifiedAt > scanned.fileModifiedAt {
+                        continue
+                    }
+                    self.messageIndex[id] = scanned
+                    do { try self.diskIndex?.upsert(self.diskRecord(for: scanned)) } catch {
+                        commLog(.warning, "[MessageRouter] reconcile upsert failed for \(id): \(error)")
+                    }
+                }
+                let staleIds = self.messageIndex.compactMap { id, entry -> String? in
+                    guard !scannedIds.contains(id),
+                          !self.fileManager.fileExists(atPath: self.messageFileURL(for: entry).path) else { return nil }
+                    return id
+                }
+                for id in staleIds {
+                    self.messageIndex.removeValue(forKey: id)
+                    self.cache.removeValue(forKey: id)
+                    self.cacheOrder.removeAll { $0 == id }
+                }
+                do { try self.diskIndex?.remove(ids: staleIds) } catch {
+                    commLog(.warning, "[MessageRouter] reconcile delete failed: \(error)")
+                }
+                for message in scan.mutableMessages { self.cacheMessageLocked(message) }
+            }
+        }
+    }
+
+    private func loadMutableMessageIfNeeded(_ entry: MessageIndexEntry) {
+        guard entry.status == .pending || entry.status == .held,
+              let data = try? Data(contentsOf: messageFileURL(for: entry)) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let message = try? decoder.decode(A2AMessage.self, from: data) {
+            cacheMessageLocked(message)
+        }
+    }
+
+    private func diskRecord(for entry: MessageIndexEntry) -> MessageDiskIndexRecord {
+        MessageDiskIndexRecord(
+            id: entry.id,
+            channel: entry.channel,
+            createdAt: entry.createdAt,
+            fileModifiedAt: entry.fileModifiedAt,
+            fileSizeBytes: entry.fileSizeBytes,
+            status: entry.status
+        )
+    }
+
+    private func messageEntry(for record: MessageDiskIndexRecord) -> MessageIndexEntry {
+        MessageIndexEntry(
+            id: record.id,
+            channel: record.channel,
+            createdAt: record.createdAt,
+            fileModifiedAt: record.fileModifiedAt,
+            fileSizeBytes: record.fileSizeBytes,
+            status: record.status,
+            fileURL: nil
+        )
+    }
+
+    private func messageFileURL(for entry: MessageIndexEntry) -> URL {
+        entry.fileURL ?? messagesDir
+            .appendingPathComponent(entry.channel, isDirectory: true)
+            .appendingPathComponent("\(entry.id).json")
+    }
+
+    private func fileMetadata(at url: URL, fallbackDate: Date) -> (
+        modifiedAt: Date,
+        sizeBytes: Int64
+    ) {
+        let keys: Set<URLResourceKey> = [
+            .contentModificationDateKey,
+            .totalFileAllocatedSizeKey,
+            .fileSizeKey
+        ]
+        let values = try? url.resourceValues(forKeys: keys)
+        let size = values?.totalFileAllocatedSize ?? values?.fileSize ?? 0
+        return (
+            modifiedAt: values?.contentModificationDate ?? fallbackDate,
+            sizeBytes: Int64(size)
+        )
+    }
+
+    /// Must be called while holding `queue`.
+    private func loadMessageLocked(_ id: String) -> A2AMessage? {
+        if let cached = cache[id] {
+            touchCacheLocked(id)
+            return cached
+        }
+        guard let entry = messageIndex[id] else { return nil }
+        guard let data = try? Data(contentsOf: messageFileURL(for: entry)) else {
+            messageIndex.removeValue(forKey: id)
+            try? diskIndex?.remove(ids: [id])
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let message = try? decoder.decode(A2AMessage.self, from: data) else { return nil }
+        cacheMessageLocked(message)
+        return message
+    }
+
+    /// Must be called while holding `queue`.
+    private func cacheMessageLocked(_ message: A2AMessage) {
+        cache[message.id] = message
+        touchCacheLocked(message.id)
+        evictTerminalCacheLocked()
+    }
+
+    private func touchCacheLocked(_ id: String) {
+        cacheOrder.removeAll { $0 == id }
+        cacheOrder.append(id)
+    }
+
+    private func evictTerminalCacheLocked() {
+        var terminalCount = cache.values.reduce(into: 0) { count, message in
+            if message.status == .delivered || message.status == .dropped { count += 1 }
+        }
+        while terminalCount > terminalCacheLimit,
+              let victimIndex = cacheOrder.firstIndex(where: { id in
+                  guard let message = cache[id] else { return false }
+                  return message.status == .delivered || message.status == .dropped
+              }) {
+            let id = cacheOrder.remove(at: victimIndex)
+            cache.removeValue(forKey: id)
+            terminalCount -= 1
         }
     }
 }

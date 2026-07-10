@@ -1,0 +1,8 @@
+{
+  "id": "com.meee2.plugin.cursor",
+  "name": "Cursor",
+  "version": "0.2.0",
+  "dylib": "CursorPlugin.dylib",
+  "abi_version": 2,
+  "helpUrl": "https://docs.cursor.com/meee2-plugin"
+}

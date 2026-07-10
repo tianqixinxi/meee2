@@ -1,7 +1,14 @@
 import XCTest
 @testable import meee2Kit
+import Meee2CommKit
 
 final class InternalWorkspaceTrustPromptDetectorTests: XCTestCase {
+    private func managedWorkspace(_ suffix: String) -> String {
+        StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("workspaces/global/\(suffix)", isDirectory: true)
+            .path
+    }
+
     func testWorkspaceTrustPromptDetectorMatchesClaudeFolderPrompt() {
         let prompt = """
         Do you trust the files in this folder?
@@ -68,8 +75,7 @@ final class InternalWorkspaceTrustPromptDetectorTests: XCTestCase {
     }
 
     func testWorkspaceTrustPromptDetectorAllowsProactiveMeee2ClaudeWorkspaces() {
-        let workspace = (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".meee2/workspaces/global/lark-meeting-founders")
+        let workspace = managedWorkspace("lark-meeting-founders")
 
         XCTAssertTrue(InternalWorkspaceTrustPromptDetector.shouldProactivelyAutoAccept(
             provider: "claude",
@@ -87,13 +93,12 @@ final class InternalWorkspaceTrustPromptDetectorTests: XCTestCase {
         XCTAssertFalse(InternalWorkspaceTrustPromptDetector.shouldProactivelyAutoAccept(
             provider: "codex",
             command: "codex",
-            cwd: (NSHomeDirectory() as NSString).appendingPathComponent(".meee2/workspaces/global/demo")
+            cwd: managedWorkspace("demo")
         ))
     }
 
     func testInternalSessionIdentityMatchesManagedWorkspaceMirrors() {
-        let workspace = (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".meee2/workspaces/global/lark-meeting-founders")
+        let workspace = managedWorkspace("lark-meeting-founders")
         let internalCwds = Set([InternalSessionIdentity.normalizedManagedWorkspacePath(workspace)!])
 
         XCTAssertTrue(InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
@@ -101,7 +106,7 @@ final class InternalWorkspaceTrustPromptDetectorTests: XCTestCase {
             internalManagedWorkspaceCwds: internalCwds
         ))
         XCTAssertTrue(InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
-            cwd: "~/.meee2/workspaces/global/lark-meeting-founders",
+            cwd: workspace + "/../lark-meeting-founders",
             internalManagedWorkspaceCwds: internalCwds
         ))
         XCTAssertFalse(InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(

@@ -101,9 +101,11 @@ final class DragRegionWebView: WKWebView {
 /// 这里只调全局 MLog 家族，无需任何上下文。
 private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
     static let messageName = "meee2Diag"
+    weak var owner: BoardWebWindowController?
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
+        guard owner?.acceptsBridgeMessage(message) == true else { return }
         guard let dict = message.body as? [String: Any] else { return }
         let level = (dict["level"] as? String) ?? "error"
         let msg = (dict["msg"] as? String) ?? ""
@@ -175,6 +177,7 @@ private final class NativeTerminalBridge: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
+        guard owner?.acceptsBridgeMessage(message) == true else { return }
         guard let payload = message.body as? [String: Any] else { return }
         DispatchQueue.main.async { [weak self] in
             self?.owner?.handleNativeTerminalMessage(payload)
@@ -188,6 +191,7 @@ private final class NativeWorkspaceBridge: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
+        guard owner?.acceptsBridgeMessage(message) == true else { return }
         guard let payload = message.body as? [String: Any] else { return }
         DispatchQueue.main.async { [weak self] in
             self?.owner?.handleNativeWorkspaceMessage(payload)
@@ -209,7 +213,6 @@ private final class NativeTerminalHostView: NSView {
 
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static let frameAutosaveName = "meee2.board.window"
-    private static let maxEmbeddedTerminalCacheCount = 6
     private static let compactRailWindowButtonX: CGFloat = 8
 
     private let rootView = NSView()
@@ -244,7 +247,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         self.boardURL = boardURL
 
         let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.applicationNameForUserAgent = "meee2-board-shell"
         // 打开 WKWebView 的 DOM clipboard SPI —— WebKit 在嵌入场景下默认
         // 关闭 cmd+V / cmd+C 的 paste/copy 事件分发到 JS（也不让 textarea
@@ -275,7 +278,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         userContentController.addUserScript(WKUserScript(
             source: JSConsoleBridge.captureScript,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         ))
         userContentController.add(jsConsoleBridge, name: JSConsoleBridge.messageName)
         userContentController.add(nativeTerminalBridge, name: NativeTerminalBridge.messageName)
@@ -287,9 +290,11 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         // 开 Web Inspector —— `isInspectable` 是 macOS 13.3+ 公开 API，
         // 直接走 typed property（KVC 也行但风格不统一）。@available 编译
         // 时已经卡住低版本，无需 runtime check。
+        #if DEBUG
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
         }
+        #endif
 
         let window = NSWindow(
             contentRect: Self.defaultContentRect(),
@@ -325,6 +330,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
         nativeTerminalBridge.owner = self
         nativeWorkspaceBridge.owner = self
+        jsConsoleBridge.owner = self
         window.delegate = self
         rootView.wantsLayer = true
         rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
@@ -421,6 +427,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         var req = URLRequest(url: boardURL)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(req)
+    }
+
+    fileprivate func acceptsBridgeMessage(_ message: WKScriptMessage) -> Bool {
+        guard message.frameInfo.isMainFrame,
+              BoardWebSecurityPolicy.isTrustedBoardDocumentURL(
+                message.frameInfo.request.url,
+                boardURL: boardURL
+              ) else {
+            MWarn("[BoardWebWindow] rejected native bridge message from an untrusted frame")
+            return false
+        }
+        return true
     }
 
     func reload() {
@@ -805,22 +823,9 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private func rememberEmbeddedTerminal(_ key: String) {
         embeddedTerminalLRU.removeAll { $0 == key }
         embeddedTerminalLRU.append(key)
-        while embeddedTerminalLRU.count > Self.maxEmbeddedTerminalCacheCount {
-            guard let evictedKey = embeddedTerminalLRU.first(where: { $0 != activeEmbeddedTerminalKey }) else {
-                break
-            }
-            embeddedTerminalLRU.removeAll { $0 == evictedKey }
-            if let evicted = embeddedTerminals.removeValue(forKey: evictedKey) {
-                dispatchNativeTerminalPrewarmAck(
-                    surfaceId: evicted.terminalSurfaceId,
-                    sessionId: evicted.terminalSessionId,
-                    ready: false,
-                    cacheHit: false,
-                    reason: "evicted"
-                )
-                NativeTerminalSurfaceCoordinator.releaseFromHost(evicted)
-            }
-        }
+        // Do not capacity-evict live terminals. Switching Sessions only
+        // detaches/reattaches their views; explicit close/session-end messages
+        // call removeEmbeddedTerminal, and closing the Board releases all.
     }
 
     private func updateEmbeddedTerminalFrame(
@@ -1276,6 +1281,33 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         requestEmbeddedTerminalLayout()
     }
 
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        let targetURL = navigationAction.request.url
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+
+        if isShowingLoadError, targetURL?.scheme == "about" {
+            decisionHandler(.allow)
+            return
+        }
+
+        if BoardWebSecurityPolicy.isTrustedBoardDocumentURL(targetURL, boardURL: boardURL) {
+            decisionHandler(.allow)
+            return
+        }
+
+        if isMainFrame,
+           navigationAction.navigationType == .linkActivated,
+           BoardWebSecurityPolicy.isExternalWebURL(targetURL, boardURL: boardURL),
+           let targetURL {
+            NSWorkspace.shared.open(targetURL)
+        } else if let targetURL {
+            MWarn("[BoardWebWindow] blocked navigation outside board origin: \(targetURL.absoluteString)")
+        }
+        decisionHandler(.cancel)
+    }
+
     /// HTTP 4xx / 5xx 不会触发 `didFail*` —— WKWebView 把"服务器有响应"当成
     /// 正常 navigation。但用户体感是白屏 / 错乱。这里在 navigationResponse
     /// 里探一眼状态码，非 2xx/3xx 就 MWarn 一行 +URL，让客户日志能定位。
@@ -1283,6 +1315,13 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame,
+           !BoardWebSecurityPolicy.isTrustedBoardDocumentURL(navigationResponse.response.url, boardURL: boardURL),
+           !(isShowingLoadError && navigationResponse.response.url?.scheme == "about") {
+            MWarn("[BoardWebWindow] blocked main-frame response outside board origin")
+            decisionHandler(.cancel)
+            return
+        }
         if let http = navigationResponse.response as? HTTPURLResponse,
            !(200..<400).contains(http.statusCode) {
             MWarn("[BoardWebWindow] HTTP \(http.statusCode) for \(http.url?.absoluteString ?? "?")")
@@ -1307,7 +1346,13 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url, url.scheme == "http" || url.scheme == "https" {
+        guard navigationAction.sourceFrame.isMainFrame,
+              BoardWebSecurityPolicy.isTrustedBoardDocumentURL(navigationAction.sourceFrame.request.url, boardURL: boardURL) else {
+            MWarn("[BoardWebWindow] rejected new-window request from an untrusted frame")
+            return nil
+        }
+        if let url = navigationAction.request.url,
+           BoardWebSecurityPolicy.isExternalWebURL(url, boardURL: boardURL) {
             NSWorkspace.shared.open(url)
         }
         return nil
@@ -1320,6 +1365,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                  runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping ([URL]?) -> Void) {
+        guard frame.isMainFrame,
+              BoardWebSecurityPolicy.isTrustedBoardDocumentURL(frame.request.url, boardURL: boardURL) else {
+            MWarn("[BoardWebWindow] rejected file picker from an untrusted frame")
+            completionHandler(nil)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = parameters.allowsDirectories

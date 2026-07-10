@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 struct AutomationTemplateDTO: Encodable {
     let id: String
@@ -259,8 +260,7 @@ final class AutomationStore {
     }
 
     private func fileURL() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("automations.json", isDirectory: false)
     }
 }

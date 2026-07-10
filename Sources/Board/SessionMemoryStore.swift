@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 public struct SessionMemoryRecord: Codable {
     public var id: String
@@ -20,8 +21,7 @@ public final class SessionMemoryStore {
     private var records: [SessionMemoryRecord] = []
 
     private init() {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let base = StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("memory", isDirectory: true)
         self.fileURL = base.appendingPathComponent("records.json")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)

@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 struct AssistantLocalSessionMessage: Encodable, Equatable {
     let id: String
@@ -29,8 +30,8 @@ final class AssistantLocalSessionStore {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".meee2/assistant/claude-sessions.json")
+            self.fileURL = StorageRoots.processDefault.baseDirectory
+                .appendingPathComponent("assistant/claude-sessions.json")
         }
     }
 

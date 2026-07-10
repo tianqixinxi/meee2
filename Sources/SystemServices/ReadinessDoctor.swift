@@ -4,7 +4,6 @@ public enum ReadinessStatus: String, Codable {
     case pass
     case fail
     case warn
-    case info
 }
 
 public enum ReadinessSeverity: String, Codable {
@@ -32,8 +31,31 @@ public struct ReadinessCheck: Codable {
     public let status: ReadinessStatus
     public let severity: ReadinessSeverity
     public let detail: String
+    public let message: String
     public let recoveryAction: ReadinessAction?
+    public let settingsSection: String
     public let metadata: [String: String]
+
+    public init(
+        id: String,
+        title: String,
+        status: ReadinessStatus,
+        severity: ReadinessSeverity,
+        detail: String,
+        recoveryAction: ReadinessAction?,
+        metadata: [String: String],
+        settingsSection: String = "runtime"
+    ) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.severity = severity
+        self.detail = detail
+        message = detail
+        self.recoveryAction = recoveryAction
+        self.settingsSection = settingsSection
+        self.metadata = metadata
+    }
 }
 
 public struct ReadinessReport: Codable {
@@ -200,7 +222,7 @@ public enum ReadinessDoctor {
         return ReadinessCheck(
             id: id,
             title: title,
-            status: blocking ? .fail : .info,
+            status: blocking ? .fail : .warn,
             severity: blocking ? .required : .recommended,
             detail: notFoundDetail,
             recoveryAction: ReadinessAction(
@@ -232,7 +254,7 @@ public enum ReadinessDoctor {
         return ReadinessCheck(
             id: "provider-hook.claude",
             title: "Claude Code hooks",
-            status: passed ? .pass : (required ? .fail : .info),
+            status: passed ? .pass : (required ? .fail : .warn),
             severity: required ? .required : .informational,
             detail: detail,
             recoveryAction: passed || !required ? nil : ReadinessAction(

@@ -466,8 +466,7 @@ public final class BoardLayoutStore {
     private var cached: StoreData?
 
     private init() {
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
+        let dir = StorageRoots.processDefault.baseDirectory
         do {
             try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch {
@@ -1739,8 +1738,7 @@ public final class BoardLayoutStore {
     }
 
     private func workspaceRootURL() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("workspaces", isDirectory: true)
             .appendingPathComponent("global", isDirectory: true)
     }
@@ -2013,18 +2011,9 @@ public final class BoardLayoutStore {
     }
 
     private func currentContext() -> (userId: String, teamId: String) {
-        let defaults = UserDefaults.standard
-        let onlineSettings = OnlineProxy.loadSettings()
-        let connected = defaults.bool(forKey: "meee2Connected")
-            || (!onlineSettings.teamId.isEmpty && !onlineSettings.userId.isEmpty)
-        let defaultsUserId = OnlineProxy.hasEnvironmentOverride ? "" : (defaults.string(forKey: "meee2UserId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultsTeamId = OnlineProxy.hasEnvironmentOverride ? "" : (defaults.string(forKey: "meee2TeamId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let userId = connected
-            ? (defaultsUserId.isEmpty ? onlineSettings.userId : defaultsUserId)
-            : ""
-        let teamId = connected
-            ? (defaultsTeamId.isEmpty ? onlineSettings.teamId : defaultsTeamId)
-            : ""
+        let identity = OnlineProxy.loadIdentityMetadata()
+        let userId = identity.connected ? identity.userId : ""
+        let teamId = identity.connected ? identity.teamId : ""
         return (userId.isEmpty ? "local-user" : userId, teamId)
     }
 

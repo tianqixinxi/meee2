@@ -21,19 +21,34 @@ class SessionMonitor: ObservableObject {
     /// 文件系统事件源
     private var fileSource: DispatchSourceFileSystemObject?
 
-    /// 定时刷新 Timer
-    private var refreshTimer: Timer?
+    /// provider 目录尚未创建时，监听最近存在的父目录。
+    private var parentSource: DispatchSourceFileSystemObject?
+    private var watchedParentPath: String?
+    private var didLogMissingDirectory = false
+
+    /// 文件事件丢失时的补偿轮询。DispatchSource 不依赖调用线程的 RunLoop。
+    private var refreshTimer: DispatchSourceTimer?
+
+    /// 与文件源、定时器共享同一个隔离队列，避免首次启动恢复与 stop 竞态。
+    private var monitoringEnabled = false
+    private let parseQueueKey = DispatchSpecificKey<UInt8>()
 
     /// 解析队列
     private let parseQueue = DispatchQueue(label: "com.meee2.sessionparse", qos: .userInitiated)
 
+    /// Internal observation hook used by first-run recovery tests/readiness probes.
+    var onDirectoryWatcherAttached: (() -> Void)?
+
     // MARK: - Initialization
 
-    init() {
-        let home = NSHomeDirectory()
-        sessionsPath = URL(fileURLWithPath: home)
-            .appendingPathComponent(".claude")
-            .appendingPathComponent("sessions")
+    convenience init() {
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        self.init(sessionsPath: home.appendingPathComponent(".claude/sessions", isDirectory: true))
+    }
+
+    init(sessionsPath: URL) {
+        self.sessionsPath = sessionsPath
+        parseQueue.setSpecific(key: parseQueueKey, value: 1)
     }
 
     deinit {
@@ -46,34 +61,35 @@ class SessionMonitor: ObservableObject {
     func startMonitoring() {
         guard !isMonitoring else { return }
 
-        // 确保目录存在
-        guard FileManager.default.fileExists(atPath: sessionsPath.path) else {
-            NSLog("[SessionMonitor] Sessions directory not found: \(sessionsPath.path)")
-            return
-        }
-
-        // 初始加载
-        refreshSessions()
-
-        // 设置文件系统监听
-        setupFileWatcher()
-
-        // 设置定时刷新 (每 2 秒检查一次，作为文件监听的补充)
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.refreshSessions()
-        }
-
         isMonitoring = true
+        syncOnParseQueue {
+            monitoringEnabled = true
+            ensureDirectoryWatcher()
+
+            let timer = DispatchSource.makeTimerSource(queue: parseQueue)
+            timer.schedule(deadline: .now() + 2, repeating: 2)
+            timer.setEventHandler { [weak self] in
+                self?.ensureDirectoryWatcher()
+            }
+            timer.resume()
+            refreshTimer = timer
+        }
         NSLog("[SessionMonitor] Started monitoring: \(sessionsPath.path)")
     }
 
     /// 停止监听
     func stopMonitoring() {
-        fileSource?.cancel()
-        fileSource = nil
-
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+        syncOnParseQueue {
+            monitoringEnabled = false
+            fileSource?.cancel()
+            fileSource = nil
+            parentSource?.cancel()
+            parentSource = nil
+            watchedParentPath = nil
+            didLogMissingDirectory = false
+            refreshTimer?.cancel()
+            refreshTimer = nil
+        }
 
         isMonitoring = false
         MLog("[SessionMonitor] Stopped")
@@ -82,14 +98,19 @@ class SessionMonitor: ObservableObject {
     /// 手动刷新 sessions
     func refreshSessions() {
         parseQueue.async { [weak self] in
-            guard let self = self else { return }
-            let newSessions = self.loadSessionsFromDirectory()
-
-            DispatchQueue.main.async {
-                // 合并现有状态
-                self.sessions = self.mergeSessions(newSessions, existing: self.sessions)
-            }
+            self?.refreshSessionsOnParseQueue()
         }
+    }
+
+    /// 供 readiness/测试触发一次立即恢复；不需要重启插件。
+    func retryMonitoringNow() {
+        syncOnParseQueue {
+            ensureDirectoryWatcher()
+        }
+    }
+
+    var isWatchingDirectory: Bool {
+        syncOnParseQueue { fileSource != nil }
     }
 
     // MARK: - Private Methods
@@ -109,7 +130,15 @@ class SessionMonitor: ObservableObject {
         )
 
         fileSource?.setEventHandler { [weak self] in
-            self?.refreshSessions()
+            guard let self else { return }
+            let flags = self.fileSource?.data ?? []
+            if flags.contains(.delete) || flags.contains(.rename) {
+                self.fileSource?.cancel()
+                self.fileSource = nil
+                self.ensureDirectoryWatcher()
+                return
+            }
+            self.refreshSessionsOnParseQueue()
         }
 
         fileSource?.setCancelHandler {
@@ -117,6 +146,86 @@ class SessionMonitor: ObservableObject {
         }
 
         fileSource?.resume()
+        onDirectoryWatcherAttached?()
+    }
+
+    private func ensureDirectoryWatcher() {
+        guard monitoringEnabled else { return }
+        guard FileManager.default.fileExists(atPath: sessionsPath.path) else {
+            if fileSource != nil {
+                fileSource?.cancel()
+                fileSource = nil
+            }
+            setupParentWatcher()
+            if !didLogMissingDirectory {
+                NSLog("[SessionMonitor] Sessions directory not found yet: \(sessionsPath.path)")
+                didLogMissingDirectory = true
+            }
+            return
+        }
+        didLogMissingDirectory = false
+        parentSource?.cancel()
+        parentSource = nil
+        watchedParentPath = nil
+        if fileSource == nil {
+            setupFileWatcher()
+        }
+        refreshSessionsOnParseQueue()
+    }
+
+    /// 监听最近存在的祖先；当 `.claude` 或 `sessions` 首次出现时立即重试。
+    private func setupParentWatcher() {
+        var candidate = sessionsPath.deletingLastPathComponent()
+        while !FileManager.default.fileExists(atPath: candidate.path), candidate.path != "/" {
+            candidate.deleteLastPathComponent()
+        }
+        guard watchedParentPath != candidate.path else { return }
+
+        parentSource?.cancel()
+        parentSource = nil
+        watchedParentPath = nil
+
+        let descriptor = open(candidate.path, O_EVTONLY)
+        guard descriptor >= 0 else {
+            NSLog("[SessionMonitor] Failed to watch parent directory: \(candidate.path)")
+            return
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .delete, .rename, .attrib, .extend, .link, .revoke],
+            queue: parseQueue
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let flags = self.parentSource?.data ?? []
+            if flags.contains(.delete) || flags.contains(.rename) || flags.contains(.revoke) {
+                self.parentSource?.cancel()
+                self.parentSource = nil
+                self.watchedParentPath = nil
+            }
+            self.ensureDirectoryWatcher()
+        }
+        source.setCancelHandler {
+            close(descriptor)
+        }
+        source.resume()
+        parentSource = source
+        watchedParentPath = candidate.path
+    }
+
+    private func refreshSessionsOnParseQueue() {
+        let newSessions = loadSessionsFromDirectory()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.sessions = self.mergeSessions(newSessions, existing: self.sessions)
+        }
+    }
+
+    private func syncOnParseQueue<T>(_ work: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: parseQueueKey) != nil {
+            return work()
+        }
+        return parseQueue.sync(execute: work)
     }
 
     /// 从目录加载所有 session 文件

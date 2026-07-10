@@ -1,19 +1,43 @@
 # Security Policy
 
-## Local data wipe endpoints (same-origin only)
+## Local control plane
 
-`POST /api/system/delete-local-data/token` and `POST /api/system/delete-local-data`
-on `BoardServer` are destructive (they erase `~/.meee2/` state) and are
-**not** exposed under wildcard CORS. Both routes go through
-`BoardServer.requireLocalUIOrigin`, which rejects any request whose
-`Origin` / `Referer` is outside the local meee2 UI allow list
-(`http://localhost:9876`, `http://127.0.0.1:9876`, dev server
-`http://localhost:5002` + `127.0.0.1:5002`) with `403 forbidden_origin`.
-The pre-existing in-app confirmation token remains as a second line of
-defense against accidental clicks inside the trusted UI itself. If you
-add another destructive `/api/system/*` route, add it to
-`BoardServer.localUIOnlyPaths` and wrap it with `requireLocalUIOrigin`
-instead of `cors`.
+`BoardServer` is always bound to `127.0.0.1`; the legacy
+`MEEE2_BOARD_BIND` override is ignored. Loopback binding alone does not stop a
+website opened in the user's browser from calling localhost, so the server also
+enforces one policy before routing any `/api/*` request:
+
+- Browser origins must match the server's actual bound port. Development
+  origins are disabled unless explicitly listed in `MEEE2_BOARD_DEV_ORIGINS`.
+- Every `POST`, `PUT`, `PATCH`, and `DELETE` requires the launch-scoped
+  `X-Meee2-Control-Token`. The bundled board receives it in its no-store HTML;
+  the MCP shim reads it from the mode-0600 runtime-info file.
+- `/api/events` requires the same token in the first WebSocket application frame. The server does not attach the client to broadcasts until it replies with `auth.ok`, and rejects missing or invalid authentication after a short timeout.
+- CORS echoes a validated origin and never uses a wildcard.
+
+Repository scripts that mutate the local API must read the current token with
+`scripts/lib/board_control.py`; the helper validates the mode-0600 runtime-info
+file and emits a curl-compatible header with `--header`.
+
+The local-data wipe confirmation token remains an independent second defense
+against accidental clicks inside the authenticated UI. New API routes inherit
+the centralized control-plane middleware automatically; do not add mutation
+bypasses at individual route handlers.
+
+Legacy message retention has its own purpose-bound, one-time confirmation
+token. The token records the exact candidate count and byte total shown to the
+user and is rejected if that scope changes. Confirmed files are copied
+byte-for-byte into a timestamped directory under `~/.meee2/backups`, verified,
+and made visible with a same-directory rename before any source file is
+removed. Pending and held messages are never candidates; backup failures leave
+all original files untouched.
+
+The native WebView bridge accepts messages only from the main frame at the
+currently bound Board origin. External main-frame navigation opens in the
+system browser; subframes, redirects, and arbitrary network documents cannot
+invoke native actions. Online login callbacks use one-time, expiring state and
+S256 PKCE; callback HTML has no script capability and never accepts credentials
+in query parameters.
 
 ## Reporting a Vulnerability
 
@@ -40,7 +64,7 @@ We'll acknowledge within **7 days** and aim to ship a fix or clear timeline with
 
 In scope:
 
-- The meee2 app binary, the CLI/TUI entry points, the plugin SDK (`meee2-plugin-kit`), the built-in plugins, and the Board HTTP server + React frontend.
+- The meee2 app binary, the CLI entry point, the plugin SDK (`meee2-plugin-kit`), the built-in plugins, and the Board HTTP server + React frontend.
 
 Out of scope:
 

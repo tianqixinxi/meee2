@@ -10,7 +10,8 @@ let package = Package(
     targets: [
         .target(
             name: "Meee2CommKit",
-            path: "Sources/Meee2CommKit"
+            path: "Sources/Meee2CommKit",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
     ]
 )

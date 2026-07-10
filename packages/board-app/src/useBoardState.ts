@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { connectEvents, fetchState } from './api'
+import { connectEvents, fetchState, type BoardStateDelta } from './api'
 import type { BoardState } from './types'
 import { isOlderSession } from './types'
 
@@ -34,6 +34,7 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
   const pendingWhileHidden = useRef(false)
   const burstRefetchTimer = useRef<number | null>(null)
   const hasState = useRef(false)
+  const stateRef = useRef<BoardState | null>(null)
   // 上一次 setState 的 payload 指纹（JSON）。Claude 活跃时 WS 每秒 push 多次
   // state.changed，但绝大多数 tick 的内容没变——还是会让全 App 重渲一次。
   // 用 JSON.stringify 做快速 diff，不变就跳过 setState（新对象引用一旦进入
@@ -45,16 +46,23 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
   // 结果(lastSigRef 只挡内容相同,挡不住旧响应覆盖新响应)。
   const fetchSeqRef = useRef(0)
   const committedSeqRef = useRef(0)
+  const appliedRevisionRef = useRef(-1)
 
   // 按代际提交:seq 比已提交的更旧(更早发起却后到)就丢弃,避免 stale 覆盖。
   const commitState = useCallback((s: BoardState, seq: number) => {
     if (seq < committedSeqRef.current) return
     committedSeqRef.current = seq
+    if (typeof s.revision === 'number' && Number.isFinite(s.revision)) {
+      appliedRevisionRef.current = Math.max(appliedRevisionRef.current, s.revision)
+    }
     const sig = signatureFor(s)
     if (sig !== lastSigRef.current) {
       lastSigRef.current = sig
       hasState.current = true
+      stateRef.current = s
       setState(s)
+    } else {
+      stateRef.current = s
     }
   }, [])
 
@@ -108,18 +116,53 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
     }
   }, [commitState])
 
-  const scheduleRefresh = useCallback(() => {
+  const applyDelta = useCallback((eventRevision: number, delta: BoardStateDelta): boolean => {
+    const current = stateRef.current
+    if (!current || delta.snapshotRequired) return false
+    const changedIds = new Set(delta.changedSessionIds)
+    const removedIds = new Set(delta.removedSessionIds)
+    const matchesID = (session: BoardState['sessions'][number], ids: Set<string>) => (
+      ids.has(session.id) ||
+      (typeof session.surfaceId === 'string' && ids.has(session.surfaceId)) ||
+      (typeof session.providerResumeSessionId === 'string' && ids.has(session.providerResumeSessionId))
+    )
+    const retained = current.sessions.filter((session) => (
+      !matchesID(session, changedIds) && !matchesID(session, removedIds)
+    ))
+    const next: BoardState = {
+      ...current,
+      revision: eventRevision,
+      generatedAt: delta.timestamp ?? current.generatedAt,
+      sessions: [...retained, ...delta.changedSessions],
+    }
+    appliedRevisionRef.current = eventRevision
+    stateRef.current = next
+    const signature = signatureFor(next)
+    if (signature !== lastSigRef.current) {
+      lastSigRef.current = signature
+      setState(next)
+    }
+    return true
+  }, [])
+
+  const scheduleRefresh = useCallback((eventRevision?: number, delta?: BoardStateDelta) => {
+    if (typeof eventRevision === 'number' && eventRevision <= appliedRevisionRef.current) {
+      return
+    }
     if (document.visibilityState === 'hidden' && hasState.current) {
       pendingWhileHidden.current = true
       return
     }
     onStateChangedEvent?.()
+    if (typeof eventRevision === 'number' && delta && applyDelta(eventRevision, delta)) {
+      return
+    }
     if (burstRefetchTimer.current !== null) {
       window.clearTimeout(burstRefetchTimer.current)
       burstRefetchTimer.current = null
     }
     void refresh()
-  }, [onStateChangedEvent, refresh])
+  }, [applyDelta, onStateChangedEvent, refresh])
 
   useEffect(() => {
     // initial fetch (WS will also fire one immediately on connect; that's fine)

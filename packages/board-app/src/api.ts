@@ -62,11 +62,13 @@ import type {
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
   SessionArtifactsEnvelope,
+  ArtifactPageEnvelope,
   ArtifactCandidateListEnvelope,
   ArtifactCandidateMutationEnvelope,
 } from './types'
 import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
+import { controlPlaneWebSocketURL, getControlToken } from './controlPlane'
 
 declare global {
   interface Window {
@@ -530,6 +532,32 @@ export function repairReadiness(actionId: string): Promise<ReadinessRepairResult
   return jsonRequest<ReadinessRepairResult>('/api/system/readiness/repair', {
     method: 'POST',
     body: JSON.stringify({ actionId }),
+  })
+}
+
+export type HostedAssistantProvider = 'openai' | 'anthropic'
+
+export function fetchAssistantSecretStatus(
+  provider: HostedAssistantProvider,
+): Promise<{ provider: HostedAssistantProvider; configured: boolean }> {
+  return jsonRequest(`/api/assistant/secret?provider=${encodeURIComponent(provider)}`)
+}
+
+export function saveAssistantSecret(
+  provider: HostedAssistantProvider,
+  apiKey: string,
+): Promise<{ ok: boolean; configured: boolean }> {
+  return jsonRequest('/api/assistant/secret', {
+    method: 'PUT',
+    body: JSON.stringify({ provider, apiKey }),
+  })
+}
+
+export function deleteAssistantSecret(
+  provider: HostedAssistantProvider,
+): Promise<{ ok: boolean; configured: boolean }> {
+  return jsonRequest(`/api/assistant/secret?provider=${encodeURIComponent(provider)}`, {
+    method: 'DELETE',
   })
 }
 
@@ -1250,6 +1278,7 @@ export function reopenLauncherSession(input: {
   sessionId: string
   providerResumeSessionId?: string | null
   provider?: SpawnProvider | string | null
+  permissionMode?: AgentPermissionMode | null
   cwd?: string | null
 }): Promise<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }> {
   return jsonRequest<{ ok: boolean; action: 'reuse' | 'resume' | 'recreate' | 'create' | string; surface: SessionSurface }>(
@@ -1259,6 +1288,7 @@ export function reopenLauncherSession(input: {
       body: JSON.stringify({
         providerResumeSessionId: input.providerResumeSessionId ?? undefined,
         provider: input.provider ?? undefined,
+        permissionMode: input.permissionMode ?? undefined,
         cwd: input.cwd ?? undefined,
       }),
     },
@@ -1474,7 +1504,7 @@ export async function generatePlannerProposal(
   const llm = readLlmSettings()
   const settings: AssistantChatSettings = {
     provider: llm.provider,
-    apiKey: llm.apiKey,
+    apiKey: '',
     baseUrl: llm.baseUrl,
     model: llm.model,
     enabledTools: [],
@@ -2053,6 +2083,34 @@ export function fetchSessionArtifacts(sessionId: string): Promise<SessionArtifac
   )
 }
 
+export interface ArtifactPageParams {
+  cursor?: string | null
+  limit?: number
+  status?: string
+  canvasId?: string
+  query?: string
+  sessionId?: string
+  project?: string
+  scope?: CanvasScope | 'all'
+  group?: string
+}
+
+export function fetchArtifactsPage(params: ArtifactPageParams = {}): Promise<ArtifactPageEnvelope> {
+  const query = new URLSearchParams()
+  if (params.cursor) query.set('cursor', params.cursor)
+  if (params.limit != null) query.set('limit', String(Math.min(100, Math.max(1, params.limit))))
+  if (params.status) query.set('status', params.status)
+  if (params.canvasId && params.canvasId !== 'all') query.set('canvasId', params.canvasId)
+  if (params.query?.trim()) query.set('query', params.query.trim())
+  if (params.sessionId?.trim()) query.set('sessionId', params.sessionId.trim())
+  if (params.project?.trim()) query.set('project', params.project.trim())
+  if (params.scope && params.scope !== 'all') query.set('scope', params.scope)
+  if (params.group && params.group !== 'all') query.set('group', params.group)
+  const suffix = query.size ? `?${query.toString()}` : ''
+  return jsonRequest<ArtifactPageEnvelope>(`/api/artifacts${suffix}`)
+}
+
+/** @deprecated Use fetchArtifactsPage({ status: 'candidate' }). */
 export function fetchArtifactCandidates(sessionId?: string): Promise<ArtifactCandidateListEnvelope> {
   const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
   return jsonRequest<ArtifactCandidateListEnvelope>(`/api/artifact-candidates${query}`)
@@ -2698,6 +2756,7 @@ export interface AppSettings {
   quickOpenShortcutLabel?: string
   quickOpenShortcutConflict?: string | null
   claudeWorkflowCanvasMode: 'off' | 'ask' | 'auto'
+  usageTrackingEnabled: boolean
 }
 
 export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
@@ -2737,6 +2796,7 @@ export function fetchAppSettings(): Promise<AppSettings> {
       quickOpenShortcutLabel: '⌘⌥P',
       quickOpenShortcutConflict: null,
       claudeWorkflowCanvasMode: 'ask',
+      usageTrackingEnabled: false,
     })
   }
   return jsonRequest<AppSettings>('/api/app-settings')
@@ -2847,6 +2907,7 @@ export interface VersionInfo {
   hasUpdate: boolean
   isChecking: boolean
   lastError: string | null
+  debugBuild: boolean
   /// codex-style 信号:Sparkle 后台已经下完 + verify + stage,点 pill 就秒
   /// 重启,不再下载。生产 UI 只在 isStaged=true 时渲染 Update pill。
   isStaged: boolean
@@ -3413,33 +3474,84 @@ export interface StorageStats {
   canvases: number
   sessions: number
   runbooks: number
+  reclaimableMessageCount: number
+  reclaimableMessageBytes: number
   total: number
+  factoryResetExtra: number
+  factoryResetTotal: number
 }
 
 export interface DeleteConfirmToken {
   token: string
+  mode: DeleteLocalDataMode
   issuedAt: string
   expiresAt: string
 }
+
+export type DeleteLocalDataMode = 'workData' | 'factoryReset'
 
 export interface DeleteLocalDataResult {
   ok: boolean
   removedBytes: number
   removedPaths: string[]
+  failedPaths: string[]
+  hooksUnregistered: boolean
+  mcpUnregistered: boolean
+  credentialsCleared: boolean
 }
 
 export async function fetchStorageStats(): Promise<StorageStats> {
   return jsonRequest<StorageStats>('/api/system/storage-stats')
 }
 
-export async function requestDeleteLocalDataToken(): Promise<DeleteConfirmToken> {
-  return jsonRequest<DeleteConfirmToken>('/api/system/delete-local-data/token', { method: 'POST' })
+export async function requestDeleteLocalDataToken(
+  mode: DeleteLocalDataMode = 'workData',
+): Promise<DeleteConfirmToken> {
+  return jsonRequest<DeleteConfirmToken>('/api/system/delete-local-data/token', {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
+  })
 }
 
-export async function deleteLocalData(token: string): Promise<DeleteLocalDataResult> {
+export async function deleteLocalData(
+  token: string,
+  mode: DeleteLocalDataMode = 'workData',
+): Promise<DeleteLocalDataResult> {
   return jsonRequest<DeleteLocalDataResult>('/api/system/delete-local-data', {
     method: 'POST',
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ token, mode }),
+  })
+}
+
+export interface LegacyMessageCleanupToken {
+  token: string
+  purpose: 'legacyMessageRetention'
+  messageCount: number
+  messageBytes: number
+  issuedAt: string
+  expiresAt: string
+}
+
+export interface LegacyMessageCleanupResult {
+  ok: boolean
+  backupPath: string
+  removedCount: number
+  reclaimedBytes: number
+  failedCount: number
+}
+
+export async function requestLegacyMessageCleanupToken(): Promise<LegacyMessageCleanupToken> {
+  return jsonRequest<LegacyMessageCleanupToken>('/api/system/legacy-message-cleanup/token', {
+    method: 'POST',
+  })
+}
+
+export async function cleanUpLegacyMessages(
+  confirmation: Pick<LegacyMessageCleanupToken, 'token' | 'purpose'>,
+): Promise<LegacyMessageCleanupResult> {
+  return jsonRequest<LegacyMessageCleanupResult>('/api/system/legacy-message-cleanup', {
+    method: 'POST',
+    body: JSON.stringify(confirmation),
   })
 }
 
@@ -3581,56 +3693,75 @@ export async function listChannelMessages(
 // -- WS --------------------------------------------------------------------
 
 /**
- * Connect to /api/events. The server broadcasts `{type:"state.changed"}` frames
- * (plus one on open). We call `onChange` for each of those. Auto-reconnect
+ * Connect to /api/events. The server broadcasts `{type:"state.changed", revision}`
+ * frames (plus one on open). We forward the revision so an already-current
+ * client can skip a redundant state fetch. Auto-reconnect
  * with 1.5s backoff.
  *
  * Returns a disposer.
  */
 export function connectEvents(
-  onChange: () => void,
+  onChange: (revision?: number, delta?: BoardStateDelta) => void,
   onStatus: (connected: boolean) => void,
 ): () => void {
   let ws: WebSocket | null = null
   let reconnectTimer: number | null = null
   let stopped = false
 
-  const connect = () => {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${proto}://${location.host}/api/events`
-    ws = new WebSocket(url)
-    ws.onopen = () => {
-      // issue #25 诊断：记录每一次 (re)connect。Board flash 时如果紧跟一次
-      // 'reconnected'，说明是断线触发的初始 fetch 撞上了 server 半态。
-      // console.log('[StateTrace][board-ws] reconnected')
-      onStatus(true)
-      // 断线期间 server 端的状态变更（如 planner 新派发出来的会话）不会有
-      // 历史 'state.changed' 补发；若不在 (re)connect 时强制重新拉一次，长期开着
-      // 的面板会卡在断线前的旧快照——表现为「点节点的『打开会话查看进展』跳不过去，
-      // 因为要选的会话根本不在列表里」。可见性挂起 + signature diff 已经兜住了
-      // 无谓重渲，这里安全地补一次同步。
-      onChange()
-    }
-    ws.onmessage = (e) => {
-      try {
-        const parsed = JSON.parse(e.data)
-        if (parsed && parsed.type === 'state.changed') {
-          onChange()
+  const connect = (refreshToken = false) => {
+    void getControlToken(refreshToken).then((controlToken) => {
+      if (stopped) return
+      ws = new WebSocket(controlPlaneWebSocketURL())
+      let authenticated = false
+      ws.onopen = () => {
+        // Keep the launch secret out of the URL. The server does not attach
+        // this socket to the broadcast set until this first frame succeeds.
+        ws?.send(JSON.stringify({ type: 'auth', controlToken }))
+      }
+      ws.onmessage = (e) => {
+        try {
+          const parsed = JSON.parse(e.data)
+          if (parsed?.type === 'auth.ok') {
+            if (!authenticated) {
+              authenticated = true
+              onStatus(true)
+              // Resync after the authenticated boundary so changes that
+              // happened while disconnected cannot leave the tab stale.
+              onChange()
+            }
+          } else if (authenticated && parsed?.type === 'state.changed') {
+            const revision = typeof parsed.revision === 'number' && Number.isFinite(parsed.revision)
+              ? parsed.revision
+              : undefined
+            const stringArray = (value: unknown): string[] => (
+              Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+            )
+            onChange(revision, {
+              timestamp: typeof parsed.timestamp === 'string' ? parsed.timestamp : undefined,
+              changedSessionIds: stringArray(parsed.changedSessionIds),
+              removedSessionIds: stringArray(parsed.removedSessionIds),
+              changedSessions: Array.isArray(parsed.changedSessions) ? parsed.changedSessions : [],
+              snapshotRequired: parsed.snapshotRequired !== false,
+            })
+          }
+        } catch {
+          // ignore malformed frames
         }
-      } catch {
-        // ignore malformed frames
       }
-    }
-    ws.onclose = () => {
-      // console.log('[StateTrace][board-ws] disconnected')
+      ws.onclose = () => {
+        // console.log('[StateTrace][board-ws] disconnected')
+        onStatus(false)
+        if (!stopped) {
+          reconnectTimer = window.setTimeout(() => connect(true), 1500)
+        }
+      }
+      ws.onerror = () => {
+        /* onclose will fire */
+      }
+    }).catch(() => {
       onStatus(false)
-      if (!stopped) {
-        reconnectTimer = window.setTimeout(connect, 1500)
-      }
-    }
-    ws.onerror = () => {
-      /* onclose will fire */
-    }
+      if (!stopped) reconnectTimer = window.setTimeout(() => connect(true), 1500)
+    })
   }
   connect()
 
@@ -3642,6 +3773,14 @@ export function connectEvents(
     }
     ws?.close()
   }
+}
+
+export interface BoardStateDelta {
+  timestamp?: string
+  changedSessionIds: string[]
+  removedSessionIds: string[]
+  changedSessions: BoardState['sessions']
+  snapshotRequired: boolean
 }
 
 // -- UI-6 · AI Recap · ENG-3 artifact version stream -----------------------

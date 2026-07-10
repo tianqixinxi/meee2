@@ -273,7 +273,7 @@ public struct SettingsView: View {
             }
 
             Section("Usage Statistics") {
-                @AppStorage("usageTrackingEnabled") var usageTrackingEnabled: Bool = true
+                @AppStorage("usageTrackingEnabled") var usageTrackingEnabled: Bool = false
 
                 Toggle("Help improve meee2", isOn: $usageTrackingEnabled)
 
@@ -356,13 +356,7 @@ public struct SettingsView: View {
 
                     // Single connect button - opens browser with callback
                     Button("Connect to meee2") {
-                        var components = URLComponents(url: Meee2OnlineConfig.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
-                        components.queryItems = [
-                            URLQueryItem(name: "callback", value: "\(BoardServer.shared.url)/meee2/callback")
-                        ]
-                        if let connectUrl = components.url {
-                            NSWorkspace.shared.open(connectUrl)
-                        }
+                        NSWorkspace.shared.open(Meee2OnlineCallbackAPI.issueConnectURL())
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -390,7 +384,7 @@ public struct SettingsView: View {
                 meee2SupabaseUrl = normalizedMeee2OnlineSupabaseUrl(userInfo["supabaseUrl"] as? String ?? "")
                 meee2SupabaseKey = userInfo["supabaseKey"] as? String ?? ""
                 meee2OnlineBaseUrl = userInfo["onlineBaseUrl"] as? String ?? ""
-                // token 已由回调直接写入 settings.json，这里不再缓存副本
+                // token 已由回调直接写入 Keychain，这里不再缓存副本
                 if let teamsData = userInfo["teamsData"] as? Data {
                     meee2TeamsData = teamsData
                 }
@@ -407,8 +401,8 @@ public struct SettingsView: View {
             do {
                 let result = try await verifyCode(code: connectionCode)
 
-                // Store configuration — token 先落 settings.json（唯一真相），
-                // 后面 writeMeee2OnlineSettings 重写文件时会从文件读回保留
+                // Store configuration — token 先落 Keychain（唯一真相），
+                // 后面的 settings.json 重写只处理非秘密连接元数据
                 if let accessToken = result.access_token, !accessToken.isEmpty {
                     OnlineProxy.persistTokens(
                         accessToken: accessToken,
@@ -472,9 +466,8 @@ public struct SettingsView: View {
         UserDefaults.standard.removeObject(forKey: "meee2Online")
         UserDefaults.standard.removeObject(forKey: "meee2EnabledSessionIds")
         UserDefaults.standard.removeObject(forKey: "meee2DisabledSessionIds")
-        // settings.json 是凭证唯一真相,断开必须把文件里的 token 一并清掉,
-        // 否则其它二进制形态(读同一份文件)会继续带旧凭证调用。文件清理
-        // 要等凭证锁(在飞刷新可能持有 30s+),排到后台,不卡断开按钮。
+        // Keychain 是凭证唯一真相；断开必须在凭证锁内删掉 token，并异步
+        // 重写非秘密 settings，避免在飞刷新把旧 family 复活。
         OnlineProxy.settingsFileWriteQueue.async {
             BoardAPI.clearMeee2OnlineSettings()
             Meee2OnlinePusher.shared.refreshActivation()
@@ -570,8 +563,6 @@ public struct SettingsView: View {
         OnlineProxy.settingsFileWriteQueue.async {
             OnlineProxy.rewriteSettingsFile { credentials in
                 var meee2 = base
-                meee2["accessToken"] = credentials.accessToken
-                meee2["refreshToken"] = credentials.refreshToken
                 meee2["authExpired"] = credentials.authExpired
                 return meee2
             }
@@ -804,64 +795,59 @@ public struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // Latest Version - 始终显示
-                HStack {
-                    Text("Latest Version:")
-                    Spacer()
-                    if versionChecker.isChecking {
-                        HStack(spacing: 4) {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                            Text("Checking...")
+                if BuildInfo.isDebugBuild {
+                    Text("Update checks are unavailable in debug builds.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    HStack {
+                        Text("Latest Version:")
+                        Spacer()
+                        if versionChecker.isChecking {
+                            HStack(spacing: 4) {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                Text("Checking...")
+                                    .foregroundColor(.secondary)
+                            }
+                        } else if let latest = versionChecker.latestVersion {
+                            Text(latest)
+                                .foregroundColor(versionChecker.hasUpdate ? .green : .secondary)
+                        } else {
+                            Text("—")
                                 .foregroundColor(.secondary)
                         }
-                    } else if let latest = versionChecker.latestVersion {
-                        Text(latest)
-                            .foregroundColor(versionChecker.hasUpdate ? .green : .secondary)
-                    } else {
-                        Text("—")
-                            .foregroundColor(.secondary)
                     }
-                }
 
-                if versionChecker.hasUpdate {
-                    HStack {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .foregroundColor(.green)
-                        Text("A new version is available!")
-                            .foregroundColor(.green)
+                    if versionChecker.hasUpdate {
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(.green)
+                            Text("A new version is available!")
+                                .foregroundColor(.green)
 
-                        Spacer()
+                            Spacer()
 
-                        // 触发 Sparkle install flow —— 不再走 GitHub 网页手动下载。
-                        // AppDelegate 接到这条通知会优先消费已经 staged 的包;
-                        // 没有 staged 包或 staged 已过时则跑 user-initiated
-                        // checkForUpdates 下载、验签并重启。
-                        Button("Install Update…") {
-                            NotificationCenter.default.post(
-                                name: Notification.Name("meee2.checkForUpdates"),
-                                object: nil
-                            )
+                            Button("Install Update…") {
+                                NotificationCenter.default.post(
+                                    name: Notification.Name("meee2.checkForUpdates"),
+                                    object: nil
+                                )
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                     }
-                }
 
-                // "Check for Updates" 同时干两件事：
-                //   1. 跑自己的 appcast 拉取，刷 Settings 的 Current/Latest 显示
-                //   2. 发通知让 AppDelegate 走同一套 Sparkle staged/fresh-check
-                //      安装分支。
-                // 数据源（appcast.xml）是一份的，这里只是把"显示新版本号"
-                // 跟"真去装"两个动作合到一个按钮上。
-                Button("Check for Updates") {
-                    Task { await versionChecker.checkForUpdate() }
-                    NotificationCenter.default.post(
-                        name: Notification.Name("meee2.checkForUpdates"),
-                        object: nil
-                    )
+                    Button("Check for Updates") {
+                        Task { await versionChecker.checkForUpdate() }
+                        NotificationCenter.default.post(
+                            name: Notification.Name("meee2.checkForUpdates"),
+                            object: nil
+                        )
+                    }
+                    .disabled(versionChecker.isChecking)
                 }
-                .disabled(versionChecker.isChecking)
             }
 
             Section("Debug") {
@@ -869,13 +855,13 @@ public struct SettingsView: View {
                     DebugExporter.export()
                 }
 
-                Text("Export session data, logs, and plugin status for troubleshooting.")
+                Text("Export a redacted diagnostic summary and bounded log tail for troubleshooting.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
             Section("Info") {
-                Text("meee2 displays Claude CLI session status in a Dynamic Island-style UI.")
+                Text("meee2 manages AI sessions across its native surface, Web Board, and CLI.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -888,7 +874,9 @@ public struct SettingsView: View {
         }
         .meee2SettingsForm()
         .onAppear {
-            versionChecker.startBackgroundCheck()
+            if !BuildInfo.isDebugBuild {
+                versionChecker.startBackgroundCheck()
+            }
         }
     }
 }

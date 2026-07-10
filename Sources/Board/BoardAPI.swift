@@ -198,12 +198,17 @@ enum BoardAPI {
     }
 
     static func issueDeleteLocalDataToken(_ req: HttpRequest) -> HttpResponse {
-        jsonResponse(SystemStorageAPI.issueDeleteToken())
+        struct TokenRequest: Decodable {
+            let mode: SystemStorageAPI.DeleteMode?
+        }
+        let mode = decodeJSONBody(req, as: TokenRequest.self)?.mode ?? .workData
+        return jsonResponse(SystemStorageAPI.issueDeleteToken(mode: mode))
     }
 
     static func deleteLocalData(_ req: HttpRequest) -> HttpResponse {
         struct DeleteRequest: Decodable {
             let token: String?
+            let mode: SystemStorageAPI.DeleteMode?
         }
         let body = decodeJSONBody(req, as: DeleteRequest.self)
         guard let token = body?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -211,11 +216,65 @@ enum BoardAPI {
             return errorResponse("bad_request", "token is required", status: 400)
         }
         do {
-            return jsonResponse(try SystemStorageAPI.deleteLocalData(token: token))
+            return jsonResponse(try SystemStorageAPI.deleteLocalData(
+                token: token,
+                mode: body?.mode ?? .workData
+            ))
         } catch let e as SystemStorageAPI.APIError {
             return errorResponse("invalid_token", e.errorDescription ?? "invalid token", status: 400)
         } catch {
             return errorResponse("delete_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    static func issueLegacyMessageCleanupToken(_ req: HttpRequest) -> HttpResponse {
+        do {
+            return jsonResponse(try LegacyMessageCleanupAPI.shared.issueConfirmToken())
+        } catch let error as LegacyMessageCleanupAPI.APIError {
+            let status = error == .noCandidates ? 409 : 400
+            return errorResponse(
+                "legacy_cleanup_unavailable",
+                error.errorDescription ?? "legacy cleanup unavailable",
+                status: status
+            )
+        } catch {
+            return errorResponse("legacy_cleanup_unavailable", error.localizedDescription, status: 500)
+        }
+    }
+
+    static func cleanUpLegacyMessages(_ req: HttpRequest) -> HttpResponse {
+        struct CleanupRequest: Decodable {
+            let token: String?
+            let purpose: LegacyMessageCleanupAPI.Purpose?
+        }
+        let body = decodeJSONBody(req, as: CleanupRequest.self)
+        guard let token = body?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty,
+              let purpose = body?.purpose else {
+            return errorResponse("bad_request", "token and purpose are required", status: 400)
+        }
+        do {
+            return jsonResponse(try LegacyMessageCleanupAPI.shared.cleanUp(
+                token: token,
+                purpose: purpose
+            ))
+        } catch let error as LegacyMessageCleanupAPI.APIError {
+            let status: Int
+            switch error {
+            case .noCandidates, .previewChanged:
+                status = 409
+            case .tokenInvalid, .tokenExpired:
+                status = 400
+            case .backupFailed:
+                status = 500
+            }
+            return errorResponse(
+                "legacy_cleanup_failed",
+                error.errorDescription ?? "legacy cleanup failed",
+                status: status
+            )
+        } catch {
+            return errorResponse("legacy_cleanup_failed", error.localizedDescription, status: 500)
         }
     }
 
@@ -355,29 +414,47 @@ enum BoardAPI {
             // SessionStore 供 history / diagnostic / recovery 使用。
             // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
             // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
-            let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
-            var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
-            for session in sessions where !session.project.isEmpty {
-                spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
-                    sessionId: session.id,
-                    cwd: session.project,
-                    provider: spawnProvider(from: session),
-                    startedAt: parseISODate(session.startedAt)
-                ))
-            }
-            let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
-            deliverMatchedSpawnPrompts(matchedSpawnIntents)
-            feedPlannerSessionRunStates(sessions)
+            let sessions = BoardSessionSnapshotProvider.currentBoardSessions(
+                reconcileTerminalStatuses: false
+            )
             // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
             // 不在 UI 里显示，保持 channel 列表干净
             let channels = ChannelRegistry.shared.list()
                 .filter { !$0.name.hasPrefix("__") }
                 .map { BoardDTOBuilder.channelDTO($0) }
-            _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
             let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
-            let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
+            let version = BoardServer.shared.currentStateVersion()
+            let state = StateDTO(
+                revision: version.revision,
+                generatedAt: BoardDTOBuilder.iso(version.generatedAt),
+                sessions: sessions,
+                channels: channels,
+                coordinationGroups: groups
+            )
             return jsonResponse(state)
         }
+    }
+
+    /// Reconciliation belongs to the event pipeline, not a GET handler. Run it
+    /// before an event-driven broadcast so spawn-intent prompt matching remains
+    /// reliable even when no Board UI is polling /api/state.
+    static func reconcileStateBeforeBroadcast() {
+        let sessions = BoardSessionSnapshotProvider.currentBoardSessions(
+            reconcileTerminalStatuses: true
+        )
+        let spawnCandidates = sessions.compactMap { session -> BoardLayoutStore.SpawnCandidate? in
+            guard !session.project.isEmpty else { return nil }
+            return BoardLayoutStore.SpawnCandidate(
+                sessionId: session.id,
+                cwd: session.project,
+                provider: spawnProvider(from: session),
+                startedAt: parseISODate(session.startedAt)
+            )
+        }
+        let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
+        deliverMatchedSpawnPrompts(matchedSpawnIntents)
+        feedPlannerSessionRunStates(sessions)
+        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
     }
 
     private static func spawnProvider(from session: SessionDTO) -> String? {
@@ -462,7 +539,7 @@ enum BoardAPI {
         }
         do {
             let cwd = try explicitSessionCwd(rawCwd) ?? rawCwd
-            let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            let command = AgentLaunchCommand.defaultCommand(forProvider: provider)
             let createIfMissing = (json["createIfMissing"] as? Bool) ?? true
             let initialPrompt = (json["initialPrompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let snapshot = try createInternalSessionSurface(
@@ -760,8 +837,7 @@ enum BoardAPI {
     }
 
     private static func saveLaunchAttachment(data: Data, filename rawFilename: String, contentType: String) throws -> AgentLaunchAttachment {
-        let baseDir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let baseDir = StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("attachments", isDirectory: true)
             .appendingPathComponent("launcher", isDirectory: true)
         try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
@@ -915,6 +991,7 @@ enum BoardAPI {
     }
 
     static func getSessionArtifacts(_ req: HttpRequest) -> HttpResponse {
+        MWarn("[Deprecated] GET /api/sessions/:id/artifacts; use cursor-paged GET /api/artifacts")
         guard let sessionId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !sessionId.isEmpty else {
             return errorResponse("bad_request", "missing session id", status: 400)
@@ -923,6 +1000,7 @@ enum BoardAPI {
     }
 
     static func listArtifactCandidates(_ req: HttpRequest) -> HttpResponse {
+        MWarn("[Deprecated] GET /api/artifact-candidates; use GET /api/artifacts?status=candidate")
         let sessionIdRaw = req.queryParams.first(where: { $0.0 == "sessionId" })?.1
         let sessionId = sessionIdRaw?.removingPercentEncoding ?? sessionIdRaw
         let includeDiscarded = req.queryParams.first(where: { $0.0 == "includeDiscarded" })?.1 == "true"
@@ -1059,6 +1137,7 @@ enum BoardAPI {
     static func reopenLauncherSession(_ req: HttpRequest) -> HttpResponse {
         struct ReopenRequest: Decodable {
             let provider: String?
+            let permissionMode: String?
             let cwd: String?
             let providerResumeSessionId: String?
         }
@@ -1076,6 +1155,7 @@ enum BoardAPI {
                 sessionId: id,
                 providerResumeSessionId: body?.providerResumeSessionId,
                 provider: body?.provider,
+                permissionMode: body?.permissionMode,
                 cwd: body?.cwd
             )
             return jsonResponse(
@@ -1095,8 +1175,7 @@ enum BoardAPI {
     }
 
     private static func createTemporarySessionWorkspace(now: Date = Date()) throws -> String {
-        let root = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let root = StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("workspaces", isDirectory: true)
             .appendingPathComponent("temporary", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1353,8 +1432,8 @@ enum BoardAPI {
         }
     }
 
-    /// Phase 2 — runState 回流: on every state poll, push the current status of
-    /// each live session into the planner graph. `observeBound` is keyed by
+    /// Phase 2 — runState 回流: before an event-driven state broadcast, push the
+    /// current status of each live session into the planner graph. `observeBound` is keyed by
     /// `sessionId` and no-ops for any session that is not a bound planner
     /// session node, so this is cheap for the common (non-planner) case.
     private static func feedPlannerSessionRunStates(_ sessions: [SessionDTO]) {
@@ -3266,7 +3345,7 @@ enum BoardAPI {
             .flatMap { ["mcp__meee2__\($0)", "mcp__plugin_meee2_meee2__\($0)"] }
             .map { "\"\($0)\"" }
             .joined(separator: " ")
-        return AgentLaunchCommand.fullAccessCommand(forProvider: "claude") + " --disallowedTools \(rules)"
+        return AgentLaunchCommand.defaultCommand(forProvider: "claude") + " --disallowedTools \(rules)"
     }
 
     static func updatePlannerArtifactViews(_ req: HttpRequest) -> HttpResponse {
@@ -4897,7 +4976,7 @@ enum BoardAPI {
             .flatMap { ["mcp__meee2__\($0)", "mcp__plugin_meee2_meee2__\($0)"] }
             .map { "\"\($0)\"" }
             .joined(separator: " ")
-        return AgentLaunchCommand.fullAccessCommand(forProvider: "claude") + " --disallowedTools \(rules)"
+        return AgentLaunchCommand.defaultCommand(forProvider: "claude") + " --disallowedTools \(rules)"
     }
 
     /// UI-2 · proxy `fetchOwnedCanvases` to the meee2-online team API.
@@ -5434,7 +5513,7 @@ enum BoardAPI {
             fallbackProvider: dispatch.runner.rawValue
         )
         let command = AgentLaunchCommand.commandRequestsResume(launch.command)
-            ? AgentLaunchCommand.fullAccessCommand(forProvider: launch.provider)
+            ? AgentLaunchCommand.defaultCommand(forProvider: launch.provider)
             : launch.command
         // Purpose is tagged with the *step* node id; the session PlanningNode
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
@@ -5634,20 +5713,20 @@ enum BoardAPI {
         let command = node?.dispatch?.command ?? node?.dispatch?.runner.spawnCommand ?? ""
         let provider = AgentLaunchCommand.provider(forCommand: command.isEmpty ? node?.dispatch?.runner.rawValue ?? "claude" : command)
         if AgentLaunchCommand.isMeee2InternalSessionId(sessionId) {
-            return AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            return AgentLaunchCommand.defaultCommand(forProvider: provider)
         }
         return AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: sessionId)
     }
 
     private static func plannerFreshCommand(for node: PlanningNode?) -> String {
         let rawCommand = node?.dispatch?.command?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallback = node?.dispatch?.runner.spawnCommand ?? AgentLaunchCommand.fullAccessCommand(forProvider: node?.dispatch?.runner.rawValue ?? "claude")
+        let fallback = node?.dispatch?.runner.spawnCommand ?? AgentLaunchCommand.defaultCommand(forProvider: node?.dispatch?.runner.rawValue ?? "claude")
         let launch = AgentLaunchCommand.normalize(
             command: rawCommand?.isEmpty == false ? rawCommand! : fallback,
             fallbackProvider: node?.dispatch?.runner.rawValue ?? "claude"
         )
         if AgentLaunchCommand.commandRequestsResume(launch.command) {
-            return AgentLaunchCommand.fullAccessCommand(forProvider: launch.provider)
+            return AgentLaunchCommand.defaultCommand(forProvider: launch.provider)
         }
         return launch.command
     }
@@ -5722,7 +5801,10 @@ enum BoardAPI {
             userAvatarUrl: userAvatarUrl,
             initials: initials(for: displayName, connected: connected),
             dashboardUrl: Meee2OnlineConfig.appURL(path: "dashboard").absoluteString,
-            connectUrl: meee2ConnectUrl().absoluteString,
+            // The actionable Connect URL is issued only by the authenticated
+            // POST endpoint below, because issuing it also creates one-time
+            // callback state. Keep this compatibility field non-authorizing.
+            connectUrl: Meee2OnlineConfig.appURL(path: "connect").absoluteString,
             teams: BoardDTOBuilder.meee2OnlineTeams()
         ))
     }
@@ -5764,7 +5846,7 @@ enum BoardAPI {
     }
 
     static func openMeee2OnlineConnect(_ req: HttpRequest) -> HttpResponse {
-        NSWorkspace.shared.open(meee2ConnectUrl())
+        NSWorkspace.shared.open(Meee2OnlineCallbackAPI.issueConnectURL())
         return jsonResponse(OkEnvelope(ok: true))
     }
 
@@ -5840,6 +5922,9 @@ enum BoardAPI {
                 return errorResponse("invalid_claude_workflow_mode", "claudeWorkflowCanvasMode must be off, ask, or auto", status: 400)
             }
             defaults.set(parsed.rawValue, forKey: ClaudeWorkflowCanvasMode.defaultsKey)
+        }
+        if let enabled = json["usageTrackingEnabled"] as? Bool {
+            defaults.set(enabled, forKey: "usageTrackingEnabled")
         }
 
         DispatchQueue.main.async {
@@ -5960,8 +6045,7 @@ enum BoardAPI {
     }
 
     private static func e2eTranscriptPath(sessionId: String) -> String {
-        let base = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let base = StorageRoots.processDefault.baseDirectory
             .appendingPathComponent("e2e-transcripts", isDirectory: true)
         return base.appendingPathComponent("\(sessionId).jsonl").path
     }
@@ -6028,7 +6112,8 @@ enum BoardAPI {
             quickOpenShortcut: QuickOpenShortcut.current.rawValue,
             quickOpenShortcutLabel: QuickOpenShortcut.current.menuDisplayName,
             quickOpenShortcutConflict: QuickOpenShortcut.currentConflictWarning,
-            claudeWorkflowCanvasMode: ClaudeWorkflowCanvasMode.current(defaults: defaults).rawValue
+            claudeWorkflowCanvasMode: ClaudeWorkflowCanvasMode.current(defaults: defaults).rawValue,
+            usageTrackingEnabled: defaults.object(forKey: "usageTrackingEnabled") as? Bool ?? false
         )
     }
 
@@ -6083,8 +6168,8 @@ enum BoardAPI {
     }
 
     private static func readMeee2OnlineSettings() -> [String: Any] {
-        let file = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2/settings.json")
+        let file = StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("settings.json")
         guard let data = try? Data(contentsOf: file),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let meee2 = root["meee2"] as? [String: Any] else {
@@ -6111,16 +6196,8 @@ enum BoardAPI {
         return value.isEmpty ? "U" : value
     }
 
-    private static func meee2ConnectUrl() -> URL {
-        var components = URLComponents(url: Meee2OnlineConfig.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "callback", value: "\(BoardServer.shared.url)/meee2/callback")
-        ]
-        return components.url!
-    }
-
-    /// 主动断开：清空当前偏好域 + settings.json（含 token，文件是凭证唯一
-    /// 真相）。SettingsView 的 Disconnect 也走这里，保证两个入口语义一致。
+    /// 主动断开：清空当前偏好域、Keychain token 与非秘密 settings.json。
+    /// SettingsView 的 Disconnect 也走这里，保证两个入口语义一致。
     static func clearMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         for key in [
@@ -6148,7 +6225,7 @@ enum BoardAPI {
 
         // 断开 = 整文件重置（token 一并清掉）；忽略文件现值，但仍须持锁
         // 与在飞刷新串行，避免清理与轮换落盘交错出半新半旧状态
-        OnlineProxy.rewriteSettingsFile { _ in
+        OnlineProxy.rewriteSettingsFile(clearCredentials: true) { _ in
             [
                 "enabled": false,
                 "online": false,
@@ -6195,13 +6272,9 @@ enum BoardAPI {
             "machineId": Host.current().name ?? "unknown",
             "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
         ]
-        // token / authExpired 在凭证锁内重读 settings.json 合并(rewrite
-        // 内部持锁):偏好域不再存 token,不持锁的 read-then-write 会把并发
-        // 刷新刚轮换的凭证冲回已吊销的旧 token family
+        // authExpired 在凭证锁内重读；token 始终留在 Keychain，不参与 JSON compose。
         OnlineProxy.rewriteSettingsFile { credentials in
             var meee2 = base
-            meee2["accessToken"] = credentials.accessToken
-            meee2["refreshToken"] = credentials.refreshToken
             meee2["authExpired"] = credentials.authExpired
             return meee2
         }
@@ -6303,6 +6376,12 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
+        struct ActivateExternalResponse: Encodable {
+            let ok: Bool
+            let terminalKind: String
+            let sessionId: String
+            let openTarget: String
+        }
         if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sid) {
             struct ActivateInternalResponse: Encodable {
                 let ok: Bool
@@ -6333,7 +6412,25 @@ enum BoardAPI {
                 openTarget: "native-workspace"
             ))
         }
-        return errorResponse("not_found", "managed session not found: \(sid)", status: 404)
+        if let session = resolvePluginSession(sid) {
+            PluginManager.shared.activateTerminal(for: session)
+            return jsonResponse(ActivateExternalResponse(
+                ok: true,
+                terminalKind: "external",
+                sessionId: session.id,
+                openTarget: "external"
+            ))
+        }
+        if let desktopSid = resolveDesktopMetadataSid(sid) {
+            ClaudeDesktopActivator.activate(sid: desktopSid)
+            return jsonResponse(ActivateExternalResponse(
+                ok: true,
+                terminalKind: "external",
+                sessionId: desktopSid,
+                openTarget: "external"
+            ))
+        }
+        return errorResponse("not_found", "session not found: \(sid)", status: 404)
     }
 
     /// POST /api/sessions/:id/open-workspace
@@ -6973,6 +7070,7 @@ enum BoardAPI {
         let hasUpdate: Bool
         let isChecking: Bool
         let lastError: String?
+        let debugBuild: Bool
         /// codex-style "pill only when ready to instant-install" 信号。
         /// AppDelegate 把 SilentInstallUserDriver.isReadyToInstall 桥过来。
         /// 生产 UI 只在 `isStaged=true` 时渲染 pill,保证用户点击就秒重启。
@@ -6996,6 +7094,7 @@ enum BoardAPI {
             hasUpdate: v.hasUpdate,
             isChecking: v.isChecking,
             lastError: v.lastError,
+            debugBuild: BuildInfo.isDebugBuild,
             isStaged: SparkleStagedBridge.snapshot(),
             stagedVersion: SparkleStagedBridge.stagedVersion()
         ))
@@ -7072,6 +7171,9 @@ enum BoardAPI {
     /// 主要给 dev 测预下载流程用 —— 生产环境靠 Sparkle 的 1h 本地轮询和
     /// 启动后主动 background check。
     static func checkUpdateInBackground(_ req: HttpRequest) -> HttpResponse {
+        guard !BuildInfo.isDebugBuild else {
+            return errorResponse("debug_build", "updates are disabled in debug builds", status: 409)
+        }
         #if canImport(AppKit)
         DispatchQueue.main.async {
             NotificationCenter.default.post(
@@ -7091,6 +7193,9 @@ enum BoardAPI {
     /// user-initiated checkForUpdates 下载并安装当前最新版。BoardAPI 这边
     /// 只发通知,不直接 import Sparkle。
     static func installUpdate(_ req: HttpRequest) -> HttpResponse {
+        guard !BuildInfo.isDebugBuild else {
+            return errorResponse("debug_build", "updates are disabled in debug builds", status: 409)
+        }
         #if canImport(AppKit)
         DispatchQueue.main.async {
             NotificationCenter.default.post(
@@ -7264,9 +7369,9 @@ enum BoardAPI {
         let command: String
         switch provider {
         case "claude":
-            command = AgentLaunchCommand.fullAccessCommand(forProvider: "claude")
+            command = AgentLaunchCommand.defaultCommand(forProvider: "claude")
         case "codex":
-            command = AgentLaunchCommand.fullAccessCommand(forProvider: "codex")
+            command = AgentLaunchCommand.defaultCommand(forProvider: "codex")
         default:
             return errorResponse("bad_request", "provider must be 'claude' or 'codex'", status: 400)
         }

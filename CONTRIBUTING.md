@@ -56,7 +56,7 @@ See `CLAUDE.md` for the full list. The load-bearing ones:
 
 - One logical change per PR. Split refactors from behavior changes when you can.
 - Reference any related issue in the PR body.
-- Include a short "Test plan" describing what you verified manually (menu bar UI, TUI, CLI, web board — whatever surfaces your change touches).
+- Include a short "Test plan" describing what you verified manually (menu bar UI, CLI, web board — whatever surfaces your change touches).
 - For UI changes, a short screenshot or GIF helps reviewers a lot.
 
 ## Architectural Gotchas
