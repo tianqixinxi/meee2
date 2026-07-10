@@ -100,6 +100,7 @@ const RECENT_GROUP_ID = 'recent'
 const HISTORY_GROUP_ID = 'history'
 const HISTORY_SECTION_ID = 'history-section'
 const HISTORY_AFTER_MS = 25 * 24 * 60 * 60 * 1000
+const TERMINAL_ATTACH_GRACE_MS = 2_000
 const SIDEBAR_WIDTH_KEY = 'meee2.sessionLauncher.sidebarWidth'
 const SIDEBAR_COLLAPSED_KEY = 'meee2.sessionLauncher.sidebarCollapsed'
 const LAST_SELECTION_KEY = 'meee2.sessionLauncher.lastSelection'
@@ -478,6 +479,15 @@ export function SessionLauncherView({
         || a.id.localeCompare(b.id)
     ))
   }, [explicitProjects])
+
+  const historyProjectNames = useMemo(() => {
+    const names = new Map<string, string>()
+    for (const session of grouped.history) {
+      const project = projectByPath.get(normalizePath(session.project))
+      if (project) names.set(session.id, project.name)
+    }
+    return names
+  }, [grouped.history, projectByPath])
 
   const reopenLauncherSessionForSession = useCallback((session: Session) => {
     const resumeSessionId = providerResumeTargetForSession(session)
@@ -1092,6 +1102,7 @@ export function SessionLauncherView({
               <div key={project.id} className={`session-launcher__project-group${selected ? ' is-selected' : ''}`}>
                 <ProjectLauncherRow
                   project={project}
+                  hasSessions={projectSessions.length > 0}
                   expanded={expanded}
                   selected={selected}
                   menuOpen={projectMenuId === project.id}
@@ -1104,7 +1115,7 @@ export function SessionLauncherView({
                   onReveal={() => void handleRevealProject(project)}
                   onForget={() => openForgetProject(project)}
                 />
-                {expanded && (
+                {expanded && projectSessions.length > 0 && (
                   <SessionList
                     groupId={`project:${project.id}`}
                     sessions={projectSessions}
@@ -1167,6 +1178,7 @@ export function SessionLauncherView({
                   onOpenSessionMenu={handleOpenSessionMenu}
                   onOpenSessionMenuAt={openSessionMenuAt}
                   titleOverrides={titleOverrides}
+                  projectNames={historyProjectNames}
                   pinnedSessionIds={pinnedSessionIds}
                   archivingSessionId={archivingSessionId}
                 />
@@ -1410,6 +1422,7 @@ function SessionContextMenuView({
 
 function ProjectLauncherRow({
   project,
+  hasSessions,
   expanded,
   selected,
   menuOpen,
@@ -1423,6 +1436,7 @@ function ProjectLauncherRow({
   onForget,
 }: {
   project: SessionProject
+  hasSessions: boolean
   expanded: boolean
   selected: boolean
   menuOpen: boolean
@@ -1449,14 +1463,16 @@ function ProjectLauncherRow({
         </span>
       </button>
       <div className="session-launcher__project-actions" data-session-project-menu-root>
-        <button
-          type="button"
-          onClick={onToggleExpanded}
-          aria-label={expanded ? t('sessions.launcher.collapseProject', { name: project.name }) : t('sessions.launcher.expandProject', { name: project.name })}
-          title={expanded ? t('sessions.launcher.collapse') : t('sessions.launcher.expand')}
-        >
-          <ChevronDown size={14} className={expanded ? 'is-open' : ''} />
-        </button>
+        {hasSessions && (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            aria-label={expanded ? t('sessions.launcher.collapseProject', { name: project.name }) : t('sessions.launcher.expandProject', { name: project.name })}
+            title={expanded ? t('sessions.launcher.collapse') : t('sessions.launcher.expand')}
+          >
+            <ChevronDown size={14} className={expanded ? 'is-open' : ''} />
+          </button>
+        )}
         <div className="session-launcher__project-menu-wrap">
           <button
             type="button"
@@ -1693,6 +1709,7 @@ function SessionList({
   onOpenSessionMenu,
   onOpenSessionMenuAt,
   titleOverrides,
+  projectNames,
   pinnedSessionIds,
   archivingSessionId,
   nested = false,
@@ -1708,6 +1725,7 @@ function SessionList({
   onOpenSessionMenu: (session: Session, event: ReactMouseEvent<HTMLElement>) => void
   onOpenSessionMenuAt: (session: Session, clientX: number, clientY: number) => void
   titleOverrides: Record<string, string>
+  projectNames?: ReadonlyMap<string, string>
   pinnedSessionIds: Set<string>
   archivingSessionId: string | null
   nested?: boolean
@@ -1730,6 +1748,7 @@ function SessionList({
             pinned={pinnedSessionIds.has(session.id)}
             archiving={archivingSessionId === session.id}
             title={sessionDisplayTitle(session, titleOverrides)}
+            projectName={projectNames?.get(session.id)}
             onSelect={() => onSelectSession(session)}
             onTogglePinned={() => onTogglePinned(session)}
             onArchive={() => onArchiveSession(session)}
@@ -1757,6 +1776,7 @@ function SessionRow({
   pinned,
   archiving,
   title,
+  projectName,
   onSelect,
   onTogglePinned,
   onArchive,
@@ -1768,6 +1788,7 @@ function SessionRow({
   pinned: boolean
   archiving: boolean
   title: string
+  projectName?: string
   onSelect: () => void
   onTogglePinned: () => void
   onArchive: () => void
@@ -1777,6 +1798,7 @@ function SessionRow({
   const { t } = useI18n()
   const age = compactSessionAge(session)
   const state = sessionRowState(session, t)
+  const projectContext = projectName ? t('sessions.launcher.projectContext', { project: projectName }) : null
   const tooltip = sessionRowTooltip(session, title, state?.label, age)
   const handleMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button === 2) onContextMenu(event)
@@ -1806,11 +1828,17 @@ function SessionRow({
         onContextMenu={onContextMenu}
         onMouseDown={handleMouseDown}
         onKeyDown={handleKeyDown}
-        aria-label={state ? `${title} · ${state.label}` : title}
+        aria-label={[title, projectContext, state?.label].filter(Boolean).join(' · ')}
         title={tooltip}
       >
         <span>
           <strong>{title}</strong>
+          {projectName && (
+            <small className="session-launcher__session-project">
+              <Folder size={10} aria-hidden />
+              {projectName}
+            </small>
+          )}
           {state && (
             <em className={`session-launcher__session-state is-${state.tone}`}>
               {state.tone === 'done' ? <CheckCircle2 size={11} aria-hidden /> : <AlertCircle size={11} aria-hidden />}
@@ -2291,14 +2319,12 @@ function SessionLauncherTerminal({
       setShowRecovery(false)
       return undefined
     }
-    const rawStatus = (session?.surfaceStatus ?? session?.status ?? '').toLowerCase()
-    const historical = rawStatus === 'exited' || rawStatus === 'dead' || rawStatus === 'failed'
-    if (historical) {
+    if (sessionNeedsImmediateTerminalFallback(session)) {
       setShowRecovery(true)
       return undefined
     }
     setShowRecovery(false)
-    const timer = window.setTimeout(() => setShowRecovery(true), 8_000)
+    const timer = window.setTimeout(() => setShowRecovery(true), TERMINAL_ATTACH_GRACE_MS)
     return () => window.clearTimeout(timer)
   }, [canOpenNativeTerminal, session?.id, session?.status, session?.surfaceStatus, terminalTabActive])
 
@@ -2402,7 +2428,7 @@ function SessionLauncherTerminal({
     : session
   const status = sessionTerminalStatus(statusSession ?? fallbackRunningSession, t)
   const artifactTarget = session ? sessionArtifactFilter(session, title) : null
-  const fallbackMessage = sessionLauncherTerminalFallbackMessage(session, reopening, t)
+  const fallbackMessage = sessionLauncherTerminalFallbackMessage(session, reopening, showRecovery, t)
 
   return (
     <div className="session-launcher-terminal">
@@ -2720,17 +2746,43 @@ function sessionTerminalStatus(
 function sessionLauncherTerminalFallbackMessage(
   session: Session | null,
   reopening: boolean,
+  recoveryVisible: boolean,
   t: ReturnType<typeof useI18n>['t'],
 ): string {
   if (reopening) return t('sessions.launcher.reopeningTerminal')
   if (!session) return t('sessions.launcher.noTerminalSurface')
   const raw = (session.surfaceStatus ?? session.status ?? '').toLowerCase()
+  if (raw === 'completed' || raw === 'done' || raw === 'idle') {
+    return providerResumeTargetForSession(session)
+      ? t('sessions.launcher.completedResumeAvailable')
+      : t('sessions.launcher.completedWithoutTerminal')
+  }
   if (raw === 'exited' || raw === 'dead' || raw === 'failed') {
     return providerResumeTargetForSession(session)
       ? t('sessions.launcher.exitedResumeAvailable')
       : t('sessions.launcher.noTerminalSurface')
   }
+  if (sessionUsesExternalTerminal(session)) return t('sessions.launcher.externalWithoutTerminal')
+  if (recoveryVisible) return t('sessions.launcher.terminalAttachTimedOut')
   return t('sessions.launcher.waitingForTerminalSurface')
+}
+
+function sessionNeedsImmediateTerminalFallback(session: Session | null): boolean {
+  if (!session) return false
+  const raw = (session.surfaceStatus ?? session.status ?? '').toLowerCase()
+  return raw === 'completed'
+    || raw === 'done'
+    || raw === 'idle'
+    || raw === 'exited'
+    || raw === 'dead'
+    || raw === 'failed'
+    || sessionUsesExternalTerminal(session)
+}
+
+function sessionUsesExternalTerminal(session: Session): boolean {
+  return session.terminalBackend === 'external'
+    || session.terminalKind === 'external'
+    || session.openTarget === 'external'
 }
 
 function sessionDisplayTitle(session: Session, titleOverrides: Record<string, string>): string {

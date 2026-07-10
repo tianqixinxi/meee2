@@ -462,6 +462,27 @@ describe('SessionLauncherView', () => {
     expect(screen.getByRole('button', { name: '很久以前的临时会话' })).toBeInTheDocument()
   })
 
+  it('labels historical sessions with their explicit project and hides empty project placeholders', async () => {
+    const historicalProjectSession = makeSession({
+      id: 'historical-project-session',
+      project: project.path,
+      recentMessages: [{ role: 'user', text: '历史项目会话' }],
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([historicalProjectSession])} />)
+
+    await screen.findByRole('button', { name: 'meee2-workspace' })
+    expect(screen.queryByText('暂无对话')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '展开 meee2-workspace' })).not.toBeInTheDocument()
+
+    await expandHistory()
+    const row = screen.getByRole('button', { name: '历史项目会话 · 项目 meee2-workspace' })
+    expect(within(row).getByText('meee2-workspace')).toBeInTheDocument()
+  })
+
   it('keeps session and project positions stable when live activity changes', async () => {
     const alphaProject: SessionProject = {
       ...project,
@@ -542,6 +563,66 @@ describe('SessionLauncherView', () => {
     fireEvent.click(screen.getByRole('button', { name: '排查问题' }))
     expect(screen.getByRole('button', { name: '重试挂载' })).toBeInTheDocument()
     expect(screen.getByText('stale-session')).toBeInTheDocument()
+  })
+
+  it('shows a completed external session result immediately instead of waiting for a surface', async () => {
+    localStorage.setItem(lastSelectionKey, JSON.stringify({
+      kind: 'session',
+      sessionId: 'external-completed-session',
+    }))
+    const externalSession = makeSession({
+      id: 'external-completed-session',
+      title: 'raycast-agent',
+      project: '/Users/kai/.meee2/workspaces/global/raycast-agent',
+      recentMessages: [{ role: 'user', text: '执行 planner node' }],
+      status: 'idle',
+      terminalKind: 'external',
+      terminalBackend: 'external',
+      surfaceId: null,
+      providerResumeSessionId: null,
+      surfaceStatus: null,
+      nativeWorkspaceAvailable: false,
+      openTarget: 'external',
+      sessionScope: 'external',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([externalSession])} />)
+
+    expect(await screen.findByText('这个会话已完成，没有可显示的内嵌终端。')).toBeInTheDocument()
+    expect(screen.queryByText('等待 terminal surface')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '打开外部终端' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '排查问题' })).toBeInTheDocument()
+  })
+
+  it('replaces the waiting message when a running terminal misses the attach grace period', async () => {
+    vi.useFakeTimers()
+    try {
+      localStorage.setItem(lastSelectionKey, JSON.stringify({
+        kind: 'session',
+        sessionId: 'missing-surface-session',
+      }))
+      const missingSurfaceSession = makeSession({
+        id: 'missing-surface-session',
+        recentMessages: [{ role: 'user', text: '等待内嵌终端' }],
+        status: 'running',
+        terminalKind: 'internal',
+        terminalBackend: 'ghostty-surface',
+        surfaceId: null,
+        providerResumeSessionId: null,
+        surfaceStatus: 'starting',
+        nativeWorkspaceAvailable: false,
+        openTarget: 'web-fallback',
+      })
+
+      renderWithI18n(<SessionLauncherView state={makeState([missingSurfaceSession])} />)
+
+      expect(screen.getByText('等待 terminal surface')).toBeInTheDocument()
+      await act(async () => vi.advanceTimersByTime(2_000))
+      expect(screen.getByText('未能挂载终端。你可以重试或在外部终端中打开。')).toBeInTheDocument()
+      expect(screen.queryByText('等待 terminal surface')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('archives a session from the launcher row without deleting it', async () => {
@@ -1035,7 +1116,7 @@ describe('SessionLauncherView', () => {
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     await expandHistory()
-    fireEvent.click(await screen.findByRole('button', { name: '继续旧的 Session' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^继续旧的 Session(?: ·|$)/ }))
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
 
@@ -1050,7 +1131,7 @@ describe('SessionLauncherView', () => {
 
     view.rerender(<I18nProvider><SessionLauncherView state={makeState([restoredSession, staleSession])} /></I18nProvider>)
 
-    expect(await screen.findByRole('button', { name: '继续旧的 Session' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /^继续旧的 Session(?: ·|$)/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建出来的 restored surface' })).not.toBeInTheDocument()
     expect(view.container.querySelectorAll('.session-launcher__session-item.is-selected')).toHaveLength(1)
     expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('继续旧的 Session')
@@ -1173,7 +1254,7 @@ describe('SessionLauncherView', () => {
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     await expandHistory()
-    fireEvent.click(await screen.findByRole('button', { name: '已经恢复过的 Session' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^已经恢复过的 Session(?: ·|$)/ }))
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
 
@@ -1202,7 +1283,7 @@ describe('SessionLauncherView', () => {
     renderWithI18n(<SessionLauncherView state={makeState([planSession])} />)
 
     await expandHistory()
-    expect(screen.getByRole('button', { name: 'hi' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^hi(?: ·|$)/ })).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText('正在加载项目')).not.toBeInTheDocument())
     expect(screen.getByRole('button', { name: /^hi(?: ·|$)/ })).toBeInTheDocument()
     expect(screen.queryByText('/plan hi')).not.toBeInTheDocument()

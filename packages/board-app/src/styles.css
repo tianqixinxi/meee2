@@ -16090,6 +16090,25 @@ body.session-launcher-sidebar-resizing * {
   white-space: nowrap;
 }
 
+.session-launcher__session-project {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 520;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-launcher__session-project svg {
+  flex: 0 0 10px;
+}
+
 .session-launcher__project-row strong {
   font-size: 12.5px;
   font-weight: 620;
