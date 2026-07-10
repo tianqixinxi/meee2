@@ -968,7 +968,7 @@ describe('SessionLauncherView', () => {
     expect(screen.queryByText('隐藏临时会话')).not.toBeInTheDocument()
   })
 
-  it('resumes only the explicitly confirmed temporary session when no live surface exists', async () => {
+  it('automatically resumes only the selected temporary session when no live surface exists', async () => {
     const temporarySessions = [
       makeSession({
         id: 'temp-a',
@@ -994,9 +994,6 @@ describe('SessionLauncherView', () => {
     await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: '临时问题 B' }))
 
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
-
     await waitFor(() => {
       expect(api.reopenLauncherSession).toHaveBeenCalledWith({
         sessionId: 'temp-b',
@@ -1016,7 +1013,7 @@ describe('SessionLauncherView', () => {
     })
   })
 
-  it('reopens a stale launcher session only after explicit resume', async () => {
+  it('automatically reopens a stale launcher session after row selection', async () => {
     let resolveReopen: (value: Awaited<ReturnType<typeof api.reopenLauncherSession>>) => void = () => {}
     api.reopenLauncherSession.mockReturnValueOnce(new Promise((resolve) => {
       resolveReopen = resolve
@@ -1041,9 +1038,8 @@ describe('SessionLauncherView', () => {
     const row = await screen.findByRole('button', { name: '继续历史临时问题' })
     fireEvent.click(row)
 
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
     expect(await screen.findByText('正在恢复原生 terminal session...')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '恢复会话' })).not.toBeInTheDocument()
     await waitFor(() => {
       expect(api.reopenLauncherSession).toHaveBeenCalledWith({
         sessionId: 'stale-session',
@@ -1080,7 +1076,8 @@ describe('SessionLauncherView', () => {
     })
   })
 
-  it('opens an external terminal only after the explicit recovery action', async () => {
+  it('shows explicit recovery actions only after automatic resume fails', async () => {
+    api.reopenLauncherSession.mockRejectedValueOnce(new Error('resume failed'))
     const staleSession = makeSession({
       id: 'external-recovery-session',
       title: 'Claude Code',
@@ -1101,13 +1098,18 @@ describe('SessionLauncherView', () => {
     fireEvent.click(await screen.findByRole('button', { name: '在外部终端中继续' }))
 
     expect(api.activateSession).not.toHaveBeenCalled()
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'external-recovery-session',
+        providerResumeSessionId,
+      }))
+    })
     fireEvent.click(await screen.findByRole('button', { name: '打开外部终端' }))
 
     await waitFor(() => {
       expect(api.activateSession).toHaveBeenCalledWith('external-recovery-session')
     })
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
+    expect(api.reopenLauncherSession).toHaveBeenCalledTimes(1)
   })
 
   it('collapses the restored live surface into the clicked historical session row', async () => {
@@ -1140,8 +1142,6 @@ describe('SessionLauncherView', () => {
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: /^继续旧的 Session(?: ·|$)/ }))
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
 
     await waitFor(() => {
       expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
@@ -1220,8 +1220,6 @@ describe('SessionLauncherView', () => {
     await expandHistory()
     const title = await screen.findByText('支持Session新建页面输入图片，用户粘贴即可')
     fireEvent.click(title.closest('button')!)
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
 
     await waitFor(() => {
       expect(api.reopenLauncherSession).toHaveBeenCalledWith({
@@ -1278,8 +1276,6 @@ describe('SessionLauncherView', () => {
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: /^已经恢复过的 Session(?: ·|$)/ }))
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
 
     await waitFor(() => {
       expect(onToast).toHaveBeenCalledWith('success', '已切换到 已经恢复过的 Session')

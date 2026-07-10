@@ -852,7 +852,11 @@ export function SessionLauncherView({
   const handleSelectSession = useCallback((session: Session) => {
     setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
-  }, [])
+    // Clicking a resumable historical row is the user's explicit intent to
+    // continue it. Restore immediately; recovery controls are only useful if
+    // the automatic resume fails.
+    if (sessionCanBeReopened(session)) reopenLauncherSessionForSession(session)
+  }, [reopenLauncherSessionForSession])
 
   const handleOpenSessionArtifactsTab = useCallback((session: Session) => {
     setSessionMenu(null)
