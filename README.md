@@ -286,6 +286,11 @@ pnpm build:dev               # build + `swift build` (copies WebDist into SwiftP
 pnpm restart:dev             # build:dev + kill old binary + nohup-restart with meee2-online env
 ```
 
+Debug builds allow the fixed loopback Vite origins on port `5002`; release
+builds still require `MEEE2_BOARD_DEV_ORIGINS` for any cross-origin development
+client. Every mutating request and WebSocket connection still requires the
+current launch control token.
+
 **Why both `pnpm build` and `swift build` matter:** `pnpm build` only updates the
 source `Sources/Board/WebDist/`. The running meee2 binary reads WebDist from
 the SwiftPM resource bundle at `.build/.../meee2_meee2Kit.bundle/WebDist/`,

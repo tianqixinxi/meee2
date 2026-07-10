@@ -63,6 +63,16 @@ final class BoardServerControlPlaneTests: XCTestCase {
         XCTAssertEqual(parsed, ["http://localhost:5002"])
     }
 
+    func testFixedViteOriginsRemainLoopbackOnly() {
+        XCTAssertEqual(
+            BoardServer.viteDevOrigins,
+            ["http://127.0.0.1:5002", "http://localhost:5002"]
+        )
+        XCTAssertTrue(BoardServer.viteDevOrigins.allSatisfy { origin in
+            origin.hasPrefix("http://127.0.0.1:") || origin.hasPrefix("http://localhost:")
+        })
+    }
+
     func testReadRequestWithoutBrowserOriginRemainsAvailableToLocalProcesses() {
         let request = request(method: "GET", origin: nil)
         XCTAssertEqual(

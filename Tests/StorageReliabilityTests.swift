@@ -207,6 +207,39 @@ final class StorageReliabilityTests: XCTestCase {
         XCTAssertEqual(persisted.revision, 2)
     }
 
+    func testSessionStoreRebasesGUIUpdateAfterOfflineRevisionAdvance() throws {
+        let root = try temporaryRoot()
+        defer { try? fileManager.removeItem(at: root) }
+        let guiStore = SessionStore(baseDirectory: root)
+        let sessionId = "cross-process-rebase"
+        guiStore.create(SessionData(sessionId: sessionId, project: "/tmp", status: .idle))
+
+        // A separate store models `meee2 note` running while the GUI keeps its
+        // older in-memory revision.
+        let cliStore = SessionStore(baseDirectory: root)
+        cliStore.update(sessionId) { session in
+            session.description = "keep this offline note"
+        }
+
+        guiStore.update(sessionId) { session in
+            session.status = .tooling
+            session.currentTool = "Bash"
+        }
+        guiStore.update(sessionId) { session in
+            session.lastMessage = "subsequent hook still persists"
+        }
+
+        let file = root.appendingPathComponent("sessions/\(sessionId).json")
+        let persisted = try JSONDecoder().decode(SessionData.self, from: Data(contentsOf: file))
+        XCTAssertEqual(persisted.description, "keep this offline note")
+        XCTAssertEqual(persisted.status, .tooling)
+        XCTAssertEqual(persisted.currentTool, "Bash")
+        XCTAssertEqual(persisted.lastMessage, "subsequent hook still persists")
+        XCTAssertEqual(persisted.revision, 4)
+        XCTAssertEqual(guiStore.get(sessionId)?.description, "keep this offline note")
+        XCTAssertEqual(guiStore.get(sessionId)?.revision, 4)
+    }
+
     func testSessionRepositoryFaultInjectionAlwaysLeavesWholeJSON() async throws {
         for stage in [
             SessionRepositoryWriteStage.temporaryFileSynced,

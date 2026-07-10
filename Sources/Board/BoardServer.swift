@@ -21,6 +21,10 @@ public final class BoardServer {
     public static let legacyBindEnvVar = "MEEE2_BOARD_BIND"
     public static let devOriginsEnvVar = "MEEE2_BOARD_DEV_ORIGINS"
     public static let controlTokenHeader = "X-Meee2-Control-Token"
+    static let viteDevOrigins: Set<String> = [
+        "http://127.0.0.1:5002",
+        "http://localhost:5002"
+    ]
 
     private var server: HttpServer?
     private let stateLock = NSLock()
@@ -59,9 +63,14 @@ public final class BoardServer {
         } else {
             self.preferredPort = Self.defaultPort
         }
-        self.configuredDevOrigins = Self.parseDevOrigins(
+        let explicitDevOrigins = Self.parseDevOrigins(
             ProcessInfo.processInfo.environment[Self.devOriginsEnvVar]
         )
+        #if DEBUG
+        self.configuredDevOrigins = explicitDevOrigins.union(Self.viteDevOrigins)
+        #else
+        self.configuredDevOrigins = explicitDevOrigins
+        #endif
     }
 
     // MARK: - 生命周期

@@ -51,6 +51,15 @@ public actor SessionRepository {
             .sorted { $0.lastActivity > $1.lastActivity }
     }
 
+    /// Reloads one authoritative disk record after another process wins a CAS
+    /// write. Future-schema and corrupt records retain the same fail-closed
+    /// behavior as startup loading.
+    public func load(sessionId: String) -> SessionData? {
+        let path = sessionPath(sessionId)
+        guard fileManager.fileExists(atPath: path.path) else { return nil }
+        return load(path)
+    }
+
     /// Saves only when the caller's revision matches the latest disk revision.
     /// A nil result means the caller was stale, the schema is unsupported, or
     /// durable replacement failed. The future-schema file is never modified.

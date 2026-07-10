@@ -355,7 +355,7 @@ public class SessionStore: ObservableObject {
         let existed = existing != nil
         var candidate = session
         if let existing { candidate.revision = existing.revision }
-        guard let persisted = saveToDisk(candidate) else { return }
+        guard let persisted = saveToDisk(candidate, rebasingFrom: existing) else { return }
         // 更新内存
         if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
             sessions[idx] = persisted
@@ -394,7 +394,7 @@ public class SessionStore: ObservableObject {
         if touchLastActivity && updated.lastActivity == previous.lastActivity {
             updated.lastActivity = Date()
         }
-        guard let persisted = saveToDisk(updated) else { return }
+        guard let persisted = saveToDisk(updated, rebasingFrom: previous) else { return }
         sessions[idx] = persisted
         SessionEventBus.shared.publish(.sessionMetadataChanged(sessionId: sessionId))
     }
@@ -456,7 +456,7 @@ public class SessionStore: ObservableObject {
             ?? oldSession.withSessionId(newSessionId)
         if existingTarget == nil { recovered.revision = 0 }
 
-        guard let persisted = saveToDisk(recovered) else { return false }
+        guard let persisted = saveToDisk(recovered, rebasingFrom: existingTarget) else { return false }
         sessions.removeAll { $0.sessionId == oldSessionId || $0.sessionId == newSessionId }
         sessions.append(persisted)
         guard deleteFromDisk(oldSessionId, expectedRevision: oldSession.revision) else {
@@ -507,6 +507,11 @@ public class SessionStore: ObservableObject {
                let prev = ex.providerResumeSessionId, !prev.isEmpty {
                 merged.providerResumeSessionId = prev
             }
+            // Notes are user-authored metadata. Provider snapshots do not own
+            // an absent description and must not erase an offline CLI note.
+            if merged.description == nil {
+                merged.description = ex.description
+            }
             // terminalInfo：若 incoming 完全没有 tty/termProgram/cmuxSocket 就沿用旧的
             let ti = merged.terminalInfo
             let incomingEmpty = ti == nil ||
@@ -536,7 +541,7 @@ public class SessionStore: ObservableObject {
            !hasSessionChanged(existing, merged, allowLastActivityOnly: false) {
             return
         }
-        guard let persisted = saveToDisk(merged) else { return }
+        guard let persisted = saveToDisk(merged, rebasingFrom: existing) else { return }
         if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
             sessions[idx] = persisted
         } else {
@@ -797,16 +802,89 @@ public class SessionStore: ObservableObject {
     }
 
     @discardableResult
-    private func saveToDisk(_ session: SessionData) -> SessionData? {
+    private func saveToDisk(_ session: SessionData, rebasingFrom baseline: SessionData?) -> SessionData? {
         let started = Date()
-        let persisted = waitForSessionRepository { [repository] in
-            await repository.save(session)
+        let originalCandidate = session
+        var candidate = session
+
+        // Cross-process writers can advance the revision between GUI events.
+        // Rebase the original field delta onto the authoritative disk record
+        // and retry a bounded number of times instead of leaving memory stale
+        // until restart. A future schema still loads as nil and stays read-only.
+        for attempt in 0..<3 {
+            if let persisted = waitForSessionRepository({ [repository] in
+                await repository.save(candidate)
+            }) {
+                let bytes = (try? JSONEncoder().encode(persisted).count) ?? 0
+                perfLog(
+                    "saveToDisk",
+                    started: started,
+                    extra: "sid=\(session.sessionId.prefix(8)),bytes=\(bytes),attempt=\(attempt + 1)"
+                )
+                return persisted
+            }
+
+            guard let baseline,
+                  baseline.sessionId == session.sessionId,
+                  let latest = waitForSessionRepository({ [repository] in
+                      await repository.load(sessionId: session.sessionId)
+                  }),
+                  latest.revision != candidate.revision else {
+                return nil
+            }
+
+            candidate = rebaseSessionChanges(originalCandidate, from: baseline, onto: latest)
+            candidate.revision = latest.revision
+            if !hasSessionChanged(latest, candidate, allowLastActivityOnly: true) {
+                return latest
+            }
+            MLog(
+                "[SessionStore] Rebasing stale session \(session.sessionId.prefix(8)) "
+                    + "onto r\(latest.revision) (attempt \(attempt + 2)/3)",
+                level: .warning
+            )
         }
-        if let persisted {
-            let bytes = (try? JSONEncoder().encode(persisted).count) ?? 0
-            perfLog("saveToDisk", started: started, extra: "sid=\(session.sessionId.prefix(8)),bytes=\(bytes)")
+        return nil
+    }
+
+    private func rebaseSessionChanges(
+        _ candidate: SessionData,
+        from baseline: SessionData,
+        onto latest: SessionData
+    ) -> SessionData {
+        var rebased = latest
+        if candidate.schemaVersion != baseline.schemaVersion { rebased.schemaVersion = candidate.schemaVersion }
+        if candidate.project != baseline.project { rebased.project = candidate.project }
+        if candidate.cwd != baseline.cwd { rebased.cwd = candidate.cwd }
+        if candidate.pid != baseline.pid { rebased.pid = candidate.pid }
+        if candidate.ghosttyTerminalId != baseline.ghosttyTerminalId {
+            rebased.ghosttyTerminalId = candidate.ghosttyTerminalId
         }
-        return persisted
+        if candidate.iTermSessionId != baseline.iTermSessionId { rebased.iTermSessionId = candidate.iTermSessionId }
+        if candidate.appleTerminalSessionId != baseline.appleTerminalSessionId {
+            rebased.appleTerminalSessionId = candidate.appleTerminalSessionId
+        }
+        if candidate.transcriptPath != baseline.transcriptPath { rebased.transcriptPath = candidate.transcriptPath }
+        if candidate.providerResumeSessionId != baseline.providerResumeSessionId {
+            rebased.providerResumeSessionId = candidate.providerResumeSessionId
+        }
+        if candidate.startedAt != baseline.startedAt { rebased.startedAt = candidate.startedAt }
+        if candidate.lastActivity != baseline.lastActivity { rebased.lastActivity = candidate.lastActivity }
+        if candidate.status != baseline.status { rebased.status = candidate.status }
+        if candidate.currentTool != baseline.currentTool { rebased.currentTool = candidate.currentTool }
+        if candidate.description != baseline.description { rebased.description = candidate.description }
+        if candidate.tasks != baseline.tasks { rebased.tasks = candidate.tasks }
+        if candidate.currentTask != baseline.currentTask { rebased.currentTask = candidate.currentTask }
+        if candidate.terminalInfo != baseline.terminalInfo { rebased.terminalInfo = candidate.terminalInfo }
+        if candidate.usageStats != baseline.usageStats { rebased.usageStats = candidate.usageStats }
+        if candidate.lastMessage != baseline.lastMessage { rebased.lastMessage = candidate.lastMessage }
+        if candidate.pendingPermissionTool != baseline.pendingPermissionTool {
+            rebased.pendingPermissionTool = candidate.pendingPermissionTool
+        }
+        if candidate.pendingPermissionMessage != baseline.pendingPermissionMessage {
+            rebased.pendingPermissionMessage = candidate.pendingPermissionMessage
+        }
+        return rebased
     }
 
     private func hasSessionChanged(
