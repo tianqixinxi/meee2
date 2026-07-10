@@ -852,9 +852,42 @@ textarea {
 
 .workspace-rail__top {
   display: flex;
+  min-height: 36px;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.workspace-rail__brand {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
+  color: var(--text);
+}
+
+.workspace-rail__brand-mark {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--rail-accent);
+  color: #fffaf5;
+  font-size: 15px;
+  font-weight: 820;
+  line-height: 1;
+}
+
+.workspace-rail__brand-name {
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 760;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-rail__avatar,
@@ -960,7 +993,7 @@ textarea {
   color: rgba(245, 244, 239, 0.66);
   font-size: 13px;
   font-weight: 620;
-  text-align: center;
+  text-align: left;
 }
 
 .workspace-rail__button svg {
@@ -976,6 +1009,7 @@ textarea {
   overflow: hidden;
   letter-spacing: 0;
   line-height: 1;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1043,9 +1077,8 @@ textarea {
 .workspace-rail__detail {
   flex: 1 1 auto;
   min-height: 0;
-  margin: 3px -8px 0;
+  margin: 0 -8px;
   overflow: hidden;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .workspace-rail__detail > .session-launcher__sidebar {
@@ -1053,6 +1086,50 @@ textarea {
   height: 100%;
   border-right: 0;
   background: transparent;
+}
+
+.workspace-rail--compact {
+  align-items: center;
+}
+
+.workspace-rail--compact .workspace-rail__top {
+  width: 100%;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.workspace-rail--compact .workspace-rail__brand {
+  width: 40px;
+  justify-content: center;
+  padding: 0;
+}
+
+.workspace-rail--compact .workspace-rail__brand-name,
+.workspace-rail--compact .workspace-rail__label,
+.workspace-rail--compact .workspace-rail__detail {
+  display: none;
+}
+
+.workspace-rail--compact .workspace-rail__avatar {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+}
+
+.workspace-rail--compact .workspace-rail__group {
+  align-items: center;
+}
+
+.workspace-rail--compact .workspace-rail__button {
+  width: 40px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
+.workspace-rail--compact .workspace-rail__button.is-active::before {
+  left: -16px;
 }
 
 .modal-close-button {
@@ -6268,6 +6345,10 @@ textarea {
 
   .workspace-rail__top {
     justify-content: flex-end;
+  }
+
+  html.board-sidebar-rail--compact .app {
+    --sidebar-width: 72px;
   }
 
   .sessions-workspace__inner {

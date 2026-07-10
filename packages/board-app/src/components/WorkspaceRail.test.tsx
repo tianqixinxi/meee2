@@ -46,6 +46,39 @@ describe('WorkspaceRail', () => {
     expect(screen.getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
     expect(screen.getByTestId('workspace-rail-detail')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-rail-brand')).toHaveTextContent('meee2')
+    expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveClass('workspace-rail--compact')
+    expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('72px')
+  })
+
+  it('expands only for the Session workspace', () => {
+    const view = render(
+      <I18nProvider>
+        <WorkspaceRail
+          canvases={canvases}
+          activeCanvasId="monitor"
+          mode="planner"
+          userProfile={null}
+          onModeChange={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveClass('workspace-rail--compact')
+    view.rerender(
+      <I18nProvider>
+        <WorkspaceRail
+          canvases={canvases}
+          activeCanvasId="monitor"
+          mode="session"
+          userProfile={null}
+          onModeChange={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    expect(screen.getByRole('navigation', { name: 'Main navigation' })).not.toHaveClass('workspace-rail--compact')
+    expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('320px')
   })
 
   it('omits the avatar shortcut when the user is not connected', () => {
