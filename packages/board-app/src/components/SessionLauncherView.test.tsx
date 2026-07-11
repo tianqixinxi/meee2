@@ -278,6 +278,25 @@ describe('SessionLauncherView', () => {
     })
   })
 
+  it('falls back to the first project when the stored session no longer exists', async () => {
+    localStorage.setItem(lastSelectionKey, JSON.stringify({
+      kind: 'session',
+      sessionId: 'removed-session',
+    }))
+
+    renderWithI18n(<SessionLauncherView state={makeState([])} />)
+
+    expect(await screen.findByText('我们应该在meee2-workspace中做些什么？')).toBeInTheDocument()
+    expect(screen.queryByText('正在启动会话')).not.toBeInTheDocument()
+    expect(screen.queryByText('这个 session 还没有可挂载的原生 terminal surface')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem(lastSelectionKey) ?? 'null')).toEqual({
+        kind: 'project',
+        projectId: project.id,
+      })
+    })
+  })
+
   it('retries a failed automatic resume when the selected session row is clicked', async () => {
     api.reopenLauncherSession.mockRejectedValueOnce(new Error('resume failed'))
     localStorage.setItem(lastSelectionKey, JSON.stringify({
@@ -1221,7 +1240,7 @@ describe('SessionLauncherView', () => {
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
   })
 
-  it('uses the user request instead of the plan-mode system prompt in resume toasts', async () => {
+  it('does not show a notification after successfully resuming a session', async () => {
     const onToast = vi.fn()
     api.reopenLauncherSession.mockResolvedValueOnce({
       ok: true,
@@ -1271,16 +1290,8 @@ describe('SessionLauncherView', () => {
         cwd: '/Users/kai/Code/meee2-workspace',
       })
     })
-    await waitFor(() => {
-      expect(onToast).toHaveBeenCalledWith(
-        'success',
-        '已恢复 支持Session新建页面输入图片，用户粘贴即可',
-      )
-    })
-    expect(onToast).not.toHaveBeenCalledWith(
-      'success',
-      expect.stringContaining('Plan mode is enabled'),
-    )
+    await waitFor(() => expect(screen.queryByText('正在恢复 Session')).not.toBeInTheDocument())
+    expect(onToast).not.toHaveBeenCalled()
   })
 
   it('does not show a notification when reusing an already restored terminal', async () => {

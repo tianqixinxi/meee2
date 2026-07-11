@@ -79,15 +79,13 @@ enum MCPToolListProbe {
             if let transport = resolveClaudePluginTransport(pluginName: name) {
                 switch transport {
                 case .remoteHttp(let url): return probeHTTP(url: url)
-                case .localStdio, .claudePlugin, .unsupported: return .unsupported
+                case .localStdio, .claudePlugin: return .unsupported
                 }
             }
             return .unsupported
         case .localStdio:
             // OAuth-shaped state doesn't apply to env-credential stdio MCPs —
             // those are gated by `IntegrationCredentialProbe` instead.
-            return .unsupported
-        case .unsupported:
             return .unsupported
         }
     }

@@ -2759,6 +2759,7 @@ export function disconnectMeee2Online(): Promise<{ ok: boolean }> {
 export interface AppSettings {
   theme: 'system' | 'light' | 'dark'
   themeProfile: ThemeProfile
+  terminalProfile: TerminalProfile
   locale: 'en' | 'zh-CN'
   devMode?: boolean
   showIsland: boolean
@@ -2777,6 +2778,38 @@ export interface AppSettings {
   quickOpenShortcutConflict?: string | null
   claudeWorkflowCanvasMode: 'off' | 'ask' | 'auto'
   usageTrackingEnabled: boolean
+}
+
+export interface TerminalProfile {
+  schemaVersion: 1
+  fontFamily: string
+  fontSize: number
+  lineHeightPercent: number
+  fontThicken: boolean
+  cursorStyle: 'block' | 'bar' | 'underline'
+  cursorBlink: boolean
+  paddingX: number
+  paddingY: number
+  useThemeColors: boolean
+  backgroundColor: string
+  foregroundColor: string
+  accentColor: string
+}
+
+export const DEFAULT_TERMINAL_PROFILE: TerminalProfile = {
+  schemaVersion: 1,
+  fontFamily: '',
+  fontSize: 14,
+  lineHeightPercent: 100,
+  fontThicken: false,
+  cursorStyle: 'block',
+  cursorBlink: true,
+  paddingX: 10,
+  paddingY: 8,
+  useThemeColors: true,
+  backgroundColor: '#101214',
+  foregroundColor: '#F4F7FB',
+  accentColor: '#4DA6FF',
 }
 
 export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
@@ -2803,6 +2836,7 @@ export function fetchAppSettings(): Promise<AppSettings> {
           contrast: 58,
         },
       },
+      terminalProfile: DEFAULT_TERMINAL_PROFILE,
       locale: 'en',
       devMode: true,
       showIsland: true,

@@ -60,4 +60,24 @@ const now = '2026-06-19T12:00:00.000Z'
   assert.equal(title.source, 'session_recap')
 }
 
+{
+  const title = deriveDisplaySessionTitle({
+    providerTitle: '梳理对话标题来源',
+    currentTask: '仔细读下代码，研究下 multica 对话列表中每个对话的标题是怎么来的',
+    initialUserMessage: '仔细读下代码，研究下 multica 对话列表中每个对话的标题是怎么来的',
+  })
+  assert.equal(title.text, '梳理对话标题来源')
+  assert.equal(title.source, 'provider_title')
+  assert.equal(title.confidence, 'high')
+}
+
+{
+  const title = deriveDisplaySessionTitle({
+    providerTitle: 'Codex',
+    initialUserMessage: '继续 Terminal tab 中的 Session',
+  })
+  assert.equal(title.text, '继续 Terminal tab 中的 Session')
+  assert.equal(title.source, 'initial_prompt')
+}
+
 console.log('session recap tests passed')

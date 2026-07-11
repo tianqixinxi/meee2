@@ -84,6 +84,10 @@ export function deriveDisplaySessionTitle(input: DisplaySessionTitleInput): Disp
     value?: string | null
   }> = [
     { source: 'manual_override', confidence: 'high', value: input.manualOverride },
+    // Provider-owned semantic titles are stable conversation identity. Put them
+    // ahead of recap/currentTask, which can change as work progresses. Generic
+    // provider/project labels are rejected by isNoisyTitle and still fall back.
+    { source: 'provider_title', confidence: 'high', value: input.providerTitle },
     {
       source: 'session_recap',
       confidence: input.sessionRecap?.confidence ?? 'medium',
@@ -91,7 +95,6 @@ export function deriveDisplaySessionTitle(input: DisplaySessionTitleInput): Disp
     },
     { source: 'current_task', confidence: 'medium', value: input.currentTask },
     { source: 'initial_prompt', confidence: 'medium', value: input.initialUserMessage },
-    { source: 'provider_title', confidence: 'low', value: input.providerTitle },
     { source: 'fallback', confidence: 'low', value: input.fallbackTitle ?? input.providerDisplayName ?? 'Session' },
   ]
   for (const candidate of candidates) {
@@ -154,6 +157,7 @@ function isNoisyTitle(value: string): boolean {
   const normalized = value.trim().toLowerCase()
   if (!normalized) return true
   if (/^https?:\/\//.test(normalized)) return true
+  if (/^(codex|claude code|claude)$/i.test(value)) return true
   if (/^(codex|claude code|claude)\s+-\s+[^/\\]+$/i.test(value)) return true
   if (/^node\s+(?:node-)?[a-z0-9][a-z0-9-]{10,}(?:-transcript)?$/i.test(value)) return true
   if (/^(final response summary|summary|recap)\b/i.test(value)) return true

@@ -261,6 +261,7 @@ struct AppSettingsScreenDTO: Encodable {
 struct AppSettingsDTO: Encodable {
     let theme: String
     let themeProfile: WebBoardThemeProfileDTO
+    let terminalProfile: WebBoardTerminalProfileDTO
     let locale: String
     let devMode: Bool
     let showIsland: Bool
@@ -1125,9 +1126,13 @@ enum BoardDTOBuilder {
         // 前端（board-app/types.ts isOlderSession）—— DTO 只下发原始 lastActivity，
         // 由 webui 决定要不要折叠/不自动建卡。
 
-        // title 优先用 desktop 的 user-friendly 标题（"AI Product Twitter
-        // Marketing Strategy" 这种），fallback 到 PluginSession.title（cwd basename）
-        let displayTitle = desktopMeta?.title ?? session.title
+        // title 优先用 provider 自己生成的稳定语义标题；Claude Desktop metadata
+        // 仍是 Claude.app wrapper 的权威来源，最后才回退到 cwd basename。
+        let providerTitle = ProviderSessionTitleReader.title(
+            provider: providerKey(pluginId: session.pluginId),
+            providerSessionId: realSessionId
+        )
+        let displayTitle = desktopMeta?.title ?? providerTitle ?? sessionData?.generatedTitle ?? session.title
 
         // model 优先用 desktop metadata（"claude-opus-4-7[1m]"），fallback 到
         // transcript 推断（usageStats.model 可能是 "claude-opus-4-6"）
@@ -1365,9 +1370,13 @@ enum BoardDTOBuilder {
             terminalKind: "internal"
         )
 
+        let providerTitle = ProviderSessionTitleReader.title(
+            provider: provider,
+            providerSessionId: providerResumeId
+        ) ?? sessionData.generatedTitle
         return SessionDTO(
             id: sessionData.sessionId,
-            title: "\(displayName) - \(basename.isEmpty ? sessionData.project : basename)",
+            title: providerTitle ?? "\(displayName) - \(basename.isEmpty ? sessionData.project : basename)",
             project: cwd,
             pluginId: pluginId,
             pluginDisplayName: displayName,
@@ -1453,9 +1462,13 @@ enum BoardDTOBuilder {
             terminalInfo: terminalInfo,
             terminalKind: "internal"
         )
+        let providerTitle = ProviderSessionTitleReader.title(
+            provider: surface.provider,
+            providerSessionId: providerResumeId
+        ) ?? sessionData?.generatedTitle
         return SessionDTO(
             id: surface.sessionId,
-            title: "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)",
+            title: providerTitle ?? "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)",
             project: surface.cwd,
             pluginId: pluginId,
             pluginDisplayName: displayName,
@@ -1540,9 +1553,15 @@ enum BoardDTOBuilder {
             transcriptPath: cli.transcriptPath
         )
 
+        let providerTitle = ProviderSessionTitleReader.title(
+            provider: providerKey(pluginId: surface.pluginId),
+            providerSessionId: validProviderResumeSessionId(surface.providerResumeSessionId)
+                ?? validProviderResumeSessionId(cli.providerResumeSessionId)
+                ?? validProviderResumeSessionId(cli.sessionId)
+        )
         return SessionDTO(
             id: surface.id,
-            title: surface.title,
+            title: providerTitle ?? surface.title,
             project: surface.project,
             pluginId: surface.pluginId,
             pluginDisplayName: surface.pluginDisplayName,
@@ -1606,15 +1625,9 @@ enum BoardDTOBuilder {
             return stored
         }
         if let mapped = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId) {
-            if let sessionId = sessionData?.sessionId ?? terminalInfo?.sessionId {
-                SessionStore.shared.setProviderResumeSessionId(
-                    sessionId: sessionId,
-                    providerResumeSessionId: mapped
-                )
-            }
             return mapped
         }
-        return CodexProviderSessionBackfill.findAndPersistProviderResumeSessionId(
+        return CodexProviderSessionBackfill.findProviderResumeSessionId(
             sessionData: sessionData,
             terminalInfo: terminalInfo
         )

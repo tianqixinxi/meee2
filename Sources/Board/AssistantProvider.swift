@@ -70,6 +70,7 @@ struct AssistantSettings {
     enum LocalRunPurpose: String {
         case interactive
         case recap
+        case title
 
         var appliesCompletionCooldown: Bool {
             self == .recap
@@ -595,16 +596,21 @@ struct LocalClaudeProvider: AssistantProvider {
                 defer { mutableLease.release() }
                 do {
                     let store = AssistantLocalSessionStore.shared
-                    let sessionId = store.sessionId(forCanvasId: settings.canvasId)
+                    let persistSession = settings.localRunPurpose != .title
+                    let sessionId = persistSession
+                        ? store.sessionId(forCanvasId: settings.canvasId)
+                        : UUID().uuidString
                     try runProcess(
                         systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
                         messages: messages,
                         workspacePath: settings.workspacePath,
+                        model: settings.localRunPurpose == .title ? settings.model : "",
                         sessionId: sessionId,
                         sessionName: AssistantLocalSessionStore.sessionName(
                             canvasId: settings.canvasId,
                             canvasName: settings.canvasName
                         ),
+                        persistSession: persistSession,
                         continuation: continuation
                     )
                 } catch let error as LocalClaudeExitError where error.isSessionIdError {
@@ -615,11 +621,13 @@ struct LocalClaudeProvider: AssistantProvider {
                             systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
                             messages: messages,
                             workspacePath: settings.workspacePath,
+                            model: "",
                             sessionId: sessionId,
                             sessionName: AssistantLocalSessionStore.sessionName(
                                 canvasId: settings.canvasId,
                                 canvasName: settings.canvasName
                             ),
+                            persistSession: true,
                             continuation: continuation
                         )
                     } catch {
@@ -642,8 +650,10 @@ struct LocalClaudeProvider: AssistantProvider {
         systemPrompt: String,
         messages: [ChatMessage],
         workspacePath rawWorkspacePath: String,
+        model: String,
         sessionId: String,
         sessionName: String,
+        persistSession: Bool,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
         let claudePath = resolveClaudeBinary()
@@ -652,12 +662,15 @@ struct LocalClaudeProvider: AssistantProvider {
         let stdout = Pipe()
         let stderr = Pipe()
 
-        let shouldResume = AssistantLocalSessionStore.shared.transcriptPath(forSessionId: sessionId) != nil
+        let shouldResume = persistSession
+            && AssistantLocalSessionStore.shared.transcriptPath(forSessionId: sessionId) != nil
         let args = claudeArguments(
             systemPrompt: systemPrompt,
+            model: model,
             sessionId: sessionId,
             sessionName: sessionName,
-            resumeExistingSession: shouldResume
+            resumeExistingSession: shouldResume,
+            persistSession: persistSession
         )
         if let p = claudePath {
             process.executableURL = URL(fileURLWithPath: p)
@@ -776,9 +789,11 @@ struct LocalClaudeProvider: AssistantProvider {
 
     func claudeArguments(
         systemPrompt: String,
+        model: String = "",
         sessionId: String,
         sessionName: String,
-        resumeExistingSession: Bool = false
+        resumeExistingSession: Bool = false,
+        persistSession: Bool = true
     ) -> [String] {
         var args = [
             "-p",
@@ -792,6 +807,12 @@ struct LocalClaudeProvider: AssistantProvider {
             args.insert(contentsOf: ["--resume", sessionId], at: 3)
         } else {
             args.insert(contentsOf: ["--session-id", sessionId], at: 3)
+        }
+        if !persistSession {
+            args.append("--no-session-persistence")
+        }
+        if !model.isEmpty {
+            args += ["--model", model]
         }
         return args
     }
@@ -867,7 +888,8 @@ struct LocalCodexProvider: AssistantProvider {
                 defer { mutableLease.release() }
 
                 let store = AssistantLocalCodexSessionStore.shared
-                let existingThreadId = store.sessionId(forCanvasId: settings.canvasId)
+                let persistSession = settings.localRunPurpose != .title
+                let existingThreadId = persistSession ? store.sessionId(forCanvasId: settings.canvasId) : nil
                 do {
                     try runProcess(
                         systemPrompt: LocalAssistantToolProtocol.augmentedSystemPrompt(systemPrompt, tools: tools),
@@ -876,6 +898,7 @@ struct LocalCodexProvider: AssistantProvider {
                         model: settings.model,
                         existingThreadId: existingThreadId,
                         canvasId: settings.canvasId,
+                        persistSession: persistSession,
                         continuation: continuation
                     )
                 } catch let error as LocalCodexExitError where error.isSessionIdError && existingThreadId != nil {
@@ -888,6 +911,7 @@ struct LocalCodexProvider: AssistantProvider {
                             model: settings.model,
                             existingThreadId: nil,
                             canvasId: settings.canvasId,
+                            persistSession: persistSession,
                             continuation: continuation
                         )
                     } catch {
@@ -909,6 +933,7 @@ struct LocalCodexProvider: AssistantProvider {
         model: String,
         existingThreadId: String?,
         canvasId: String,
+        persistSession: Bool,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
         let codexPath = resolveCodexBinary()
@@ -920,7 +945,8 @@ struct LocalCodexProvider: AssistantProvider {
         let args = codexArguments(
             model: model,
             workspacePath: workspacePath,
-            existingThreadId: existingThreadId
+            existingThreadId: existingThreadId,
+            ephemeral: !persistSession
         )
 
         if let p = codexPath {
@@ -974,6 +1000,7 @@ struct LocalCodexProvider: AssistantProvider {
                 try handleCodexJSONLine(
                     s,
                     canvasId: canvasId,
+                    persistSession: persistSession,
                     fullText: &fullText,
                     continuation: continuation
                 )
@@ -999,7 +1026,8 @@ struct LocalCodexProvider: AssistantProvider {
     func codexArguments(
         model: String = "",
         workspacePath rawWorkspacePath: String = "",
-        existingThreadId: String? = nil
+        existingThreadId: String? = nil,
+        ephemeral: Bool = false
     ) -> [String] {
         let workspacePath = rawWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         var args: [String]
@@ -1011,6 +1039,7 @@ struct LocalCodexProvider: AssistantProvider {
             args += [existingThreadId, "-"]
         } else {
             args = ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check"]
+            if ephemeral { args.append("--ephemeral") }
             if !model.isEmpty {
                 args += ["--model", model]
             }
@@ -1041,6 +1070,7 @@ struct LocalCodexProvider: AssistantProvider {
     private func handleCodexJSONLine(
         _ line: String,
         canvasId: String,
+        persistSession: Bool,
         fullText: inout String,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
@@ -1049,7 +1079,8 @@ struct LocalCodexProvider: AssistantProvider {
 
         switch type {
         case "thread.started":
-            if let threadId = obj["thread_id"] as? String, !threadId.isEmpty {
+            if persistSession,
+               let threadId = obj["thread_id"] as? String, !threadId.isEmpty {
                 AssistantLocalCodexSessionStore.shared.setSessionId(threadId, forCanvasId: canvasId)
             }
         case "item.completed":

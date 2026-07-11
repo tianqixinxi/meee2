@@ -191,8 +191,8 @@ class SessionTerminalStore {
     func setProviderResumeSessionId(sessionId: String, providerResumeSessionId: String) {
         let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        performSync {
-            guard let validResumeId = Self.validProviderResumeSessionId(trimmed) else {
+        guard let validResumeId = Self.validProviderResumeSessionId(trimmed) else {
+            performSync {
                 if var info = store[sessionId] {
                     info.providerResumeSessionId = nil
                     info.lastActivityAt = Date()
@@ -200,9 +200,14 @@ class SessionTerminalStore {
                     save()
                 }
                 NSLog("[SessionTerminalStore] Ignored invalid provider resume id for internal session \(sessionId.prefix(8))")
-                return
             }
-            SessionStore.shared.setProviderResumeSessionId(sessionId: sessionId, providerResumeSessionId: validResumeId)
+            return
+        }
+
+        // Never enter SessionStore while holding the terminal-store queue. SessionStore may
+        // synchronously hop to the main thread, while main-thread snapshot reads can wait here.
+        SessionStore.shared.setProviderResumeSessionId(sessionId: sessionId, providerResumeSessionId: validResumeId)
+        performSync {
             guard var info = store[sessionId] else { return }
             info.providerResumeSessionId = validResumeId
             info.lastActivityAt = Date()

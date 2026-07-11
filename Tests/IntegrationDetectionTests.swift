@@ -26,6 +26,9 @@ final class IntegrationDetectionTests: XCTestCase {
         let ids = IntegrationCatalog.all.map { $0.id }
         XCTAssertFalse(ids.isEmpty)
         XCTAssertEqual(Set(ids).count, ids.count, "catalog ids must be unique")
+        XCTAssertEqual(Set(ids), Set([
+            "github", "linear", "slack", "notion", "lark", "google-sheets"
+        ]), "Integrations must stay curated; do not re-add generic marketplace entries")
     }
 
     // MARK: localStdio install spec (connector-localstdio-install)

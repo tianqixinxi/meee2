@@ -1,0 +1,13 @@
+{
+  "schema_version": 3,
+  "revision": 7,
+  "session_id": "frozen-v3",
+  "project": "fixture-project",
+  "cwd": "/tmp/fixture-project",
+  "provider_resume_session_id": "019f517c-23ac-7e41-a953-aeab95671d11",
+  "started_at": "2026-07-11T14:00:00Z",
+  "last_activity": "2026-07-11T14:01:00Z",
+  "status": "idle",
+  "current_task": "研究对话标题来源",
+  "tasks": []
+}

@@ -20,41 +20,51 @@ import type {
   IntegrationRunbookResult,
 } from '../types'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
-import { ALL_INTEGRATION_VIEW_SCHEMAS } from '../integrations/viewSchemas'
 import { Notice } from './feedback/Notice'
+import githubIcon from '../assets/integrations/github.svg'
+import googleSheetsIcon from '../assets/integrations/google-sheets.svg'
+import larkIcon from '../assets/integrations/lark.png'
+import linearIcon from '../assets/integrations/linear.svg'
+import notionIcon from '../assets/integrations/notion.svg'
+import slackIcon from '../assets/integrations/slack.svg'
 
 /** Integrations whose backend exposes a browse endpoint (PRs / docs / …). */
 const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
 
-/** PRD §1 — the 8 "Featured" integrations meee2 catalog知道 + 给一等公民待遇。
- *  其余 ~500 个来自 Claude plugin marketplace 全量扫描,折到「Other」抽屉。 */
+/** Curated integrations surfaced by meee2. The backend scan intentionally
+ *  returns this catalog only; marketplace/registry long-tail entries are not
+ *  part of the Integrations product surface. */
 const FEATURED_INTEGRATION_IDS: ReadonlySet<string> = new Set([
-  'github', 'linear', 'slack', 'notion',
-  'figma', 'supabase', 'sentry', 'postgres',
+  'github', 'linear', 'slack', 'lark', 'notion',
   'google-sheets',
 ])
 
-/** 哪些 integrationId 已经有 canvas view-schema(可拖进 canvas 用),
- *  动态读自 chunk I 的 registry,确保跟视图层一致。 */
-const HAS_VIEW_SCHEMA: ReadonlySet<string> = new Set(
-  ALL_INTEGRATION_VIEW_SCHEMAS.map((s) => s.integrationId),
-)
+const FEATURED_INTEGRATION_ORDER = [
+  'github', 'linear', 'slack', 'lark', 'notion',
+  'google-sheets',
+]
 
 const AGENT_LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
 }
 
-/** Server categories are raw English tokens (devtools / communication / …).
- *  Map known buckets to localized labels; unknown categories fall back to the
- *  raw key so new connectors aren't blocked on translation. */
-const CATEGORY_LABEL_KEY: Record<string, TranslationKey> = {
-  devtools: 'integrations.category.devtools',
-  communication: 'integrations.category.communication',
-  data: 'integrations.category.data',
-  design: 'integrations.category.design',
-  observability: 'integrations.category.observability',
-  productivity: 'integrations.category.productivity',
+const INTEGRATION_DESCRIPTION_KEY: Record<string, TranslationKey> = {
+  github: 'integrations.description.github',
+  linear: 'integrations.description.linear',
+  slack: 'integrations.description.slack',
+  lark: 'integrations.description.lark',
+  notion: 'integrations.description.notion',
+  'google-sheets': 'integrations.description.googleSheets',
+}
+
+const INTEGRATION_ICON: Record<string, string> = {
+  github: githubIcon,
+  linear: linearIcon,
+  slack: slackIcon,
+  lark: larkIcon,
+  notion: notionIcon,
+  'google-sheets': googleSheetsIcon,
 }
 
 interface IntegrationRow {
@@ -84,8 +94,6 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [installResult, setInstallResult] = useState<IntegrationInstallResult | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [browsingId, setBrowsingId] = useState<'github' | 'lark' | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
   /** Persistent Notice for the one-click "Complete auth" flow — shows
    *  "Browser opening…" + fallback link, auto-clears once a re-scan flips
@@ -93,8 +101,6 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [authNotice, setAuthNotice] = useState<
     { id: string; message: string; authUrl?: string | null } | null
   >(null)
-  /** PRD §1 Featured/Other 分组:Other 默认折叠(514 个 connector 视觉太重)。 */
-  const [otherCollapsed, setOtherCollapsed] = useState(true)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -149,33 +155,10 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     )
   }, [scan])
 
-  /** Category histogram for the filter chips. */
-  const categoryCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const row of rows) counts.set(row.category, (counts.get(row.category) ?? 0) + 1)
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])
-  }, [rows])
-
-  /** Filtered + search-narrowed rows actually rendered in the table. */
-  const visibleRows = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase()
-    return rows.filter((row) => {
-      if (categoryFilter && row.category !== categoryFilter) return false
-      if (q && !row.name.toLowerCase().includes(q) && !row.id.toLowerCase().includes(q)) return false
-      return true
-    })
-  }, [rows, searchQuery, categoryFilter])
-
-  /** PRD §1 split: 8 个 meee2-catalog 主 integration 进 Featured,
-   *  其余 ~500 个 plugin-marketplace 自动扫到的进 Other。 */
-  const { featuredRows, otherRows } = useMemo(() => {
-    const featured = visibleRows.filter((r) => FEATURED_INTEGRATION_IDS.has(r.id))
-    const other = visibleRows.filter((r) => !FEATURED_INTEGRATION_IDS.has(r.id))
-    // Featured 区按 PRD 顺序排,而不是字母序 / category 序
-    const order = ['github', 'linear', 'slack', 'notion', 'figma', 'supabase', 'sentry', 'postgres', 'google-sheets']
-    featured.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
-    return { featuredRows: featured, otherRows: other }
-  }, [visibleRows])
+  const featuredRows = useMemo(() => rows
+    .filter((row) => FEATURED_INTEGRATION_IDS.has(row.id))
+    .sort((a, b) => FEATURED_INTEGRATION_ORDER.indexOf(a.id) - FEATURED_INTEGRATION_ORDER.indexOf(b.id)),
+  [rows])
 
   const handleSetup = (id: string) => {
     setBusyId(id)
@@ -304,125 +287,113 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const installFor = (row: IntegrationRow): IntegrationInstall | undefined =>
     agents.map((agent) => row.byAgent[agent]?.install).find((spec) => spec !== undefined)
 
-  /** PRD §1 — row JSX 提到一个 helper,Featured 区和 Other 区都用同一份。 */
-  const renderIntegrationRow = (row: IntegrationRow) => {
-    const hasViewSchema = HAS_VIEW_SCHEMA.has(row.id)
-    return (
-      <tr key={row.id}>
-        <td className="agent-matrix__name">
-          {row.name}
-          {hasViewSchema && (
-            <span
-              className="agent-matrix__view-schema-badge"
-              title={t('integrations.canvasReadyTooltip')}
-              aria-label={t('integrations.canvasReadyAria')}
-            >
-              <span className="agent-matrix__view-schema-dot" aria-hidden />
-              {t('integrations.canvasReady')}
-            </span>
-          )}
-          <em>{row.category}</em>
-        </td>
-        {agents.map((agent) => {
-          const cell = row.byAgent[agent]
-          const state: IntegrationConnState = cell?.state ?? 'missing'
+  const featuredSummary = {
+    connected: featuredRows.filter((row) => rowFullyConnected(row)).length,
+    available: featuredRows.filter((row) => !rowFullyConnected(row)).length,
+  }
+
+  const renderRowActions = (row: IntegrationRow) => (
+    <>
+      {rowNeedsAuth(row) ? (
+        <button
+          type="button"
+          className="agent-matrix__setup is-needs-auth"
+          disabled={busyId === row.id}
+          onClick={() => handleCompleteAuth(row.id)}
+          title={t('integrations.finishOauth')}
+          aria-label={`${t('integrations.completeAuth')} ${row.name}`}
+        >
+          {busyId === row.id ? t('integrations.openingBrowser') : t('integrations.completeAuth')}
+        </button>
+      ) : (
+        !rowFullyConnected(row) &&
+        (() => {
+          const install = installFor(row)
+          if (install?.kind === 'claudePlugin' || install?.kind === 'remoteHttp') {
+            return (
+              <button
+                type="button"
+                className="agent-matrix__install"
+                disabled={busyId === row.id}
+                onClick={() => handleInstall(row.id)}
+                title={install.kind === 'remoteHttp'
+                  ? t('integrations.oneClickInstallRemote')
+                  : t('integrations.oneClickInstall')}
+                aria-label={`${t('integrations.install')} ${row.name}`}
+              >
+                {busyId === row.id ? '...' : t('integrations.install')}
+              </button>
+            )
+          }
+          if (install?.kind === 'localStdio') {
+            const needsCredentials = install.envKeys.includes('CREDENTIALS_PATH')
+            return (
+              <button
+                type="button"
+                className="agent-matrix__install"
+                disabled={busyId === row.id}
+                onClick={() => handleConnectLocalStdio(row.id, install)}
+                title={needsCredentials ? t('integrations.connectOAuthHint') : t('integrations.oneClickInstall')}
+                aria-label={`${t('integrations.connect')} ${row.name}`}
+              >
+                {busyId === row.id ? '...' : t('integrations.connect')}
+              </button>
+            )
+          }
           return (
-            <td key={agent} className={`agent-matrix__cell is-${state}`} title={cell?.evidence}>
-              <span className={`agent-matrix__conn-dot is-${state}`} aria-hidden /> {stateLabel(state, t)}
-            </td>
-          )
-        })}
-        <td className="agent-matrix__action">
-          {rowNeedsAuth(row) ? (
             <button
               type="button"
-              className="agent-matrix__setup is-needs-auth"
+              className="agent-matrix__setup"
               disabled={busyId === row.id}
-              onClick={() => handleCompleteAuth(row.id)}
-              title={t('integrations.finishOauth')}
-              aria-label={`${t('integrations.completeAuth')} ${row.name}`}
+              onClick={() => handleSetup(row.id)}
+              aria-label={`${t('common.setUp')} ${row.name}`}
             >
-              {busyId === row.id ? t('integrations.openingBrowser') : t('integrations.completeAuth')}
+              {busyId === row.id ? '...' : t('common.setUp')}
             </button>
-          ) : (
-            !rowFullyConnected(row) &&
-            (() => {
-              const install = installFor(row)
-              if (install?.kind === 'claudePlugin') {
-                return (
-                  <button
-                    type="button"
-                    className="agent-matrix__install"
-                    disabled={busyId === row.id}
-                    onClick={() => handleInstall(row.id)}
-                    title={t('integrations.oneClickInstall')}
-                    aria-label={`${t('integrations.install')} ${row.name}`}
-                  >
-                    {busyId === row.id ? '...' : t('integrations.install')}
-                  </button>
-                )
-              }
-              if (install?.kind === 'remoteHttp') {
-                return (
-                  <button
-                    type="button"
-                    className="agent-matrix__install"
-                    disabled={busyId === row.id}
-                    onClick={() => handleInstall(row.id)}
-                    title={t('integrations.oneClickInstallRemote')}
-                    aria-label={`${t('integrations.install')} ${row.name}`}
-                  >
-                    {busyId === row.id ? '...' : t('integrations.install')}
-                  </button>
-                )
-              }
-              if (install?.kind === 'unsupported') {
-                return (
-                  <button type="button" className="agent-matrix__setup" disabled title={install.reason}>
-                    {t('integrations.unsupported')}
-                  </button>
-                )
-              }
-              if (install?.kind === 'localStdio') {
-                const needsCredentials = install.envKeys.includes('CREDENTIALS_PATH')
-                return (
-                  <button
-                    type="button"
-                    className="agent-matrix__install"
-                    disabled={busyId === row.id}
-                    onClick={() => handleConnectLocalStdio(row.id, install)}
-                    title={needsCredentials ? t('integrations.connectOAuthHint') : t('integrations.oneClickInstall')}
-                    aria-label={`${t('integrations.connect')} ${row.name}`}
-                  >
-                    {busyId === row.id ? '...' : t('integrations.connect')}
-                  </button>
-                )
-              }
+          )
+        })()
+      )}
+      {rowHasBrowse(row) && (
+        <button
+          type="button"
+          className="agent-matrix__browse"
+          onClick={() => setBrowsingId(row.id as 'github' | 'lark')}
+          title={t('integrations.browseItems', { name: row.name })}
+        >
+          {t('integrations.browse')}
+        </button>
+      )}
+    </>
+  )
+
+  const renderIntegrationCard = (row: IntegrationRow) => {
+    const connected = rowFullyConnected(row)
+    const descriptionKey = INTEGRATION_DESCRIPTION_KEY[row.id]
+    return (
+      <article key={row.id} className={`agent-matrix__card${connected ? ' is-connected' : ''}`}>
+        <span className="agent-matrix__card-mark" aria-hidden>
+          <img src={INTEGRATION_ICON[row.id]} alt="" />
+        </span>
+        <div className="agent-matrix__card-copy">
+          <header className="agent-matrix__card-head">
+            <h3>{row.name}</h3>
+          </header>
+          <p>{descriptionKey ? t(descriptionKey) : row.name}</p>
+          <div className="agent-matrix__card-agents">
+            {agents.map((agent) => {
+              const cell = row.byAgent[agent]
+              const state: IntegrationConnState = cell?.state ?? 'missing'
               return (
-                <button
-                  type="button"
-                  className="agent-matrix__setup"
-                  disabled={busyId === row.id}
-                  onClick={() => handleSetup(row.id)}
-                  aria-label={`${t('common.setUp')} ${row.name}`}
-                >
-                  {busyId === row.id ? '...' : t('common.setUp')}
-                </button>
+                <span key={agent} className={`agent-matrix__agent-state is-${state}`} title={cell?.evidence}>
+                  <i className={`agent-matrix__conn-dot is-${state}`} aria-hidden />
+                  {AGENT_LABEL[agent] ?? agent} · {stateLabel(state, t)}
+                </span>
               )
-            })()
-          )}
-          {rowHasBrowse(row) && (
-            <button
-              type="button"
-              className="agent-matrix__browse"
-              onClick={() => setBrowsingId(row.id as 'github' | 'lark')}
-              title={t('integrations.browseItems', { name: row.name })}
-            >
-              {t('integrations.browse')}
-            </button>
-          )}
-        </td>
-      </tr>
+            })}
+          </div>
+        </div>
+        <div className="agent-matrix__card-actions">{renderRowActions(row)}</div>
+      </article>
     )
   }
 
@@ -440,112 +411,26 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
           if (file) void onCredentialsFileChosen(file)
         }}
       />
-      <header className="agent-matrix__header">
-        <div>
-          <span>{t('integrations.agentKicker')}</span>
-          <h2>{t('integrations.localHealth')}</h2>
-        </div>
+      <div className="agent-matrix__toolbar">
+        <span>
+          {scan
+            ? t('integrations.statusSummary', {
+                connected: featuredSummary.connected,
+                available: featuredSummary.available,
+              })
+            : t('integrations.scanning')}
+        </span>
         <button type="button" className="agent-matrix__rescan" disabled={loading} onClick={load}>
           <RefreshCw size={13} aria-hidden /> {loading ? t('integrations.scanning') : t('integrations.rescan')}
         </button>
-      </header>
+      </div>
 
       {error && <p className="agent-matrix__error">{error}</p>}
 
-      {/* PRD §1 — Featured 区(8 个 meee2 一等公民 integration)+ Other 抽屉。
-       *  visibleRows 仍是搜索/分类后的全集,这里只是按 FEATURED_INTEGRATION_IDS 切两段。
-       *  ui-simplification: 搜索/分类/计数条只在 Other 抽屉里出现 ——
-       *  Featured 固定 8 行一眼能看完,不需要数据库式浏览语言。 */}
-      {scan && (featuredRows.length > 0 || otherRows.length > 0) && (
-        <>
-          {featuredRows.length > 0 && (
-            <section className="agent-matrix__section">
-              <header className="agent-matrix__section-head">
-                <Sparkles size={13} aria-hidden />
-                <strong>{t('integrations.featuredTitle')}</strong>
-                <span className="agent-matrix__section-hint">
-                  {t('integrations.featuredHint')}
-                </span>
-              </header>
-              <table className="agent-matrix__table">
-                <thead>
-                  <tr>
-                    <th>{t('integrations.integration')}</th>
-                    {agents.map((agent) => (
-                      <th key={agent}>{AGENT_LABEL[agent] ?? agent}</th>
-                    ))}
-                    <th aria-label={t('integrations.actions')} />
-                  </tr>
-                </thead>
-                <tbody>{featuredRows.map((row) => renderIntegrationRow(row))}</tbody>
-              </table>
-            </section>
-          )}
-
-          {otherRows.length > 0 && (
-            <section className="agent-matrix__section">
-              <header className="agent-matrix__section-head">
-                <button
-                  type="button"
-                  className="agent-matrix__section-toggle"
-                  onClick={() => setOtherCollapsed((v) => !v)}
-                  aria-expanded={!otherCollapsed}
-                >
-                  <strong>{t('integrations.otherTitle')}</strong>
-                  <span className="muted">({otherRows.length})</span>
-                  <span aria-hidden>{otherCollapsed ? '▾' : '▴'}</span>
-                </button>
-                <span className="agent-matrix__section-hint">
-                  {t('integrations.otherHint')}
-                </span>
-              </header>
-              {!otherCollapsed && (
-                <>
-                  <div className="agent-matrix__filters">
-                    <input
-                      type="search"
-                      className="agent-matrix__search"
-                      placeholder={t('integrations.searchPlaceholder')}
-                      value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                    />
-                    <div className="agent-matrix__categories" role="group" aria-label={t('integrations.categoryFilter')}>
-                      <button
-                        type="button"
-                        className={categoryFilter === null ? 'is-active' : ''}
-                        onClick={() => setCategoryFilter(null)}
-                      >
-                        {t('artifacts.filterAll')} ({rows.length})
-                      </button>
-                      {categoryCounts.map(([cat, count]) => (
-                        <button
-                          key={cat}
-                          type="button"
-                          className={categoryFilter === cat ? 'is-active' : ''}
-                          onClick={() => setCategoryFilter(cat === categoryFilter ? null : cat)}
-                        >
-                          {CATEGORY_LABEL_KEY[cat] ? t(CATEGORY_LABEL_KEY[cat]) : cat} ({count})
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <table className="agent-matrix__table">
-                    <thead>
-                      <tr>
-                        <th>{t('integrations.integration')}</th>
-                        {agents.map((agent) => (
-                          <th key={agent}>{AGENT_LABEL[agent] ?? agent}</th>
-                        ))}
-                        <th aria-label={t('integrations.actions')} />
-                      </tr>
-                    </thead>
-                    <tbody>{otherRows.map((row) => renderIntegrationRow(row))}</tbody>
-                  </table>
-                </>
-              )}
-            </section>
-          )}
-        </>
+      {scan && featuredRows.length > 0 && (
+        <div className="agent-matrix__cards">
+          {featuredRows.map((row) => renderIntegrationCard(row))}
+        </div>
       )}
 
       {authNotice && (

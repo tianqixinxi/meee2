@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyTerminal
+import meee2Kit
 
 enum NativeTerminalTheme {
     private struct StoredProfile: Decodable {
@@ -25,15 +26,21 @@ enum NativeTerminalTheme {
     }
 
     static func backgroundColor(theme: String) -> NSColor {
+        let terminalProfile = WebBoardTerminalProfile.storedProfile()
+        if !terminalProfile.useThemeColors {
+            return nsColor(hex: terminalProfile.backgroundColor)
+                ?? NSColor(calibratedWhite: 0.07, alpha: 1)
+        }
         let branch = theme == "light" ? storedProfile().light : storedProfile().dark
         return nsColor(hex: branch.backgroundColor)
             ?? (theme == "light" ? .white : NSColor(calibratedWhite: 0.07, alpha: 1))
     }
 
     private static func configuration(for branch: Branch, fallbackPalette: [String]) -> TerminalConfiguration {
-        let background = sanitizedHex(branch.backgroundColor) ?? "#101214"
-        let foreground = sanitizedHex(branch.foregroundColor) ?? "#F4F7FB"
-        let accent = sanitizedHex(branch.accentColor) ?? "#4DA6FF"
+        let terminalProfile = WebBoardTerminalProfile.storedProfile()
+        let background = sanitizedHex(terminalProfile.useThemeColors ? branch.backgroundColor : terminalProfile.backgroundColor) ?? "#101214"
+        let foreground = sanitizedHex(terminalProfile.useThemeColors ? branch.foregroundColor : terminalProfile.foregroundColor) ?? "#F4F7FB"
+        let accent = sanitizedHex(terminalProfile.useThemeColors ? branch.accentColor : terminalProfile.accentColor) ?? "#4DA6FF"
         let darkMode = relativeLuminance(background) < relativeLuminance(foreground)
         let selection = mix(background, accent, ratio: darkMode ? 0.30 : 0.18)
         let brightAccent = mix(accent, foreground, ratio: 0.24)
@@ -47,20 +54,35 @@ enum NativeTerminalTheme {
             builder.withBackground(ghosttyColor(background))
             builder.withForeground(ghosttyColor(foreground))
             builder.withBoldColor(ghosttyColor(foreground))
-            builder.withCursorStyle(.block)
-            builder.withCursorStyleBlink(true)
+            if !terminalProfile.fontFamily.isEmpty {
+                builder.withFontFamily(terminalProfile.fontFamily)
+            }
+            builder.withCursorStyle(cursorStyle(terminalProfile.cursorStyle))
+            builder.withCursorStyleBlink(terminalProfile.cursorBlink)
             builder.withCursorColor(ghosttyColor(accent))
             builder.withCursorText(ghosttyColor(background))
             builder.withSelectionBackground(ghosttyColor(selection))
             builder.withSelectionForeground(ghosttyColor(foreground))
             builder.withMinimumContrast(1.05)
-            builder.withFontSize(14)
-            builder.withFontThicken(true)
-            builder.withWindowPaddingX(10)
-            builder.withWindowPaddingY(8)
+            builder.withFontSize(Float(terminalProfile.fontSize))
+            builder.withFontThicken(terminalProfile.fontThicken)
+            let lineHeightAdjustment = terminalProfile.lineHeightPercent - 100
+            if lineHeightAdjustment != 0 {
+                builder.withCustom("adjust-cell-height", "\(lineHeightAdjustment)%")
+            }
+            builder.withWindowPaddingX(terminalProfile.paddingX)
+            builder.withWindowPaddingY(terminalProfile.paddingY)
             for (index, color) in palette.enumerated() {
                 builder.withPalette(index, color: color)
             }
+        }
+    }
+
+    private static func cursorStyle(_ value: String) -> TerminalCursorStyle {
+        switch value {
+        case "bar": return .bar
+        case "underline": return .underline
+        default: return .block
         }
     }
 

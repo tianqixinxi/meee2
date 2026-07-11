@@ -58,9 +58,11 @@ import {
   requestLegacyMessageCleanupToken,
   resetDevPerf,
   saveAssistantSecret,
+  DEFAULT_TERMINAL_PROFILE,
   updateAppSettings,
   updateSessionControl,
   type AppSettings,
+  type TerminalProfile,
   type DeleteLocalDataMode,
   type HostedAssistantProvider,
   type LegacyMessageCleanupToken,
@@ -89,7 +91,7 @@ interface Props {
   initialCategory?: SettingsCategory
 }
 
-export type SettingsCategory = 'general' | 'dynamicIsland' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
+export type SettingsCategory = 'general' | 'terminal' | 'dynamicIsland' | 'account' | 'privacy' | 'archivedSessions' | 'notifications' | 'runtime' | 'models' | 'developer'
 type ThemeProfileFileHandle = {
   createWritable: () => Promise<{
     write: (content: string) => Promise<void>
@@ -110,6 +112,7 @@ type SaveFilePickerWindow = Window & {
 const DEFAULT_APP_SETTINGS: AppSettings = {
   theme: 'system',
   themeProfile: DEFAULT_THEME_PROFILE,
+  terminalProfile: DEFAULT_TERMINAL_PROFILE,
   locale: 'en',
   devMode: false,
   showIsland: true,
@@ -262,6 +265,7 @@ export function SettingsView({
   const recordingPreviousShortcutRef = useRef<string | null>(null)
   const themeImportInputRef = useRef<HTMLInputElement | null>(null)
   const themeSaveTimerRef = useRef<number | null>(null)
+  const terminalSaveTimerRef = useRef<number | null>(null)
   const [themeEditorTarget, setThemeEditorTarget] = useState<'light' | 'dark'>(resolvedTheme)
   const [debugExporting, setDebugExporting] = useState(false)
   const [debugExportPath, setDebugExportPath] = useState<string | null>(null)
@@ -286,9 +290,12 @@ export function SettingsView({
   const [locallyRestoredArchivedIds, setLocallyRestoredArchivedIds] = useState<Set<string>>(() => new Set())
   const effectiveAppSettings = normalizeAppSettings(appSettings)
   const effectiveThemeProfile = normalizeThemeProfile(effectiveAppSettings.themeProfile ?? themeProfile)
+  const effectiveTerminalProfile = normalizeTerminalProfile(effectiveAppSettings.terminalProfile)
   const editingThemeBranch = activeThemeBranch(effectiveThemeProfile, themeEditorTarget)
+  const resolvedThemeBranch = activeThemeBranch(effectiveThemeProfile, resolvedTheme)
   const settingsCategories: Array<{ id: SettingsCategory; label: string }> = [
     { id: 'general', label: t('settings.categoryGeneral') },
+    { id: 'terminal', label: t('settings.categoryTerminal') },
     { id: 'dynamicIsland', label: t('settings.categoryDynamicIsland') },
     { id: 'account', label: t('settings.categoryAccount') },
     { id: 'privacy', label: t('settings.categoryPrivacy') },
@@ -686,6 +693,7 @@ export function SettingsView({
   useEffect(() => {
     return () => {
       if (themeSaveTimerRef.current != null) window.clearTimeout(themeSaveTimerRef.current)
+      if (terminalSaveTimerRef.current != null) window.clearTimeout(terminalSaveTimerRef.current)
     }
   }, [])
 
@@ -697,6 +705,21 @@ export function SettingsView({
     setMode(nextMode)
     void applyAppSettingsPatch({ theme: nextMode })
   }, [applyAppSettingsPatch, setMode])
+
+  const updateTerminalProfile = useCallback((patch: Partial<TerminalProfile>) => {
+    const nextProfile = normalizeTerminalProfile({ ...effectiveTerminalProfile, ...patch })
+    updateAppSettingsDraft({ terminalProfile: nextProfile })
+    if (terminalSaveTimerRef.current != null) window.clearTimeout(terminalSaveTimerRef.current)
+    terminalSaveTimerRef.current = window.setTimeout(() => {
+      terminalSaveTimerRef.current = null
+      updateAppSettings({ terminalProfile: nextProfile })
+        .then((next) => setAppSettings(normalizeAppSettings(next)))
+        .catch((err: Error) => {
+          notify('error', err.message || t('settings.terminalSaveFailed'))
+          loadAppSettings()
+        })
+    }, 350)
+  }, [effectiveTerminalProfile, loadAppSettings, notify, t, updateAppSettingsDraft])
 
   const applyLocale = useCallback((nextLocale: Locale) => {
     setLocale(nextLocale)
@@ -1066,6 +1089,197 @@ export function SettingsView({
         </section>
 
           </>
+        )}
+
+        {activeSettingsCategory === 'terminal' && (
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">{t('settings.terminal')}</div>
+                <div className="settings-section-caption">{t('settings.terminalCaption')}</div>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => updateTerminalProfile(DEFAULT_TERMINAL_PROFILE)}
+              >
+                {t('settings.terminalReset')}
+              </button>
+            </div>
+
+            <div className="settings-terminal-layout">
+              <div className="settings-terminal-controls">
+                <label className="settings-field-row settings-panel settings-terminal-field">
+                  <span>
+                    <strong>{t('settings.terminalFontFamily')}</strong>
+                    <small>{t('settings.terminalFontFamilyCaption')}</small>
+                  </span>
+                  <input
+                    type="text"
+                    value={effectiveTerminalProfile.fontFamily}
+                    placeholder={t('settings.terminalFontDefault')}
+                    onChange={(event) => updateTerminalProfile({ fontFamily: event.target.value })}
+                    spellCheck={false}
+                  />
+                </label>
+
+                <label className="settings-theme-row settings-theme-row--range settings-panel">
+                  <span>{t('settings.terminalFontSize')}</span>
+                  <span className="settings-range-field">
+                    <input
+                      type="range"
+                      min={9}
+                      max={32}
+                      step={0.5}
+                      value={effectiveTerminalProfile.fontSize}
+                      onChange={(event) => updateTerminalProfile({ fontSize: Number(event.target.value) })}
+                    />
+                    <small>{effectiveTerminalProfile.fontSize}px</small>
+                  </span>
+                </label>
+
+                <label className="settings-theme-row settings-theme-row--range settings-panel">
+                  <span>{t('settings.terminalLineHeight')}</span>
+                  <span className="settings-range-field">
+                    <input
+                      type="range"
+                      min={80}
+                      max={180}
+                      step={5}
+                      value={effectiveTerminalProfile.lineHeightPercent}
+                      onChange={(event) => updateTerminalProfile({ lineHeightPercent: Number(event.target.value) })}
+                    />
+                    <small>{effectiveTerminalProfile.lineHeightPercent}%</small>
+                  </span>
+                </label>
+
+                <label className="settings-toggle-row settings-panel">
+                  <span>
+                    <strong>{t('settings.terminalFontThicken')}</strong>
+                    <small>{t('settings.terminalFontThickenCaption')}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={effectiveTerminalProfile.fontThicken}
+                    onChange={(event) => updateTerminalProfile({ fontThicken: event.target.checked })}
+                  />
+                </label>
+
+                <label className="settings-field-row settings-panel settings-terminal-field">
+                  <span>
+                    <strong>{t('settings.terminalCursor')}</strong>
+                    <small>{t('settings.terminalCursorCaption')}</small>
+                  </span>
+                  <select
+                    value={effectiveTerminalProfile.cursorStyle}
+                    onChange={(event) => updateTerminalProfile({ cursorStyle: event.target.value as TerminalProfile['cursorStyle'] })}
+                  >
+                    <option value="block">{t('settings.terminalCursorBlock')}</option>
+                    <option value="bar">{t('settings.terminalCursorBar')}</option>
+                    <option value="underline">{t('settings.terminalCursorUnderline')}</option>
+                  </select>
+                </label>
+
+                <label className="settings-toggle-row settings-panel">
+                  <span>
+                    <strong>{t('settings.terminalCursorBlink')}</strong>
+                    <small>{t('settings.terminalCursorBlinkCaption')}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={effectiveTerminalProfile.cursorBlink}
+                    onChange={(event) => updateTerminalProfile({ cursorBlink: event.target.checked })}
+                  />
+                </label>
+
+                <div className="settings-terminal-padding settings-panel">
+                  <strong>{t('settings.terminalPadding')}</strong>
+                  <div>
+                    <label>
+                      <span>{t('settings.terminalPaddingX')}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={48}
+                        value={effectiveTerminalProfile.paddingX}
+                        onChange={(event) => updateTerminalProfile({ paddingX: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label>
+                      <span>{t('settings.terminalPaddingY')}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={48}
+                        value={effectiveTerminalProfile.paddingY}
+                        onChange={(event) => updateTerminalProfile({ paddingY: Number(event.target.value) })}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <label className="settings-toggle-row settings-panel">
+                  <span>
+                    <strong>{t('settings.terminalUseThemeColors')}</strong>
+                    <small>{t('settings.terminalUseThemeColorsCaption')}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={effectiveTerminalProfile.useThemeColors}
+                    onChange={(event) => updateTerminalProfile({ useThemeColors: event.target.checked })}
+                  />
+                </label>
+
+                {!effectiveTerminalProfile.useThemeColors && (
+                  <div className="settings-terminal-colors settings-panel">
+                    <ThemeColorRow
+                      label={t('settings.themeBackground')}
+                      value={effectiveTerminalProfile.backgroundColor}
+                      onChange={(backgroundColor) => updateTerminalProfile({ backgroundColor })}
+                    />
+                    <ThemeColorRow
+                      label={t('settings.themeForeground')}
+                      value={effectiveTerminalProfile.foregroundColor}
+                      onChange={(foregroundColor) => updateTerminalProfile({ foregroundColor })}
+                    />
+                    <ThemeColorRow
+                      label={t('settings.themeAccent')}
+                      value={effectiveTerminalProfile.accentColor}
+                      onChange={(accentColor) => updateTerminalProfile({ accentColor })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div
+                className="settings-terminal-preview"
+                style={{
+                  background: effectiveTerminalProfile.useThemeColors
+                    ? resolvedThemeBranch.backgroundColor
+                    : effectiveTerminalProfile.backgroundColor,
+                  color: effectiveTerminalProfile.useThemeColors
+                    ? resolvedThemeBranch.foregroundColor
+                    : effectiveTerminalProfile.foregroundColor,
+                  fontFamily: effectiveTerminalProfile.fontFamily || 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: `${effectiveTerminalProfile.fontSize}px`,
+                  lineHeight: effectiveTerminalProfile.lineHeightPercent / 100,
+                  padding: `${effectiveTerminalProfile.paddingY}px ${effectiveTerminalProfile.paddingX}px`,
+                  fontWeight: effectiveTerminalProfile.fontThicken ? 600 : 400,
+                }}
+                aria-label={t('settings.terminalPreview')}
+              >
+                <div><span className="settings-terminal-preview__prompt">➜</span> meee2 status</div>
+                <div className="settings-terminal-preview__muted">3 sessions · all systems operational</div>
+                <div>
+                  <span className="settings-terminal-preview__prompt">➜</span>{' '}
+                  <span
+                    className={`settings-terminal-preview__cursor is-${effectiveTerminalProfile.cursorStyle}`}
+                    style={{ background: effectiveTerminalProfile.useThemeColors ? resolvedThemeBranch.accentColor : effectiveTerminalProfile.accentColor }}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
         )}
 
         {activeSettingsCategory === 'dynamicIsland' && (
@@ -1780,10 +1994,40 @@ function normalizeAppSettings(settings: AppSettings | null | undefined): AppSett
     ...DEFAULT_APP_SETTINGS,
     ...settings,
     themeProfile: normalizeThemeProfile(settings.themeProfile),
+    terminalProfile: normalizeTerminalProfile(settings.terminalProfile),
     availableScreens: Array.isArray(settings.availableScreens) && settings.availableScreens.length > 0
       ? settings.availableScreens
       : DEFAULT_APP_SETTINGS.availableScreens,
     claudeWorkflowCanvasMode,
+  }
+}
+
+function normalizeTerminalProfile(profile: TerminalProfile | null | undefined): TerminalProfile {
+  if (!profile || typeof profile !== 'object') return { ...DEFAULT_TERMINAL_PROFILE }
+  const cursorStyle = ['block', 'bar', 'underline'].includes(profile.cursorStyle)
+    ? profile.cursorStyle
+    : DEFAULT_TERMINAL_PROFILE.cursorStyle
+  const color = (value: unknown, fallback: string) => (
+    typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toUpperCase() : fallback
+  )
+  const number = (value: unknown, fallback: number, min: number, max: number) => {
+    const parsed = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback
+  }
+  return {
+    schemaVersion: 1,
+    fontFamily: typeof profile.fontFamily === 'string' ? profile.fontFamily.slice(0, 128) : '',
+    fontSize: number(profile.fontSize, 14, 9, 32),
+    lineHeightPercent: number(profile.lineHeightPercent, 100, 80, 180),
+    fontThicken: typeof profile.fontThicken === 'boolean' ? profile.fontThicken : false,
+    cursorStyle,
+    cursorBlink: typeof profile.cursorBlink === 'boolean' ? profile.cursorBlink : true,
+    paddingX: number(profile.paddingX, 10, 0, 48),
+    paddingY: number(profile.paddingY, 8, 0, 48),
+    useThemeColors: typeof profile.useThemeColors === 'boolean' ? profile.useThemeColors : true,
+    backgroundColor: color(profile.backgroundColor, DEFAULT_TERMINAL_PROFILE.backgroundColor),
+    foregroundColor: color(profile.foregroundColor, DEFAULT_TERMINAL_PROFILE.foregroundColor),
+    accentColor: color(profile.accentColor, DEFAULT_TERMINAL_PROFILE.accentColor),
   }
 }
 

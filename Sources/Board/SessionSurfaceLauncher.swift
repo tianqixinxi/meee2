@@ -73,7 +73,12 @@ enum SessionSurfaceLauncher {
             )
         )
         if recordLauncherInitialPrompt {
-            recordInitialPrompt(handle.snapshot.sessionId, initialPrompt: resumeSessionId == nil ? initialPrompt : nil)
+            recordInitialPrompt(
+                handle.snapshot.sessionId,
+                provider: normalizedProvider,
+                cwd: cwd,
+                initialPrompt: resumeSessionId == nil ? initialPrompt : nil
+            )
         }
         BoardServer.shared.broadcastStateChanged()
         return handle.snapshot
@@ -232,7 +237,12 @@ enum SessionSurfaceLauncher {
         return AgentLaunchCommand.normalizedProvider(haystack)
     }
 
-    private static func recordInitialPrompt(_ sessionId: String, initialPrompt: String?) {
+    private static func recordInitialPrompt(
+        _ sessionId: String,
+        provider: String,
+        cwd: String,
+        initialPrompt: String?
+    ) {
         guard let prompt = AgentLaunchCommand.launcherDisplayPrompt(
             forDeliveredInitialPrompt: initialPrompt
         ) else { return }
@@ -240,6 +250,12 @@ enum SessionSurfaceLauncher {
             session.currentTask = prompt
             session.lastMessage = prompt
         }
+        SessionTitleGenerator.schedule(
+            sessionId: sessionId,
+            provider: provider,
+            prompt: prompt,
+            workspacePath: cwd
+        )
     }
 
     private static func initialPromptSettleCeiling(provider: String, initialPrompt: String?) -> TimeInterval? {
