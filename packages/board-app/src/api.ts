@@ -62,6 +62,7 @@ import type {
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
   SessionArtifactsEnvelope,
+  SessionEnvironmentSnapshot,
   ArtifactPageEnvelope,
   ArtifactCandidateListEnvelope,
   ArtifactCandidateMutationEnvelope,
@@ -2080,6 +2081,25 @@ export function getPlannerArtifactContent(
 export function fetchSessionArtifacts(sessionId: string): Promise<SessionArtifactsEnvelope> {
   return jsonRequest<SessionArtifactsEnvelope>(
     `/api/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+  )
+}
+
+export function fetchSessionEnvironment(sessionId: string): Promise<SessionEnvironmentSnapshot> {
+  return jsonRequest<SessionEnvironmentSnapshot>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/environment`,
+  )
+}
+
+export function openSessionEnvironmentOutput(
+  sessionId: string,
+  path: string,
+): Promise<{ ok: boolean; path: string; mode: 'opened' | 'revealed' }> {
+  return jsonRequest<{ ok: boolean; path: string; mode: 'opened' | 'revealed' }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/environment/open`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    },
   )
 }
 

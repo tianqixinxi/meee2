@@ -12,6 +12,7 @@ import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
 import { Tooltip } from './Tooltip'
+import meee2AppIcon from '../../../../Resources/AppIcon.iconset/icon_32x32@2x.png'
 
 export type WorkspaceMode = 'session' | 'planner' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
 
@@ -69,9 +70,10 @@ export function WorkspaceRail({
   return (
     <nav className={`workspace-rail${compact ? ' workspace-rail--compact' : ''}`} aria-label={t('rail.workspace')}>
       <div className="workspace-rail__top">
-        <div className="workspace-rail__brand" data-testid="workspace-rail-brand" aria-label="meee2">
-          <span className="workspace-rail__brand-mark" aria-hidden>m</span>
-          <strong className="workspace-rail__brand-name">meee2</strong>
+        <div className="workspace-rail__brand" data-testid="workspace-rail-brand" aria-label="Meee2">
+          {compact
+            ? <img className="workspace-rail__brand-mark" src={meee2AppIcon} alt="" aria-hidden />
+            : <strong className="workspace-rail__brand-name">Meee2</strong>}
         </div>
         {showAvatarShortcut && (
           <Tooltip label={t('rail.settings')} placement="right" delay={120}>

@@ -1250,11 +1250,6 @@ export default function App() {
     setWorkspaceMode(nextMode)
   }, [])
 
-  const handleOpenSessionArtifacts = useCallback((_session: Session, _title: string, filter: ArtifactSessionFilter) => {
-    setArtifactSessionFilter(filter)
-    setWorkspaceMode('artifacts')
-  }, [])
-
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
       .then(setUserProfile)
@@ -1365,7 +1360,6 @@ export default function App() {
               state={boardState.state}
               openTarget={sessionsWorkspaceTarget}
               onSessionCreated={() => boardState.forceRefresh()}
-              onOpenSessionArtifacts={handleOpenSessionArtifacts}
               onJumpToCanvas={handleJumpSessionToCanvas}
               onToast={pushToast}
               unifiedSidebar

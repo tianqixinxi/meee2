@@ -999,6 +999,89 @@ enum BoardAPI {
         return jsonResponse(SessionArtifactCandidateStore.shared.combinedArtifacts(sessionId: sessionId))
     }
 
+    static func getSessionEnvironment(_ req: HttpRequest) -> HttpResponse {
+        guard let rawSessionId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawSessionId.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let snapshot = resolveSessionWorkspaceSnapshot(rawSessionId) else {
+            return errorResponse("session_cwd_missing", "session workspace is unavailable", status: 404)
+        }
+        return jsonResponse(snapshot)
+    }
+
+    static func openSessionEnvironmentOutput(_ req: HttpRequest) -> HttpResponse {
+        struct OpenRequest: Decodable {
+            let path: String
+        }
+        struct OpenResponse: Encodable {
+            let ok: Bool
+            let path: String
+            let mode: String
+        }
+        guard let rawSessionId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawSessionId.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: OpenRequest.self),
+              !body.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"path\": String}", status: 400)
+        }
+        guard let snapshot = resolveSessionWorkspaceSnapshot(rawSessionId) else {
+            return errorResponse("session_cwd_missing", "session workspace is unavailable", status: 404)
+        }
+        guard let output = SessionWorkspaceInspector.output(in: snapshot, matching: body.path) else {
+            return errorResponse("output_not_found", "path is not a current session output", status: 404)
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: output.path, isDirectory: &isDirectory) else {
+            return errorResponse("output_missing", "output no longer exists", status: 404)
+        }
+        let url = URL(fileURLWithPath: output.path, isDirectory: isDirectory.boolValue)
+        if NSWorkspace.shared.open(url) {
+            return jsonResponse(OpenResponse(ok: true, path: output.path, mode: "opened"))
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+        return jsonResponse(OpenResponse(ok: true, path: output.path, mode: "revealed"))
+    }
+
+    private static func resolveSessionWorkspaceSnapshot(_ rawSessionId: String) -> SessionWorkspaceSnapshot? {
+        let pluginSession = resolvePluginSession(rawSessionId)
+        let surface = TerminalSessionBackendRegistry.shared.snapshot(id: rawSessionId)
+            ?? pluginSession.flatMap { TerminalSessionBackendRegistry.shared.snapshot(id: $0.id) }
+        let storedSession = SessionStore.shared.get(rawSessionId)
+            ?? pluginSession.flatMap { SessionStore.shared.get($0.id) }
+            ?? surface.flatMap { SessionStore.shared.get($0.sessionId) }
+            ?? SessionStore.shared.listAll().first(where: { $0.sessionId.hasPrefix(rawSessionId) })
+        let terminalInfo = SessionTerminalStore.shared.get(sessionId: rawSessionId)
+            ?? pluginSession.flatMap { SessionTerminalStore.shared.get(sessionId: $0.id) }
+        guard let cwd = [pluginSession?.cwd, surface?.cwd, storedSession?.cwd, terminalInfo?.cwd]
+            .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) else {
+            return nil
+        }
+
+        let aliases = [
+            rawSessionId,
+            pluginSession?.id,
+            surface?.sessionId,
+            storedSession?.sessionId,
+            storedSession?.providerResumeSessionId,
+            terminalInfo?.providerResumeSessionId
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+        let candidateFilePaths = SessionArtifactCandidateStore.shared
+            .list(sessionIds: aliases)
+            .flatMap(\.references)
+            .filter { $0.kind == "file" }
+            .map(\.value)
+
+        return SessionWorkspaceInspector.inspect(
+            sessionId: storedSession?.sessionId ?? pluginSession?.id ?? rawSessionId,
+            cwd: cwd,
+            candidateFilePaths: candidateFilePaths
+        )
+    }
+
     static func listArtifactCandidates(_ req: HttpRequest) -> HttpResponse {
         MWarn("[Deprecated] GET /api/artifact-candidates; use GET /api/artifacts?status=candidate")
         let sessionIdRaw = req.queryParams.first(where: { $0.0 == "sessionId" })?.1

@@ -60,13 +60,12 @@ import { useI18n, type TranslationKey } from '../lib/i18n'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, loadTitleOverrides, saveTitleOverride, togglePinned } from '../sessionOverrides'
 import type { AgentPermissionMode, BoardState, Session, SessionLaunchAttachment, SessionProject, SpawnProvider } from '../types'
-import { SessionArtifactsPanel } from './SessionArtifactsModal'
+import { SessionEnvironmentPanel } from './SessionEnvironmentPanel'
 
 interface Props {
   state: BoardState | null
   openTarget?: { sessionId?: string; surfaceId?: string; nonce?: number } | null
   onSessionCreated?: () => void
-  onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
   onJumpToCanvas?: (session: Session) => void
   onToast?: (kind: 'success' | 'error', text: string) => void
   unifiedSidebar?: boolean
@@ -81,17 +80,6 @@ type Selection =
 type RestoredTerminalTarget = {
   sessionId: string
   surfaceId: string
-}
-
-type SessionPanelTab = 'terminal' | 'artifact'
-
-export type SessionArtifactFilterPayload = {
-  sessionId: string
-  title: string
-  providerResumeSessionId?: string | null
-  surfaceId?: string | null
-  project?: string | null
-  projectName?: string | null
 }
 
 const DEFAULT_PROMPT = ''
@@ -281,7 +269,6 @@ export function SessionLauncherView({
   state,
   openTarget,
   onSessionCreated,
-  onOpenSessionArtifacts,
   onJumpToCanvas,
   onToast,
   unifiedSidebar = false,
@@ -333,13 +320,14 @@ export function SessionLauncherView({
   const [reopeningSessionId, setReopeningSessionId] = useState<string | null>(null)
   const [locallyArchivedSessionIds, setLocallyArchivedSessionIds] = useState<Set<string>>(() => new Set())
   const [restoredSessionTargets, setRestoredSessionTargets] = useState<Record<string, RestoredTerminalTarget>>({})
-  const [sessionPanelTabs, setSessionPanelTabs] = useState<Record<string, SessionPanelTab>>({})
   const [sidebarWidth, setSidebarWidth] = useState(() => readStoredSidebarWidth())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
   const initializedSelectionRef = useRef(initialSelection !== null)
+  const initialAutoResumeSettledRef = useRef(false)
   const handledOpenTargetRef = useRef<string | null>(null)
   const pointerSidebarResizeActiveRef = useRef(false)
   const stableSessionPlacementRef = useRef(new Map<string, 'current' | 'history'>())
+  const sessionSwitchTraceRef = useRef<Record<string, { startedAt: number; traceId: string }>>({})
   const sessions = state?.sessions ?? []
 
   const refreshProjects = useCallback(() => {
@@ -522,12 +510,12 @@ export function SessionLauncherView({
           : current)
         onSessionCreated?.()
         const title = sessionDisplayTitle(session, titleOverrides)
-        const toastKey = result.action === 'reuse'
-          ? 'sessions.launcher.reusedSession'
-          : result.action === 'resume'
+        if (result.action !== 'reuse') {
+          const toastKey = result.action === 'resume'
             ? 'sessions.launcher.resumedSession'
             : 'sessions.launcher.recreatedSession'
-        onToast?.('success', t(toastKey, { title }))
+          onToast?.('success', t(toastKey, { title }))
+        }
       })
       .catch((err: Error) => {
         onToast?.('error', err.message || t('sessions.launcher.noTerminalSurface'))
@@ -627,6 +615,17 @@ export function SessionLauncherView({
       return Boolean(selectedRestoredTarget.surfaceId && session.surfaceId === selectedRestoredTarget.surfaceId)
     }) ?? null
   }, [selectedRestoredTarget, sessions])
+
+  useEffect(() => {
+    if (initialAutoResumeSettledRef.current || state === null || projectsLoading || !selection) return
+    if (selection.kind !== 'session') {
+      initialAutoResumeSettledRef.current = true
+      return
+    }
+    if (!selectedSession) return
+    initialAutoResumeSettledRef.current = true
+    if (sessionCanBeReopened(selectedSession)) reopenLauncherSessionForSession(selectedSession)
+  }, [projectsLoading, reopenLauncherSessionForSession, selectedSession, selection, state])
 
   const selectedProjectProvider = selectedProject
     ? providerByProjectId[selectedProject.id] ?? selectedProject.preferredProvider
@@ -849,20 +848,23 @@ export function SessionLauncherView({
     }
   }, [onSessionCreated, onToast, temporaryAttachments, temporaryPermissionMode, temporaryPlanMode, temporaryPrompt, temporaryProvider, t])
 
+  const markSessionSwitchStarted = useCallback((sessionId: string) => {
+    const startedAt = Date.now()
+    sessionSwitchTraceRef.current[sessionId] = {
+      startedAt,
+      traceId: `launcher-${sessionId.slice(0, 8)}-${startedAt.toString(36)}`,
+    }
+  }, [])
+
   const handleSelectSession = useCallback((session: Session) => {
+    markSessionSwitchStarted(session.id)
     setSessionMenu(null)
     setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
     // Clicking a resumable historical row is the user's explicit intent to
     // continue it. Restore immediately; recovery controls are only useful if
     // the automatic resume fails.
     if (sessionCanBeReopened(session)) reopenLauncherSessionForSession(session)
-  }, [reopenLauncherSessionForSession])
-
-  const handleOpenSessionArtifactsTab = useCallback((session: Session) => {
-    setSessionMenu(null)
-    setSelection({ kind: 'session', sessionId: session.id, surfaceId: session.surfaceId })
-    setSessionPanelTabs((current) => ({ ...current, [session.id]: 'artifact' }))
-  }, [])
+  }, [markSessionSwitchStarted, reopenLauncherSessionForSession])
 
   const handleRetrySessionAttachment = useCallback(() => {
     onSessionCreated?.()
@@ -1212,12 +1214,11 @@ export function SessionLauncherView({
             reopening={reopeningSessionId === selection.sessionId && !selectedRestoredTarget}
             titleOverrides={titleOverrides}
             theme={resolvedTheme}
-            onOpenSessionArtifacts={onOpenSessionArtifacts}
             onResume={() => selectedSession && reopenLauncherSessionForSession(selectedSession)}
             onRetryAttach={handleRetrySessionAttachment}
             onOpenExternal={() => selectedSession && void handleOpenExternalTerminal(selectedSession)}
-            activeTab={sessionPanelTabs[selection.sessionId] ?? 'terminal'}
-            onActiveTabChange={(tab) => setSessionPanelTabs((current) => ({ ...current, [selection.sessionId]: tab }))}
+            switchStartedAt={sessionSwitchTraceRef.current[selection.sessionId]?.startedAt}
+            switchTraceId={sessionSwitchTraceRef.current[selection.sessionId]?.traceId}
           />
         ) : selection?.kind === 'temporaryDraft' ? (
           <SessionComposer
@@ -1315,9 +1316,6 @@ export function SessionLauncherView({
           setSessionMenu(null)
           setArchiveSession(sessionMenu.session)
         }}
-        onOpenArtifacts={() => {
-          handleOpenSessionArtifactsTab(sessionMenu.session)
-        }}
         onJumpToCanvas={onJumpToCanvas ? () => {
           const session = sessionMenu.session
           setSessionMenu(null)
@@ -1385,7 +1383,6 @@ function SessionContextMenuView({
   onTogglePinned,
   onRename,
   onArchive,
-  onOpenArtifacts,
   onJumpToCanvas,
 }: {
   title: string
@@ -1395,7 +1392,6 @@ function SessionContextMenuView({
   onTogglePinned: () => void
   onRename: () => void
   onArchive: () => void
-  onOpenArtifacts: () => void
   onJumpToCanvas?: () => void
 }) {
   const { t } = useI18n()
@@ -1411,10 +1407,6 @@ function SessionContextMenuView({
       <button type="button" role="menuitem" onClick={onArchive}>
         <Archive size={13} aria-hidden />
         <span>{t('sessions.launcher.archiveSession')}</span>
-      </button>
-      <button type="button" role="menuitem" onClick={onOpenArtifacts}>
-        <FileText size={13} aria-hidden />
-        <span>{t('sessions.launcher.openArtifacts')}</span>
       </button>
       {onJumpToCanvas && (
         <button type="button" role="menuitem" onClick={onJumpToCanvas}>
@@ -2289,12 +2281,11 @@ function SessionLauncherTerminal({
   reopening,
   titleOverrides,
   theme,
-  onOpenSessionArtifacts,
   onResume,
   onRetryAttach,
   onOpenExternal,
-  activeTab,
-  onActiveTabChange,
+  switchStartedAt,
+  switchTraceId,
 }: {
   session: Session | null
   statusSession?: Session | null
@@ -2304,12 +2295,11 @@ function SessionLauncherTerminal({
   reopening: boolean
   titleOverrides: Record<string, string>
   theme: 'light' | 'dark'
-  onOpenSessionArtifacts?: (session: Session, title: string, filter: SessionArtifactFilterPayload) => void
   onResume?: () => void
   onRetryAttach?: () => void
   onOpenExternal?: () => void
-  activeTab: SessionPanelTab
-  onActiveTabChange: (tab: SessionPanelTab) => void
+  switchStartedAt?: number
+  switchTraceId?: string
 }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -2324,12 +2314,11 @@ function SessionLauncherTerminal({
   const targetSurfaceId = liveTarget.surfaceId ?? (usingRestoredSurface ? suppliedSurfaceId : undefined)
   const targetSessionId = liveTarget.sessionId ?? (targetSurfaceId ? sessionId : undefined)
   const canOpenNativeTerminal = Boolean(targetSurfaceId && targetSessionId)
-  const terminalTabActive = activeTab === 'terminal'
   const targetKey = `${targetSessionId ?? 'missing'}:${targetSurfaceId ?? 'missing'}`
 
   useEffect(() => {
     setShowRecoveryDetails(false)
-    if (canOpenNativeTerminal || !terminalTabActive) {
+    if (canOpenNativeTerminal) {
       setShowRecovery(false)
       return undefined
     }
@@ -2340,21 +2329,21 @@ function SessionLauncherTerminal({
     setShowRecovery(false)
     const timer = window.setTimeout(() => setShowRecovery(true), TERMINAL_ATTACH_GRACE_MS)
     return () => window.clearTimeout(timer)
-  }, [canOpenNativeTerminal, session?.id, session?.status, session?.surfaceStatus, terminalTabActive])
+  }, [canOpenNativeTerminal, session?.id, session?.status, session?.surfaceStatus])
 
   useLayoutEffect(() => {
-    const startedAt = Date.now()
+    const startedAt = switchStartedAt ?? Date.now()
     const targetPrefix = (targetSurfaceId || targetSessionId || 'missing').slice(0, 8)
     switchStartedAtRef.current = startedAt
-    switchTraceIdRef.current = `launcher-${targetPrefix}-${startedAt.toString(36)}`
+    switchTraceIdRef.current = switchTraceId ?? `launcher-${targetPrefix}-${startedAt.toString(36)}`
     lastRectRef.current = null
-  }, [canOpenNativeTerminal, targetKey, targetSessionId, targetSurfaceId])
+  }, [canOpenNativeTerminal, switchStartedAt, switchTraceId, targetKey, targetSessionId, targetSurfaceId])
 
   const syncTerminal = useCallback((phase: 'show' | 'layout' | 'focus' = 'layout', force = false) => {
     const traceId = switchTraceIdRef.current
     const clickStartedAtMs = switchStartedAtRef.current
     const host = hostRef.current
-    if (!host || !canOpenNativeTerminal || !terminalTabActive) {
+    if (!host || !canOpenNativeTerminal) {
       syncNativeSessionsWorkspace({
         phase: 'hide',
         mode: 'terminal',
@@ -2362,7 +2351,7 @@ function SessionLauncherTerminal({
         traceId,
         clickStartedAtMs,
         sentAtMs: Date.now(),
-        webPhase: terminalTabActive ? 'sessionLauncher.hide.missingTarget' : 'sessionLauncher.hide.artifactTab',
+        webPhase: 'sessionLauncher.hide.missingTarget',
       })
       lastRectRef.current = null
       return
@@ -2388,7 +2377,7 @@ function SessionLauncherTerminal({
       sentAtMs: Date.now(),
       webPhase: `sessionLauncher.${phase}`,
     })
-  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId, terminalTabActive, theme])
+  }, [canOpenNativeTerminal, targetSessionId, targetSurfaceId, theme])
 
   const scheduleLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) return
@@ -2418,7 +2407,7 @@ function SessionLauncherTerminal({
       window.removeEventListener('meee2:restore-native-sessions-workspace', handleNativeRestore)
       lastRectRef.current = null
     }
-  }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId, terminalTabActive])
+  }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId])
 
   useEffect(() => {
     return () => {
@@ -2441,7 +2430,6 @@ function SessionLauncherTerminal({
     ? { ...session, status: 'running', surfaceStatus: 'running' }
     : session
   const status = sessionTerminalStatus(statusSession ?? fallbackRunningSession, t)
-  const artifactTarget = session ? sessionArtifactFilter(session, title) : null
   const fallbackMessage = sessionLauncherTerminalFallbackMessage(session, reopening, showRecovery, t)
 
   return (
@@ -2459,83 +2447,62 @@ function SessionLauncherTerminal({
           <em className={`session-launcher-terminal__status is-${status.tone}`}>{status.label}</em>
         </div>
       </header>
-      <div className="session-launcher-terminal__tabs" role="tablist" aria-label={t('sessions.launcher.sessionPanelTabs')}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'terminal'}
-          className={activeTab === 'terminal' ? 'is-active' : ''}
-          onClick={() => onActiveTabChange('terminal')}
-        >
-          {t('sessions.launcher.tabTerminal')}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'artifact'}
-          className={activeTab === 'artifact' ? 'is-active' : ''}
-          onClick={() => onActiveTabChange('artifact')}
-        >
-          {t('sessions.launcher.tabArtifact')}
-        </button>
-      </div>
-      {canOpenNativeTerminal ? (
-        <div
-          ref={hostRef}
-          className={`session-launcher-terminal__host${activeTab === 'terminal' ? ' is-active' : ''}`}
-          role="tabpanel"
-          aria-label={t('sessions.launcher.tabTerminal')}
-          hidden={activeTab !== 'terminal'}
-        />
-      ) : activeTab === 'terminal' ? (
-        <div
-          className="session-launcher__terminal-empty session-launcher-terminal__fallback"
-          role="tabpanel"
-          aria-label={t('sessions.launcher.tabTerminal')}
-        >
-          <strong>{session ? title : t('rail.session')}</strong>
-          {reopening ? <Loader2 size={16} className="spin" aria-hidden /> : null}
-          <span>{fallbackMessage}</span>
-          {showRecovery && !reopening && (
-            <div className="session-launcher-terminal__recovery-actions">
-              {session && sessionCanBeReopened(session) && onResume ? (
-                <button type="button" className="primary" onClick={onResume}>{t('sessions.launcher.resumeSession')}</button>
-              ) : null}
-              {onOpenExternal ? <button type="button" onClick={onOpenExternal}>{t('sessions.launcher.openExternalTerminal')}</button> : null}
-              <button
-                type="button"
-                className="quiet"
-                aria-expanded={showRecoveryDetails}
-                onClick={() => setShowRecoveryDetails((value) => !value)}
-              >
-                {t('sessions.launcher.troubleshoot')}
-              </button>
-            </div>
-          )}
-          {showRecoveryDetails && session ? (
-            <div className="session-launcher-terminal__recovery-details">
-              {onRetryAttach ? <button type="button" onClick={onRetryAttach}>{t('sessions.launcher.retryAttach')}</button> : null}
-              <dl className="session-launcher-terminal__diagnostics">
-                <div><dt>session</dt><dd>{session.id}</dd></div>
-                <div><dt>status</dt><dd>{session.surfaceStatus ?? session.status}</dd></div>
-                <div><dt>surface</dt><dd>{session.surfaceId ?? 'none'}</dd></div>
-              </dl>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      {activeTab === 'artifact' && session && artifactTarget && (
-        <div
-          className="session-launcher-terminal__artifact-panel"
-          role="tabpanel"
-          aria-label={t('sessions.launcher.tabArtifact')}
-        >
-          <SessionArtifactsPanel
-            target={artifactTarget}
-            className="session-artifacts-panel--inline"
+      <div className="session-launcher-terminal__content">
+        {canOpenNativeTerminal ? (
+          <div
+            ref={hostRef}
+            className="session-launcher-terminal__host"
+            aria-label={t('sessions.launcher.tabTerminal')}
           />
-        </div>
-      )}
+        ) : (
+          <div
+            className="session-launcher__terminal-empty session-launcher-terminal__fallback"
+            aria-label={t('sessions.launcher.tabTerminal')}
+          >
+            <strong>{session ? title : t('rail.session')}</strong>
+            {reopening ? <Loader2 size={16} className="spin" aria-hidden /> : null}
+            <span>{fallbackMessage}</span>
+            {showRecovery && !reopening && (
+              <div className="session-launcher-terminal__recovery-actions">
+                {session && sessionCanBeReopened(session) && onResume ? (
+                  <button type="button" className="primary" onClick={onResume}>{t('sessions.launcher.resumeSession')}</button>
+                ) : null}
+                {onOpenExternal ? <button type="button" onClick={onOpenExternal}>{t('sessions.launcher.openExternalTerminal')}</button> : null}
+                <button
+                  type="button"
+                  className="quiet"
+                  aria-expanded={showRecoveryDetails}
+                  onClick={() => setShowRecoveryDetails((value) => !value)}
+                >
+                  {t('sessions.launcher.troubleshoot')}
+                </button>
+              </div>
+            )}
+            {showRecoveryDetails && session ? (
+              <div className="session-launcher-terminal__recovery-details">
+                {onRetryAttach ? <button type="button" onClick={onRetryAttach}>{t('sessions.launcher.retryAttach')}</button> : null}
+                <dl className="session-launcher-terminal__diagnostics">
+                  <div><dt>session</dt><dd>{session.id}</dd></div>
+                  <div><dt>status</dt><dd>{session.surfaceStatus ?? session.status}</dd></div>
+                  <div><dt>surface</dt><dd>{session.surfaceId ?? 'none'}</dd></div>
+                </dl>
+              </div>
+            ) : null}
+          </div>
+        )}
+        {session ? (
+          <aside
+            className="session-launcher-terminal__environment-dock"
+            aria-label={t('sessions.environment.title')}
+          >
+            <SessionEnvironmentPanel
+              key={session.id}
+              sessionId={session.id}
+              refreshKey={session.lastActivity}
+            />
+          </aside>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -2656,18 +2623,6 @@ function providerResumeTargetForSession(session: Session): string | null {
 
 function isLikelyProviderResumeSessionId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-}
-
-function sessionArtifactFilter(session: Session, title: string): SessionArtifactFilterPayload {
-  const project = session.project?.trim() || null
-  return {
-    sessionId: session.id,
-    title,
-    providerResumeSessionId: session.providerResumeSessionId ?? null,
-    surfaceId: session.surfaceId ?? null,
-    project,
-    projectName: project ? basename(project) : null,
-  }
 }
 
 function launcherProviderForSession(session: Session): SpawnProvider | undefined {

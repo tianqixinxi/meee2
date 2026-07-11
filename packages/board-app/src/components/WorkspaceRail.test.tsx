@@ -46,7 +46,10 @@ describe('WorkspaceRail', () => {
     expect(screen.getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
     expect(screen.getByTestId('workspace-rail-detail')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-rail-brand')).toHaveTextContent('meee2')
+    expect(screen.getByTestId('workspace-rail-brand')).toHaveTextContent('')
+    expect(screen.getByTestId('workspace-rail-brand').querySelector('.workspace-rail__brand-name')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-rail-brand').querySelector('img.workspace-rail__brand-mark')).toBeInTheDocument()
+    expect(screen.getByLabelText('Meee2')).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveClass('workspace-rail--compact')
     expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('72px')
   })
@@ -79,6 +82,8 @@ describe('WorkspaceRail', () => {
 
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).not.toHaveClass('workspace-rail--compact')
     expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('320px')
+    expect(screen.getByTestId('workspace-rail-brand')).toHaveTextContent('Meee2')
+    expect(screen.getByTestId('workspace-rail-brand').querySelector('.workspace-rail__brand-mark')).not.toBeInTheDocument()
   })
 
   it('omits the avatar shortcut when the user is not connected', () => {

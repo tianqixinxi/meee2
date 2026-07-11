@@ -246,6 +246,8 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var pendingPromptSubmit = false
     private var detached = false
     private var lastLayoutFrame: NSRect = .zero
+    private var lastAppliedTerminalTheme: TerminalTheme?
+    private var lastAppliedColorScheme: TerminalColorScheme?
 
     // Ready-gated initialPrompt delivery. Ghostty exec surfaces do not expose
     // stdout, so we can't poll PTY bytes; instead we treat any surface signal
@@ -363,7 +365,15 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
 
     func applyTheme(_ theme: String) {
         let scheme: TerminalColorScheme = theme == "light" ? .light : .dark
-        terminalController.setTheme(NativeTerminalTheme.terminalTheme())
+        let appearanceName: NSAppearance.Name = theme == "light" ? .aqua : .darkAqua
+        if terminalView.appearance?.name != appearanceName {
+            terminalView.appearance = NSAppearance(named: appearanceName)
+        }
+        let terminalTheme = NativeTerminalTheme.terminalTheme()
+        guard terminalTheme != lastAppliedTerminalTheme || scheme != lastAppliedColorScheme else { return }
+        lastAppliedTerminalTheme = terminalTheme
+        lastAppliedColorScheme = scheme
+        terminalController.setTheme(terminalTheme)
         terminalController.setColorScheme(scheme)
         terminalView.layer?.backgroundColor = NativeTerminalTheme.backgroundColor(theme: theme).cgColor
         terminalView.needsDisplay = true
