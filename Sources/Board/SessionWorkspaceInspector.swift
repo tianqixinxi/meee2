@@ -60,10 +60,12 @@ enum SessionWorkspaceInspector {
             ].joined(separator: "\n")
         let totals = parseNumstat(numstat)
         let branch = resolvedBranch(cwd: root)
-        let outputs = status.createdPaths.map { relativePath in
-            SessionWorkspaceOutputFile(
-                path: URL(fileURLWithPath: root).appendingPathComponent(relativePath).standardizedFileURL.path,
-                relativePath: relativePath
+        let rootURL = URL(fileURLWithPath: root).standardizedFileURL
+        let outputs = status.createdPaths.compactMap { relativePath in
+            workspaceOutput(
+                url: rootURL.appendingPathComponent(relativePath).standardizedFileURL,
+                relativePath: relativePath,
+                root: rootURL
             )
         }
 
@@ -132,11 +134,21 @@ enum SessionWorkspaceInspector {
                 ? URL(fileURLWithPath: rawPath).standardizedFileURL
                 : root.appendingPathComponent(rawPath).standardizedFileURL
             guard FileManager.default.fileExists(atPath: absolute.path) else { return nil }
-            let relative = absolute.path.hasPrefix(root.path + "/")
-                ? String(absolute.path.dropFirst(root.path.count + 1))
-                : absolute.lastPathComponent
-            return SessionWorkspaceOutputFile(path: absolute.path, relativePath: relative)
+            guard absolute.path.hasPrefix(root.path + "/") else { return nil }
+            let relative = String(absolute.path.dropFirst(root.path.count + 1))
+            return workspaceOutput(url: absolute, relativePath: relative, root: root)
         }.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    private static func workspaceOutput(
+        url: URL,
+        relativePath: String,
+        root: URL
+    ) -> SessionWorkspaceOutputFile? {
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedOutput = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard resolvedOutput.hasPrefix(resolvedRoot + "/") else { return nil }
+        return SessionWorkspaceOutputFile(path: url.path, relativePath: relativePath)
     }
 
     private static func runGit(cwd: String, arguments: [String]) -> String? {

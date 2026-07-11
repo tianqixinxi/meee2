@@ -29,11 +29,22 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let output = root.appendingPathComponent("result.md")
         try Data("done".utf8).write(to: output)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-external-output-\(UUID().uuidString).md")
+        try Data("outside".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let escapingLink = root.appendingPathComponent("external-link.md")
+        try FileManager.default.createSymbolicLink(at: escapingLink, withDestinationURL: outside)
 
         let snapshot = SessionWorkspaceInspector.inspect(
             sessionId: "session-a",
             cwd: root.path,
-            candidateFilePaths: [output.path, root.appendingPathComponent("missing.md").path]
+            candidateFilePaths: [
+                output.path,
+                outside.path,
+                escapingLink.path,
+                root.appendingPathComponent("missing.md").path
+            ]
         )
 
         XCTAssertFalse(snapshot.isGit)
