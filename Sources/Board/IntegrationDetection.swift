@@ -53,14 +53,11 @@ enum IntegrationInstall: Equatable {
     case remoteHttp(url: String)
     /// Local stdio MCP server (npx package). Needs env credentials.
     case localStdio(command: String, args: [String], envKeys: [String])
-    /// Deliberately not supported by the installer (e.g. official package
-    /// archived). `reason` is surfaced in the UI.
-    case unsupported(reason: String)
 }
 
 extension IntegrationInstall: Encodable {
     private enum Keys: String, CodingKey {
-        case kind, url, command, args, envKeys, reason, marketplace, name
+        case kind, url, command, args, envKeys, marketplace, name
     }
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
@@ -77,9 +74,6 @@ extension IntegrationInstall: Encodable {
             try container.encode(command, forKey: .command)
             try container.encode(args, forKey: .args)
             try container.encode(envKeys, forKey: .envKeys)
-        case .unsupported(let reason):
-            try container.encode("unsupported", forKey: .kind)
-            try container.encode(reason, forKey: .reason)
         }
     }
 }
@@ -126,41 +120,15 @@ struct AgentIntegrationStatus: Encodable, Equatable {
 
 // MARK: - Catalog
 
-/// Catalog of integrations. Composed (in priority order) of:
-///   1. `builtin` — curated, hand-tuned descriptors (better mcpServerNames,
-///      remote-OAuth URLs, etc.)
-///   2. `MarketplaceCatalogLoader` — every plugin in
-///      `~/.claude/plugins/marketplaces/*/.claude-plugin/marketplace.json`
-/// Deduped by `id` (builtin wins). Future: MCP Registry as source #3.
+/// Curated catalog exposed by the Integrations page. Generic Marketplace and
+/// MCP Registry entries are intentionally excluded: meee2 only presents
+/// integrations with a maintained install/auth/browse contract.
 enum IntegrationCatalog {
-    /// Snapshot of the merged catalog. Computed each call — marketplace JSON
-    /// lives on local disk and scans aren't hot.
     static var all: [IntegrationDescriptor] {
-        // Best-effort: refresh the registry cache in the background if it's
-        // stale. The current call returns whatever is already on disk (none on
-        // first run); the next scan picks up the refreshed data.
-        MCPRegistryClient.refreshAsyncIfStale()
-
-        var seen = Set<String>()
-        var result: [IntegrationDescriptor] = []
-        for descriptor in builtin {
-            seen.insert(descriptor.id)
-            result.append(descriptor)
-        }
-        for descriptor in MarketplaceCatalogLoader.load() where !seen.contains(descriptor.id) {
-            seen.insert(descriptor.id)
-            result.append(descriptor)
-        }
-        for descriptor in MCPRegistryClient.loadFromCache() where !seen.contains(descriptor.id) {
-            seen.insert(descriptor.id)
-            result.append(descriptor)
-        }
-        return result
+        builtin
     }
 
-    /// Hand-curated descriptors for integrations with tuned install + signal
-    /// data. Other plugins discovered via the marketplace get generic
-    /// `.claudePlugin` install entries.
+    /// Hand-curated descriptors with tuned install, auth, and signal data.
     static let builtin: [IntegrationDescriptor] = [
         IntegrationDescriptor(
             id: "github", name: "GitHub", category: "dev",
@@ -194,41 +162,6 @@ enum IntegrationCatalog {
             credentialProbes: [],
             install: .remoteHttp(url: "https://mcp.notion.com/mcp"),
             setupHint: "One-click install: Notion's hosted MCP server with OAuth."
-        ),
-        IntegrationDescriptor(
-            id: "figma", name: "Figma", category: "design",
-            mcpServerNames: ["figma"],
-            // Remote OAuth — MCP-configured == connected.
-            credentialProbes: [],
-            install: .remoteHttp(url: "https://mcp.figma.com/mcp"),
-            setupHint: "One-click install: Figma's hosted MCP server with OAuth."
-        ),
-        IntegrationDescriptor(
-            id: "supabase", name: "Supabase", category: "data",
-            mcpServerNames: ["supabase"],
-            credentialProbes: [],
-            install: .claudePlugin(marketplace: "claude-plugins-official", name: "supabase"),
-            setupHint: "One-click install: Supabase plugin from Anthropic's official marketplace."
-        ),
-        IntegrationDescriptor(
-            id: "sentry", name: "Sentry", category: "dev",
-            mcpServerNames: ["sentry"],
-            // Remote OAuth — MCP-configured == connected.
-            credentialProbes: [],
-            install: .remoteHttp(url: "https://mcp.sentry.dev/mcp"),
-            setupHint: "One-click install: Sentry's hosted MCP server with OAuth."
-        ),
-        IntegrationDescriptor(
-            id: "postgres", name: "Postgres", category: "data",
-            mcpServerNames: ["postgres", "postgresql"],
-            credentialProbes: [
-                .init(kind: .env, value: "DATABASE_URL"),
-                .init(kind: .ccops, value: "DATABASE_URL")
-            ],
-            install: .unsupported(
-                reason: "Official @modelcontextprotocol/server-postgres is archived (known SQL-injection bypass). Needs a vetted replacement."
-            ),
-            setupHint: "Postgres MCP install is disabled — see install.reason."
         ),
         IntegrationDescriptor(
             id: "lark", name: "Lark", category: "comms",

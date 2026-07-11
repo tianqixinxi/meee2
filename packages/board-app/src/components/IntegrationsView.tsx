@@ -1,4 +1,3 @@
-import { KeyRound, ShieldCheck } from 'lucide-react'
 import { useI18n } from '../lib/i18n'
 import type { BoardState } from '../types'
 import { AgentIntegrationMatrix } from './AgentIntegrationMatrix'
@@ -25,24 +24,12 @@ export function IntegrationsView(props: Props) {
     <section className="integrations-view" aria-label={t('integrations.kicker')}>
       <header className="integrations-view__header">
         <div>
-          <span>{t('integrations.kicker')}</span>
           <h1>{t('integrations.title')}</h1>
-        </div>
-        <div className="integrations-view__summary">
-          <ShieldCheck size={14} aria-hidden />
-          {t('integrations.summary')}
+          <p>{t('integrations.pageSubtitle')}</p>
         </div>
       </header>
 
       <AgentIntegrationMatrix onJumpToCanvas={props.onJumpToCanvas} />
-
-      <section className="integrations-view__contract">
-        <div>
-          <KeyRound size={15} aria-hidden />
-          <strong>{t('integrations.boundaryTitle')}</strong>
-        </div>
-        <p>{t('integrations.boundaryText')}</p>
-      </section>
     </section>
   )
 }

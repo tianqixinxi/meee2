@@ -25,7 +25,7 @@ interface WorkspaceRailProps {
   detailRef?: (node: HTMLDivElement | null) => void
 }
 
-const EXPANDED_RAIL_WIDTH = 320
+const EXPANDED_RAIL_WIDTH = 288
 const COMPACT_RAIL_WIDTH = 72
 
 export function WorkspaceRail({

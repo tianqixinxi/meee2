@@ -81,7 +81,7 @@ describe('WorkspaceRail', () => {
     )
 
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).not.toHaveClass('workspace-rail--compact')
-    expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('320px')
+    expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('288px')
     expect(screen.getByTestId('workspace-rail-brand')).toHaveTextContent('Meee2')
     expect(screen.getByTestId('workspace-rail-brand').querySelector('.workspace-rail__brand-mark')).not.toBeInTheDocument()
   })

@@ -1892,7 +1892,6 @@ export type IntegrationInstall =
   | { kind: 'claudePlugin'; marketplace: string; name: string }
   | { kind: 'remoteHttp'; url: string }
   | { kind: 'localStdio'; command: string; args: string[]; envKeys: string[] }
-  | { kind: 'unsupported'; reason: string }
 
 /** One (agent, integration) cell of the detection matrix. */
 export interface AgentIntegrationStatus {

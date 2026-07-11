@@ -215,6 +215,50 @@ final class TerminalSessionBackendTests: XCTestCase {
         XCTAssertNil(dto.providerResumeSessionId)
     }
 
+    func testProviderResumeBackfillReadDoesNotPersistDuringDTOResolution() {
+        let sessionId = "dto-pure-read-\(UUID().uuidString)"
+        let providerResumeSessionId = UUID().uuidString.lowercased()
+        let now = Date()
+        let session = SessionData(
+            sessionId: sessionId,
+            project: "project-a",
+            cwd: "/tmp/project-a",
+            startedAt: now,
+            lastActivity: now,
+            status: .active,
+            currentTool: nil
+        )
+        let terminalInfo = SessionTerminalInfo(
+            sessionId: sessionId,
+            tty: nil,
+            termProgram: "meee2-internal",
+            termBundleId: "meee2-internal",
+            cwd: "/tmp/project-a",
+            lastActivityAt: now,
+            status: "running",
+            command: "codex",
+            provider: "codex",
+            providerResumeSessionId: providerResumeSessionId,
+            canvasId: nil,
+            nodeId: nil,
+            sessionScope: nil,
+            backend: TerminalSessionBackendKind.ghosttySurface.rawValue,
+            fallbackReason: nil,
+            cmuxSocketPath: nil,
+            cmuxSurfaceId: nil
+        )
+        SessionStore.shared.create(session)
+        defer { SessionStore.shared.delete(sessionId) }
+
+        let resolved = CodexProviderSessionBackfill.findProviderResumeSessionId(
+            sessionData: session,
+            terminalInfo: terminalInfo
+        )
+
+        XCTAssertEqual(resolved, providerResumeSessionId)
+        XCTAssertNil(SessionStore.shared.get(sessionId)?.providerResumeSessionId)
+    }
+
     func testNonJumpableExternalSessionKeepsResolvedLiveStatus() {
         let session = PluginSession(
             id: "sdk-session-a",

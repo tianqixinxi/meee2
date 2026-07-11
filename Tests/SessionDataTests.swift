@@ -14,7 +14,8 @@ final class SessionDataTests: XCTestCase {
             startedAt: Date(timeIntervalSince1970: 1713100000),
             lastActivity: Date(timeIntervalSince1970: 1713100100),
             status: .active,
-            currentTool: "Bash"
+            currentTool: "Bash",
+            generatedTitle: "梳理对话标题来源"
         )
 
         let encoder = JSONEncoder()
@@ -26,6 +27,7 @@ final class SessionDataTests: XCTestCase {
         XCTAssertEqual(decoded.pid, 5678)
         XCTAssertEqual(decoded.status, .active)
         XCTAssertEqual(decoded.currentTool, "Bash")
+        XCTAssertEqual(decoded.generatedTitle, "梳理对话标题来源")
     }
 
     func testProviderResumeSessionIdRoundTrip() throws {
@@ -222,5 +224,21 @@ final class SessionDataTests: XCTestCase {
         XCTAssertEqual(migrated.revision, 0)
         XCTAssertEqual(migrated.sessionId, "frozen-v2")
         XCTAssertEqual(migrated.providerResumeSessionId, "provider-v2")
+    }
+
+    func testFrozenV3FixtureMigratesWithoutInventingGeneratedTitle() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/SessionData/v3.json")
+        let decoded = try JSONDecoder().decode(SessionData.self, from: Data(contentsOf: fixture))
+        XCTAssertEqual(decoded.schemaVersion, 3)
+        XCTAssertEqual(decoded.revision, 7)
+        XCTAssertNil(decoded.generatedTitle)
+
+        let migrated = SessionDataMigrations.apply(to: decoded, from: decoded.schemaVersion)
+        XCTAssertEqual(migrated.schemaVersion, SessionData.currentSchemaVersion)
+        XCTAssertEqual(migrated.revision, 7)
+        XCTAssertEqual(migrated.currentTask, "研究对话标题来源")
+        XCTAssertNil(migrated.generatedTitle)
     }
 }

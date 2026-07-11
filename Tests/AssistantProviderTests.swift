@@ -185,6 +185,28 @@ final class AssistantProviderTests: XCTestCase {
         XCTAssertFalse(args.contains("--cd"))
     }
 
+    func testLocalCodexTitleRunIsEphemeral() {
+        let args = LocalCodexProvider().codexArguments(
+            workspacePath: "/tmp/meee2-title",
+            ephemeral: true
+        )
+        XCTAssertTrue(args.contains("--ephemeral"))
+        XCTAssertTrue(args.contains("read-only"))
+    }
+
+    func testLocalClaudeTitleRunDoesNotPersistSession() {
+        let args = LocalClaudeProvider().claudeArguments(
+            systemPrompt: "TITLE",
+            model: "haiku",
+            sessionId: "11111111-1111-1111-1111-111111111111",
+            sessionName: "session-title",
+            persistSession: false
+        )
+        XCTAssertTrue(args.contains("--no-session-persistence"))
+        XCTAssertTrue(args.contains("--model"))
+        XCTAssertTrue(args.contains("haiku"))
+    }
+
     func testLocalCodexPromptIncludesSystemAndConversation() {
         let provider = LocalCodexProvider()
         let prompt = provider.codexPrompt(

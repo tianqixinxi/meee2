@@ -8,22 +8,13 @@ import Foundation
 //  · Codex:       upserts `[mcp_servers.<id>]` in `~/.codex/config.toml` with
 //                 the `mcp-remote` stdio shim bridging to the same URL.
 //
-// Only handles `.remoteHttp` in this pass — `.localStdio` (token-based) and
-// `.unsupported` throw; the caller falls back to the runbook flow.
-
 enum IntegrationInstallError: Error, LocalizedError {
     case unknownIntegration(String)
-    case unsupported(reason: String)
-    case notImplementedYet(kind: String)
 
     var errorDescription: String? {
         switch self {
         case .unknownIntegration(let id):
             return "unknown integration: \(id)"
-        case .unsupported(let reason):
-            return reason
-        case .notImplementedYet(let kind):
-            return "install kind `\(kind)` not implemented yet — use the runbook flow."
         }
     }
 }
@@ -50,8 +41,6 @@ enum IntegrationInstaller {
             return installRemoteHttp(id: descriptor.id, name: descriptor.name, url: url)
         case .localStdio(let command, let args, let envKeys):
             return installLocalStdio(id: descriptor.id, name: descriptor.name, command: command, args: args, envKeys: envKeys)
-        case .unsupported(let reason):
-            throw IntegrationInstallError.unsupported(reason: reason)
         }
     }
 
@@ -432,7 +421,7 @@ enum IntegrationInstaller {
                 return url
             }
             return nil
-        case .localStdio, .unsupported:
+        case .localStdio:
             return nil
         }
     }

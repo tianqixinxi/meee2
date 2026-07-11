@@ -328,6 +328,7 @@ export function SessionLauncherView({
   const pointerSidebarResizeActiveRef = useRef(false)
   const stableSessionPlacementRef = useRef(new Map<string, 'current' | 'history'>())
   const sessionSwitchTraceRef = useRef<Record<string, { startedAt: number; traceId: string }>>({})
+  const observedSessionTargetsRef = useRef(new Set<string>())
   const sessions = state?.sessions ?? []
 
   const refreshProjects = useCallback(() => {
@@ -509,12 +510,9 @@ export function SessionLauncherView({
           ? { kind: 'session', sessionId: session.id, surfaceId: result.surface.surfaceId }
           : current)
         onSessionCreated?.()
-        const title = sessionDisplayTitle(session, titleOverrides)
-        if (result.action !== 'reuse') {
-          const toastKey = result.action === 'resume'
-            ? 'sessions.launcher.resumedSession'
-            : 'sessions.launcher.recreatedSession'
-          onToast?.('success', t(toastKey, { title }))
+        if (result.action === 'recreate') {
+          const title = sessionDisplayTitle(session, titleOverrides)
+          onToast?.('success', t('sessions.launcher.recreatedSession', { title }))
         }
       })
       .catch((err: Error) => {
@@ -602,8 +600,8 @@ export function SessionLauncherView({
 
   const selectedSession = useMemo(() => {
     if (selection?.kind !== 'session') return null
-    return selectedSessionForSelection(sessions, selection)
-  }, [selection, sessions])
+    return selectedSessionForSelection(launcherSessions, selection)
+  }, [launcherSessions, selection])
   const selectedLiveTarget = nativeTerminalTargetForSession(selectedSession)
   const selectedRestoredTarget = selection?.kind === 'session'
     ? restoredSessionTargets[selection.sessionId] ?? null
@@ -615,6 +613,33 @@ export function SessionLauncherView({
       return Boolean(selectedRestoredTarget.surfaceId && session.surfaceId === selectedRestoredTarget.surfaceId)
     }) ?? null
   }, [selectedRestoredTarget, sessions])
+
+  useLayoutEffect(() => {
+    for (const session of sessions) {
+      observedSessionTargetsRef.current.add(session.id)
+      if (session.surfaceId) observedSessionTargetsRef.current.add(session.surfaceId)
+    }
+  }, [sessions])
+
+  useLayoutEffect(() => {
+    if (state === null || projectsLoading || selection?.kind !== 'session' || selectedSession) return
+    const openSessionId = openTarget?.sessionId?.trim()
+    const openSurfaceId = openTarget?.surfaceId?.trim()
+    if ((openSessionId && selection.sessionId === openSessionId)
+      || (openSurfaceId && selection.surfaceId === openSurfaceId)) return
+    if (selectedRestoredTarget) {
+      const wasObserved = observedSessionTargetsRef.current.has(selectedRestoredTarget.sessionId)
+        || observedSessionTargetsRef.current.has(selectedRestoredTarget.surfaceId)
+      if (!wasObserved) return
+    }
+    const first = sortedProjects[0]
+    if (first) {
+      setSelection({ kind: 'project', projectId: first.id })
+      setExpandedProjectIds((current) => addToSet(current, first.id))
+      return
+    }
+    setSelection(null)
+  }, [openTarget, projectsLoading, selectedRestoredTarget, selectedSession, selection, sortedProjects, state])
 
   useEffect(() => {
     if (initialAutoResumeSettledRef.current || state === null || projectsLoading || !selection) return
@@ -1204,7 +1229,7 @@ export function SessionLauncherView({
           </aside>
         </OptionalPortal>
         <main className="session-launcher__main">
-        {selection?.kind === 'session' ? (
+        {selection?.kind === 'session' && (selectedSession || selectedRestoredTarget) ? (
           <SessionLauncherTerminal
             session={selectedSession}
             statusSession={selectedRestoredSession}

@@ -27,6 +27,26 @@ enum CodexProviderSessionBackfill {
         sessionData: SessionData?,
         terminalInfo: SessionTerminalInfo?
     ) -> String? {
+        guard let resolved = findProviderResumeSessionId(
+            sessionData: sessionData,
+            terminalInfo: terminalInfo
+        ) else {
+            return nil
+        }
+        let sessionId = sessionData?.sessionId ?? terminalInfo?.sessionId ?? ""
+        SessionTerminalStore.shared.setProviderResumeSessionId(
+            sessionId: sessionId,
+            providerResumeSessionId: resolved
+        )
+        return resolved
+    }
+
+    /// Resolves a provider resume id without mutating either session store.
+    /// DTO construction uses this path so `/api/state` remains a pure read.
+    static func findProviderResumeSessionId(
+        sessionData: SessionData?,
+        terminalInfo: SessionTerminalInfo?
+    ) -> String? {
         let sessionId = sessionData?.sessionId ?? terminalInfo?.sessionId ?? ""
         guard !sessionId.isEmpty else { return nil }
 
@@ -43,9 +63,6 @@ enum CodexProviderSessionBackfill {
         cacheLock.unlock()
 
         let resolved = inferProviderResumeSessionId(sessionData: sessionData, terminalInfo: terminalInfo)
-        if let resolved {
-            SessionTerminalStore.shared.setProviderResumeSessionId(sessionId: sessionId, providerResumeSessionId: resolved)
-        }
         cacheLock.lock()
         cachedBySessionId[sessionId] = resolved.map(ResumeIdCacheEntry.hit) ?? .miss
         cacheLock.unlock()

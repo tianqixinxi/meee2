@@ -5962,6 +5962,12 @@ enum BoardAPI {
             }
             WebBoardThemeProfile.store(profile, defaults: defaults)
         }
+        if json.keys.contains("terminalProfile") {
+            guard let profile = WebBoardTerminalProfile.parse(json["terminalProfile"]) else {
+                return errorResponse("invalid_terminal_profile", "terminalProfile must be a supported v1 terminal profile", status: 400)
+            }
+            WebBoardTerminalProfile.store(profile, defaults: defaults)
+        }
         if let locale = json["locale"] as? String, ["en", "zh-CN"].contains(locale) {
             defaults.set(locale, forKey: "meee2.locale")
         }
@@ -6183,6 +6189,7 @@ enum BoardAPI {
         return AppSettingsDTO(
             theme: validTheme(defaults.string(forKey: "meee2.theme")),
             themeProfile: WebBoardThemeProfile.storedProfile(defaults: defaults),
+            terminalProfile: WebBoardTerminalProfile.storedProfile(defaults: defaults),
             locale: validLocale(defaults.string(forKey: "meee2.locale")),
             devMode: appDevMode(),
             showIsland: defaults.object(forKey: "showIsland") as? Bool ?? true,

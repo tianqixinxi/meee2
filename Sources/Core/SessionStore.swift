@@ -28,7 +28,7 @@ public struct SessionData: Codable, Identifiable {
 
     /// 当前磁盘格式版本。新增迁移时 +1，永不回退。
     /// 早于 schemaVersion 引入的旧文件解码为 0，由 SessionStore 加载时自动迁移。
-    public static let currentSchemaVersion: Int = 3
+    public static let currentSchemaVersion: Int = 4
 
     /// 本条记录对应的 schema 版本。新建记录默认为 currentSchemaVersion；
     /// 磁盘上的旧文件会带着解码出的版本号进入内存，迁移完成后覆写。
@@ -65,6 +65,7 @@ public struct SessionData: Codable, Identifiable {
     public var status: SessionStatus
     public var currentTool: String?         // 当前工具名称
     public var description: String?         // 用户备注
+    public var generatedTitle: String?      // 首条用户消息异步生成的稳定语义标题
 
     // MARK: - 任务追踪
 
@@ -109,6 +110,7 @@ public struct SessionData: Codable, Identifiable {
         status: SessionStatus = .idle,
         currentTool: String? = nil,
         description: String? = nil,
+        generatedTitle: String? = nil,
         tasks: [SessionTask] = [],
         currentTask: String? = nil,
         terminalInfo: PluginTerminalInfo? = nil,
@@ -129,6 +131,7 @@ public struct SessionData: Codable, Identifiable {
         self.status = status
         self.currentTool = currentTool
         self.description = description
+        self.generatedTitle = generatedTitle
         self.tasks = tasks
         self.currentTask = currentTask
         self.terminalInfo = terminalInfo
@@ -156,6 +159,7 @@ public struct SessionData: Codable, Identifiable {
         case detailedStatus = "detailed_status"  // 旧字段，读取时兼容
         case currentTool = "current_tool"
         case description
+        case generatedTitle = "generated_title"
         case tasks
         case currentTask = "current_task"
         case terminalInfo = "terminal_info"
@@ -201,6 +205,7 @@ public struct SessionData: Codable, Identifiable {
 
         currentTool = try container.decodeIfPresent(String.self, forKey: .currentTool)
         description = try container.decodeIfPresent(String.self, forKey: .description)
+        generatedTitle = try container.decodeIfPresent(String.self, forKey: .generatedTitle)
         tasks = try container.decodeIfPresent([SessionTask].self, forKey: .tasks) ?? []
         currentTask = try container.decodeIfPresent(String.self, forKey: .currentTask)
         terminalInfo = try container.decodeIfPresent(PluginTerminalInfo.self, forKey: .terminalInfo)
@@ -232,6 +237,7 @@ public struct SessionData: Codable, Identifiable {
         try container.encode(status.rawValue, forKey: .status)
         try container.encodeIfPresent(currentTool, forKey: .currentTool)
         try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(generatedTitle, forKey: .generatedTitle)
         try container.encode(tasks, forKey: .tasks)
         try container.encodeIfPresent(currentTask, forKey: .currentTask)
         try container.encodeIfPresent(terminalInfo, forKey: .terminalInfo)
@@ -259,6 +265,7 @@ public struct SessionData: Codable, Identifiable {
             status: status,
             currentTool: currentTool,
             description: description,
+            generatedTitle: generatedTitle,
             tasks: tasks,
             currentTask: currentTask,
             terminalInfo: terminalInfo,
@@ -512,6 +519,9 @@ public class SessionStore: ObservableObject {
             if merged.description == nil {
                 merged.description = ex.description
             }
+            if merged.generatedTitle == nil {
+                merged.generatedTitle = ex.generatedTitle
+            }
             // terminalInfo：若 incoming 完全没有 tty/termProgram/cmuxSocket 就沿用旧的
             let ti = merged.terminalInfo
             let incomingEmpty = ti == nil ||
@@ -754,6 +764,7 @@ public class SessionStore: ObservableObject {
         if (merged.transcriptPath ?? "").isEmpty { merged.transcriptPath = old.transcriptPath }
         if (merged.providerResumeSessionId ?? "").isEmpty { merged.providerResumeSessionId = old.providerResumeSessionId }
         if merged.description == nil { merged.description = old.description }
+        if merged.generatedTitle == nil { merged.generatedTitle = old.generatedTitle }
         if merged.tasks.isEmpty { merged.tasks = old.tasks }
         if merged.currentTask == nil { merged.currentTask = old.currentTask }
         if merged.terminalInfo == nil { merged.terminalInfo = old.terminalInfo }
@@ -873,6 +884,7 @@ public class SessionStore: ObservableObject {
         if candidate.status != baseline.status { rebased.status = candidate.status }
         if candidate.currentTool != baseline.currentTool { rebased.currentTool = candidate.currentTool }
         if candidate.description != baseline.description { rebased.description = candidate.description }
+        if candidate.generatedTitle != baseline.generatedTitle { rebased.generatedTitle = candidate.generatedTitle }
         if candidate.tasks != baseline.tasks { rebased.tasks = candidate.tasks }
         if candidate.currentTask != baseline.currentTask { rebased.currentTask = candidate.currentTask }
         if candidate.terminalInfo != baseline.terminalInfo { rebased.terminalInfo = candidate.terminalInfo }
@@ -906,6 +918,7 @@ public class SessionStore: ObservableObject {
         if old.status != new.status { return true }
         if old.currentTool != new.currentTool { return true }
         if old.description != new.description { return true }
+        if old.generatedTitle != new.generatedTitle { return true }
         if old.tasks != new.tasks { return true }
         if old.currentTask != new.currentTask { return true }
         if old.terminalInfo != new.terminalInfo { return true }
@@ -967,6 +980,10 @@ enum SessionDataMigrations {
         case 2:
             // v2 → v3：新增跨进程 revision CAS。旧记录从 revision 0 开始，
             // 首次迁移持久化后由 SessionRepository 提升到 revision 1。
+            return s
+        case 3:
+            // v3 → v4：新增 generated_title。旧记录保持 nil；只为新启动且
+            // 带首条用户 prompt 的 session 异步生成。
             return s
         default:
             return s
