@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
-import { SessionArtifactsModal, type SessionArtifactsModalTarget } from './SessionArtifactsModal'
+import {
+  invalidateSessionArtifactsCache,
+  SessionArtifactsModal,
+  type SessionArtifactsModalTarget,
+} from './SessionArtifactsModal'
 
 const apiMocks = vi.hoisted(() => ({
   discardArtifactCandidate: vi.fn(),
@@ -36,6 +40,7 @@ function renderWithI18n(ui: React.ReactElement) {
 
 describe('SessionArtifactsModal', () => {
   beforeEach(() => {
+    invalidateSessionArtifactsCache()
     apiMocks.fetchSessionArtifacts.mockResolvedValue({
       candidates: [],
       artifacts: [],
@@ -88,6 +93,18 @@ describe('SessionArtifactsModal', () => {
     expect(onOpenDetails).toHaveBeenCalledWith(target)
   })
 
+  it('reuses a fresh artifact response when the panel is reopened', async () => {
+    const first = renderWithI18n(<SessionArtifactsModal target={target} onClose={() => {}} />)
+    await screen.findByText('No artifacts match this view.')
+    expect(apiMocks.fetchSessionArtifacts).toHaveBeenCalledTimes(1)
+    first.unmount()
+
+    renderWithI18n(<SessionArtifactsModal target={target} onClose={() => {}} />)
+    expect(screen.getByText('No artifacts match this view.')).toBeInTheDocument()
+    expect(screen.queryByText('Gathering artifacts from visible canvases')).not.toBeInTheDocument()
+    expect(apiMocks.fetchSessionArtifacts).toHaveBeenCalledTimes(1)
+  })
+
   it('promotes a candidate into a formal artifact and removes it from candidates', async () => {
     apiMocks.fetchSessionArtifacts
       .mockResolvedValueOnce({
@@ -120,6 +137,7 @@ describe('SessionArtifactsModal', () => {
     await waitFor(() => expect(apiMocks.promoteArtifactCandidate).toHaveBeenCalledWith('candidate-1'))
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Promote' })).not.toBeInTheDocument())
     expect(await screen.findByRole('heading', { name: 'Formal Artifacts' })).toBeInTheDocument()
+    expect(apiMocks.fetchSessionArtifacts).toHaveBeenCalledTimes(1)
   })
 
   it('promotes a candidate without a canvas node target', async () => {
@@ -187,6 +205,7 @@ describe('SessionArtifactsModal', () => {
 
     await waitFor(() => expect(apiMocks.discardArtifactCandidate).toHaveBeenCalledWith('candidate-2'))
     await waitFor(() => expect(screen.queryByText('Scratch output')).not.toBeInTheDocument())
+    expect(apiMocks.fetchSessionArtifacts).toHaveBeenCalledTimes(1)
     expect(changed).toHaveBeenCalledTimes(1)
     window.removeEventListener('meee2:session-artifacts-changed', changed)
   })

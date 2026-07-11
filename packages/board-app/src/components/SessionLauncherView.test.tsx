@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   createProjectSession: vi.fn(),
   createSessionProject: vi.fn(),
   createTemporarySession: vi.fn(),
-  fetchSessionArtifacts: vi.fn(),
+  fetchSessionEnvironment: vi.fn(),
   forgetSessionProject: vi.fn(),
   pickSessionLaunchAttachments: vi.fn(),
   pickSessionProjectDirectory: vi.fn(),
@@ -103,12 +103,16 @@ describe('SessionLauncherView', () => {
     storeProjectSelection()
     api.fetchSessionProjects.mockResolvedValue({ projects: [project] })
     api.activateSession.mockResolvedValue(true)
-    api.fetchSessionArtifacts.mockResolvedValue({
+    api.fetchSessionEnvironment.mockResolvedValue({
       sessionId: 'session-a',
-      candidates: [],
-      artifacts: [],
-      totalCount: 0,
-      attachTargets: [],
+      cwd: '/Users/kai/Code/meee2-workspace',
+      isGit: true,
+      changes: { files: 2, additions: 14, deletions: 3 },
+      branch: 'codex/session-environment',
+      outputs: [{
+        path: '/Users/kai/Code/meee2-workspace/output/result.md',
+        relativePath: 'output/result.md',
+      }],
     })
     api.renameSessionProject.mockResolvedValue(project)
     api.reopenLauncherSession.mockResolvedValue({
@@ -230,7 +234,7 @@ describe('SessionLauncherView', () => {
     expect(screen.queryByText('我们应该在meee2-workspace中做些什么？')).not.toBeInTheDocument()
   })
 
-  it('keeps a stored stale selection passive until the user explicitly resumes it', async () => {
+  it('automatically resumes a stored stale selection on first entry', async () => {
     localStorage.setItem(lastSelectionKey, JSON.stringify({
       kind: 'session',
       sessionId: 'stale-session',
@@ -250,10 +254,6 @@ describe('SessionLauncherView', () => {
     })
 
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
-
-    expect(await screen.findByRole('button', { name: '恢复会话' })).toBeInTheDocument()
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: '恢复会话' }))
 
     await waitFor(() => {
       expect(api.reopenLauncherSession).toHaveBeenCalledWith({
@@ -278,6 +278,41 @@ describe('SessionLauncherView', () => {
     })
   })
 
+  it('retries a failed automatic resume when the selected session row is clicked', async () => {
+    api.reopenLauncherSession.mockRejectedValueOnce(new Error('resume failed'))
+    localStorage.setItem(lastSelectionKey, JSON.stringify({
+      kind: 'session',
+      sessionId: 'stale-session',
+    }))
+    const staleSession = makeSession({
+      id: 'stale-session',
+      title: 'Codex',
+      recentMessages: [{ role: 'user', text: '继续 Terminal tab 中的 Session' }],
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
+
+    await waitFor(() => expect(api.reopenLauncherSession).toHaveBeenCalledTimes(1))
+    await expandHistory()
+    fireEvent.click(await screen.findByRole('button', { name: /^继续 Terminal tab 中的 Session/ }))
+
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenLastCalledWith({
+        sessionId: 'stale-session',
+        providerResumeSessionId,
+        provider: 'codex',
+        permissionMode: 'onRequest',
+        cwd: '/Users/kai/Code/meee2-workspace',
+      })
+    })
+    expect(api.reopenLauncherSession).toHaveBeenCalledTimes(2)
+  })
+
   it('uses an explicitly remembered workspace permission when resuming', async () => {
     localStorage.setItem('meee2.sessionLauncher.permissionModes.v1', JSON.stringify({
       [project.id]: 'fullAccess',
@@ -294,9 +329,6 @@ describe('SessionLauncherView', () => {
       surfaceStatus: 'exited',
     })
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
-
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '恢复会话' }))
 
     await waitFor(() => {
       expect(api.reopenLauncherSession).toHaveBeenCalledWith(expect.objectContaining({
@@ -402,6 +434,8 @@ describe('SessionLauncherView', () => {
     expect(sessionButton).toHaveAttribute('title', expect.stringContaining('新增 Session 原生 Terminal'))
     expect(sessionButton).toHaveAttribute('title', expect.stringContaining('/Users/kai/Code/meee2-workspace'))
     expect(sessionButton).toHaveAttribute('title', expect.stringContaining('Codex'))
+    const clickStartedAtMs = 1_783_758_400_123
+    const now = vi.spyOn(Date, 'now').mockReturnValue(clickStartedAtMs)
     fireEvent.click(sessionButton)
 
     await waitFor(() => {
@@ -410,8 +444,11 @@ describe('SessionLauncherView', () => {
         mode: 'terminal',
         sessionId: 'session-a',
         surfaceId: 'surface-a',
+        clickStartedAtMs,
+        traceId: `launcher-session--${clickStartedAtMs.toString(36)}`,
       }))
     })
+    now.mockRestore()
     expect(api.reopenLauncherSession).not.toHaveBeenCalled()
   })
 
@@ -543,6 +580,8 @@ describe('SessionLauncherView', () => {
     await screen.findByRole('button', { name: 'alpha' })
     fireEvent.click(screen.getByRole('button', { name: '展开 alpha' }))
     fireEvent.click(await screen.findByRole('button', { name: '较早创建' }))
+    await waitFor(() => expect(api.fetchSessionEnvironment).toHaveBeenCalledWith('older-session'))
+    await screen.findByText('codex/session-environment')
     const sidebarOrder = () => Array.from(
       view.container.querySelectorAll('.session-launcher__project-row strong, .session-launcher__session-row strong'),
     ).map((node) => node.textContent)
@@ -563,6 +602,7 @@ describe('SessionLauncherView', () => {
   })
 
   it('keeps recovery choices focused until troubleshooting is requested', async () => {
+    api.reopenLauncherSession.mockRejectedValueOnce(new Error('resume failed'))
     localStorage.setItem(lastSelectionKey, JSON.stringify({
       kind: 'session',
       sessionId: 'stale-session',
@@ -577,6 +617,7 @@ describe('SessionLauncherView', () => {
 
     renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
 
+    await waitFor(() => expect(api.reopenLauncherSession).toHaveBeenCalledTimes(1))
     expect(await screen.findByRole('button', { name: '恢复会话' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '打开外部终端' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '排查问题' })).toBeInTheDocument()
@@ -1242,7 +1283,7 @@ describe('SessionLauncherView', () => {
     )
   })
 
-  it('labels reused restored terminals as switches instead of new terminal starts', async () => {
+  it('does not show a notification when reusing an already restored terminal', async () => {
     const onToast = vi.fn()
     api.reopenLauncherSession.mockResolvedValueOnce({
       ok: true,
@@ -1277,13 +1318,8 @@ describe('SessionLauncherView', () => {
     await expandHistory()
     fireEvent.click(await screen.findByRole('button', { name: /^已经恢复过的 Session(?: ·|$)/ }))
 
-    await waitFor(() => {
-      expect(onToast).toHaveBeenCalledWith('success', '已切换到 已经恢复过的 Session')
-    })
-    expect(onToast).not.toHaveBeenCalledWith(
-      'success',
-      expect.stringContaining('启动新 terminal'),
-    )
+    await waitFor(() => expect(api.reopenLauncherSession).toHaveBeenCalledTimes(1))
+    expect(onToast).not.toHaveBeenCalled()
   })
 
   it('does not include the Codex /plan slash command in session titles', async () => {
@@ -1390,6 +1426,7 @@ describe('SessionLauncherView', () => {
     await screen.findByText('修复 Session 标题')
     expect(screen.queryByText(/Node node-mpwdr7mh/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '修复 Session 标题' }))
+    await screen.findByText('codex/session-environment')
 
     const terminalHeader = container.querySelector('.session-launcher-terminal__header strong')
     expect(terminalHeader).toHaveTextContent('修复 Session 标题')
@@ -1459,7 +1496,7 @@ describe('SessionLauncherView', () => {
     expect(menu.parentElement).toBe(document.body)
     expect(menu).toHaveStyle({ left: '321px', top: '222px' })
     expect(within(menu).getByRole('menuitem', { name: '归档会话' })).toBeInTheDocument()
-    expect(within(menu).getByRole('menuitem', { name: '查看产物' })).toBeInTheDocument()
+    expect(within(menu).queryByRole('menuitem', { name: '查看产物' })).not.toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: '置顶' })).toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: '重命名' })).toBeInTheDocument()
 
@@ -1472,40 +1509,25 @@ describe('SessionLauncherView', () => {
     expect(localStorage.getItem('meee2.session.titleOverrides.v1')).toContain('Session 标题修复')
   })
 
-  it('switches to the artifact tab from the context menu', async () => {
-    const session = makeSession()
-    const onOpenSessionArtifacts = vi.fn()
-    renderWithI18n(<SessionLauncherView state={makeState([session])} onOpenSessionArtifacts={onOpenSessionArtifacts} />)
-
-    await screen.findByText('我们应该在meee2-workspace中做些什么？')
-    const sessionButton = await screen.findByRole('button', { name: '新增 Session 原生 Terminal' })
-    fireEvent.keyDown(sessionButton, { key: 'F10', shiftKey: true })
-
-    const menu = await screen.findByRole('menu', { name: '新增 Session 原生 Terminal 的会话操作' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: '查看产物' }))
-
-    const artifactTab = await screen.findByRole('tab', { name: 'Artifact' })
-    expect(artifactTab).toHaveAttribute('aria-selected', 'true')
-    expect(await screen.findByRole('heading', { name: '产物' })).toBeInTheDocument()
-    expect(api.reopenLauncherSession).not.toHaveBeenCalled()
-    expect(onOpenSessionArtifacts).not.toHaveBeenCalled()
-  })
-
-  it('renders artifacts inline without a details button in the artifact tab', async () => {
+  it('shows changes, branch, and output files alongside the terminal', async () => {
     const session = makeSession({
       currentTask: '修复 Session 标题',
       recentMessages: [],
     })
-    const onOpenSessionArtifacts = vi.fn()
-    renderWithI18n(<SessionLauncherView state={makeState([session])} onOpenSessionArtifacts={onOpenSessionArtifacts} />)
+    renderWithI18n(<SessionLauncherView state={makeState([session])} />)
 
     await screen.findByText('修复 Session 标题')
     fireEvent.click(screen.getByRole('button', { name: '修复 Session 标题' }))
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Artifact' }))
-    expect(await screen.findByRole('heading', { name: '产物' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '查看详情页' })).not.toBeInTheDocument()
-    expect(onOpenSessionArtifacts).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Terminal')).toBeInTheDocument()
+    const dock = await screen.findByRole('complementary', { name: '环境信息' })
+    await waitFor(() => expect(api.fetchSessionEnvironment).toHaveBeenCalledWith('session-a'))
+    expect(within(dock).getByText('2 个文件')).toBeInTheDocument()
+    expect(within(dock).getByText('+14')).toBeInTheDocument()
+    expect(within(dock).getByText('-3')).toBeInTheDocument()
+    expect(within(dock).getByText('codex/session-environment')).toBeInTheDocument()
+    expect(within(dock).getByText('output/result.md')).toBeInTheDocument()
+    expect(api.syncNativeSessionsWorkspace).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'obscure' }))
   })
 
   it('pins and archives from the session context menu', async () => {

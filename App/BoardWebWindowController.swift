@@ -986,8 +986,14 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let duration = startedAt.map { Self.formatMillis(now - $0) } ?? "-"
         let webPhase = payload["webPhase"] as? String ?? "-"
         let suffix = extra.isEmpty ? "" : " \(extra)"
-        NSLog(
-            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
+        let measuresClickLatency = phase == "native.workspace.message.done" || phase == "native.embed.done"
+        let isSlow = (measuresClickLatency && clickStartedAt.map { now - $0 >= 100 } == true)
+            || startedAt.map { now - $0 >= 100 } == true
+        let isMilestone = phase == "native.workspace.message.done" || phase == "native.embed.done"
+        let level: LogLevel = isSlow ? .warning : (isMilestone ? .info : .debug)
+        MLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)",
+            level: level
         )
     }
 

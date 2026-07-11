@@ -702,6 +702,8 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.POST["/api/sessions/:id/control"] = BoardServer.cors(BoardAPI.updateSessionControl)
         server.POST["/api/sessions/:id/permission"] = BoardServer.cors(BoardAPI.respondToSessionPermission)
+        server.GET["/api/sessions/:id/environment"] = BoardServer.cors(BoardAPI.getSessionEnvironment)
+        server.POST["/api/sessions/:id/environment/open"] = BoardServer.cors(BoardAPI.openSessionEnvironmentOutput)
         server.GET["/api/sessions/:id/artifacts"] = BoardServer.cors(BoardAPI.getSessionArtifacts)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
         server.GET["/api/artifacts"] = BoardServer.cors(BoardAPI.listArtifacts)

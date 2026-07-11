@@ -547,8 +547,14 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         let duration = startedAt.map { String(format: "%.1f", now - $0) } ?? "-"
         let webPhase = payload["webPhase"] as? String ?? "-"
         let suffix = extra.isEmpty ? "" : " \(extra)"
-        NSLog(
-            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
+        let measuresClickLatency = phase == "native.workspace.activate.done"
+        let isSlow = (measuresClickLatency && clickStartedAt.map { now - $0 >= 100 } == true)
+            || startedAt.map { now - $0 >= 100 } == true
+        let isMilestone = phase == "native.workspace.activate.done"
+        let level: LogLevel = isSlow ? .warning : (isMilestone ? .info : .debug)
+        MLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)",
+            level: level
         )
     }
 
@@ -895,8 +901,14 @@ private final class TerminalPaneRegistry {
         let duration = startedAt.map { String(format: "%.1f", now - $0) } ?? "-"
         let webPhase = payload["webPhase"] as? String ?? "-"
         let suffix = extra.isEmpty ? "" : " \(extra)"
-        NSLog(
-            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
+        let measuresClickLatency = phase == "native.workspace.focus.done"
+        let isSlow = (measuresClickLatency && clickStartedAt.map { now - $0 >= 100 } == true)
+            || startedAt.map { now - $0 >= 100 } == true
+        let isMilestone = phase == "native.workspace.focus.done"
+        let level: LogLevel = isSlow ? .warning : (isMilestone ? .info : .debug)
+        MLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)",
+            level: level
         )
     }
 }

@@ -1012,6 +1012,22 @@ export interface SessionArtifactsEnvelope {
   attachTargets: SessionArtifactAttachTarget[]
 }
 
+export interface SessionEnvironmentSnapshot {
+  sessionId: string
+  cwd: string
+  isGit: boolean
+  changes?: {
+    files: number
+    additions: number
+    deletions: number
+  } | null
+  branch?: string | null
+  outputs: Array<{
+    path: string
+    relativePath: string
+  }>
+}
+
 export interface ArtifactCandidateListEnvelope {
   candidates: SessionArtifactCandidate[]
 }

@@ -37,25 +37,82 @@ interface SessionArtifactsPanelProps {
   className?: string
 }
 
+const SESSION_ARTIFACTS_CACHE_TTL_MS = 5_000
+const SESSION_ARTIFACTS_CACHE_LIMIT = 24
+
+type SessionArtifactsCacheEntry = {
+  data: SessionArtifactsEnvelope
+  fetchedAt: number
+}
+
+const sessionArtifactsCache = new Map<string, SessionArtifactsCacheEntry>()
+const sessionArtifactsRequests = new Map<string, Promise<SessionArtifactsEnvelope>>()
+
+function cacheSessionArtifactsData(sessionId: string, data: SessionArtifactsEnvelope): SessionArtifactsEnvelope {
+  sessionArtifactsCache.delete(sessionId)
+  sessionArtifactsCache.set(sessionId, { data, fetchedAt: Date.now() })
+  while (sessionArtifactsCache.size > SESSION_ARTIFACTS_CACHE_LIMIT) {
+    const oldestSessionId = sessionArtifactsCache.keys().next().value
+    if (!oldestSessionId) break
+    sessionArtifactsCache.delete(oldestSessionId)
+  }
+  return data
+}
+
+function requestSessionArtifacts(sessionId: string): Promise<SessionArtifactsEnvelope> {
+  const cached = sessionArtifactsCache.get(sessionId)
+  if (cached && Date.now() - cached.fetchedAt < SESSION_ARTIFACTS_CACHE_TTL_MS) {
+    return Promise.resolve(cached.data)
+  }
+  const pending = sessionArtifactsRequests.get(sessionId)
+  if (pending) return pending
+
+  const request = fetchSessionArtifacts(sessionId)
+    .then((data) => {
+      return cacheSessionArtifactsData(sessionId, data)
+    })
+    .finally(() => sessionArtifactsRequests.delete(sessionId))
+  sessionArtifactsRequests.set(sessionId, request)
+  return request
+}
+
+export function prefetchSessionArtifacts(sessionId: string): void {
+  void requestSessionArtifacts(sessionId).catch(() => undefined)
+}
+
+export function invalidateSessionArtifactsCache(sessionId?: string): void {
+  if (sessionId) sessionArtifactsCache.delete(sessionId)
+  else sessionArtifactsCache.clear()
+}
+
 export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, className }: SessionArtifactsPanelProps) {
   const { t } = useI18n()
-  const [data, setData] = useState<SessionArtifactsEnvelope | null>(null)
-  const [loading, setLoading] = useState(true)
+  const initialData = sessionArtifactsCache.get(target.sessionId)?.data ?? null
+  const [data, setData] = useState<SessionArtifactsEnvelope | null>(initialData)
+  const [loading, setLoading] = useState(initialData === null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  const load = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    fetchSessionArtifacts(target.sessionId)
-      .then((next) => setData(next))
-      .catch((err) => setError((err as Error).message || t('artifacts.loadFailed')))
-      .finally(() => setLoading(false))
-  }, [target.sessionId, t])
-
   useEffect(() => {
-    load()
-  }, [load])
+    let cancelled = false
+    const cached = sessionArtifactsCache.get(target.sessionId)?.data ?? null
+    setData(cached)
+    setLoading(cached === null)
+    setError(null)
+    requestSessionArtifacts(target.sessionId)
+      .then((next) => {
+        if (!cancelled) setData(next)
+      })
+      .catch((err) => {
+        if (!cancelled) setError((err as Error).message || t('artifacts.loadFailed'))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [target.sessionId, t])
 
   const handlePromote = useCallback((candidate: SessionArtifactCandidate) => {
     if (busyId) return
@@ -68,23 +125,22 @@ export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, classN
           const artifacts = result.artifact
             ? [result.artifact, ...current.artifacts.filter((item) => item.id !== result.artifact?.id)]
             : current.artifacts
-          return {
+          return cacheSessionArtifactsData(target.sessionId, {
             ...current,
             candidates,
             artifacts,
             totalCount: candidates.length + artifacts.length,
             attachTargets: result.attachTargets.length > 0 ? result.attachTargets : current.attachTargets,
-          }
+          })
         })
         window.dispatchEvent(new CustomEvent('meee2:session-artifacts-changed', {
           detail: { sessionId: target.sessionId, candidateId: candidate.id, action: 'promote' },
         }))
         onChanged?.()
-        load()
       })
       .catch((err) => setError((err as Error).message || t('artifacts.promoteFailed')))
       .finally(() => setBusyId(null))
-  }, [busyId, load, onChanged, t, target.sessionId])
+  }, [busyId, onChanged, t, target.sessionId])
 
   const handleDiscard = useCallback((candidate: SessionArtifactCandidate) => {
     if (busyId) return
@@ -94,21 +150,20 @@ export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, classN
         setData((current) => {
           if (!current) return current
           const candidates = current.candidates.filter((item) => item.id !== candidate.id)
-          return {
+          return cacheSessionArtifactsData(target.sessionId, {
             ...current,
             candidates,
             totalCount: candidates.length + current.artifacts.length,
-          }
+          })
         })
         window.dispatchEvent(new CustomEvent('meee2:session-artifacts-changed', {
           detail: { sessionId: target.sessionId, candidateId: candidate.id, action: 'discard' },
         }))
         onChanged?.()
-        load()
       })
       .catch((err) => setError((err as Error).message || t('artifacts.discardFailed')))
       .finally(() => setBusyId(null))
-  }, [busyId, load, onChanged, t, target.sessionId])
+  }, [busyId, onChanged, t, target.sessionId])
 
   return (
     <div className={['session-artifacts-panel', className].filter(Boolean).join(' ')}>
@@ -249,11 +304,24 @@ function CandidateRow({
         <ReferenceList references={candidate.references} />
       </div>
       <div className="session-artifact-row__actions">
-        <button type="button" onClick={onPromote} disabled={busy}>
+        <button
+          type="button"
+          aria-label={t('artifacts.promote')}
+          title={t('artifacts.promote')}
+          onClick={onPromote}
+          disabled={busy}
+        >
           {busy ? <Loader2 size={14} className="spin" aria-hidden /> : <CheckCircle2 size={14} aria-hidden />}
           <span>{t('artifacts.promote')}</span>
         </button>
-        <button type="button" className="danger" onClick={onDiscard} disabled={busy}>
+        <button
+          type="button"
+          className="danger"
+          aria-label={t('artifacts.discard')}
+          title={t('artifacts.discard')}
+          onClick={onDiscard}
+          disabled={busy}
+        >
           <Trash2 size={14} aria-hidden />
           <span>{t('artifacts.discard')}</span>
         </button>
@@ -278,7 +346,12 @@ function AttachedArtifactRow({ artifact }: { artifact: PlannerArtifact }) {
         <p>{artifact.reference}</p>
       </div>
       <div className="session-artifact-row__actions">
-        <button type="button" onClick={() => openReference(artifact.reference)}>
+        <button
+          type="button"
+          aria-label={t('artifacts.open')}
+          title={t('artifacts.open')}
+          onClick={() => openReference(artifact.reference)}
+        >
           <FileText size={14} aria-hidden />
           <span>{t('artifacts.open')}</span>
         </button>
