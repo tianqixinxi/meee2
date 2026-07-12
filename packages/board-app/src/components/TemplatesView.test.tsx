@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
 import { I18nProvider } from '../lib/i18n'
@@ -28,14 +28,9 @@ vi.mock('./planner/PlannerGraph', () => ({
 
 function renderView(overrides: Partial<ComponentProps<typeof TemplatesView>> = {}) {
   const props: ComponentProps<typeof TemplatesView> = {
-    canvases: [],
-    activeCanvasId: 'canvas-1',
     userProfile: null,
-    boardState: null,
-    onOpenCanvas: vi.fn(),
     onApplyTemplate: vi.fn(),
     onCreateTemplateDraft: vi.fn().mockResolvedValue('draft-canvas'),
-    onReplaceTemplate: vi.fn().mockResolvedValue('template-canvas'),
     onUpdateTemplateMetadata: vi.fn().mockResolvedValue('template-canvas'),
     onImportClaudeWorkflow: vi.fn().mockResolvedValue('imported-canvas'),
     onUploadClaudeWorkflow: vi.fn().mockResolvedValue('uploaded-canvas'),
@@ -61,12 +56,14 @@ describe('TemplatesView Claude Code workflow imports', () => {
     })
   })
 
-  it('renders empty global workflow state with scan root', async () => {
+  it('keeps workflow browsing behind the import dialog', async () => {
     renderView()
 
-    expect(await screen.findByText('Claude Code workflows')).toBeInTheDocument()
-    expect(screen.getByText('/Users/kai/.claude/workflows')).toBeInTheDocument()
-    expect(screen.getByText(/No global/)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Templates' })).toBeInTheDocument()
+    expect(screen.queryByText('/Users/kai/.claude/workflows')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+    expect(screen.getByRole('dialog', { name: 'Import workflow' })).toBeInTheDocument()
+    expect(await screen.findByText(/No workflows found/)).toBeInTheDocument()
   })
 
   it('opens import modal and calls import callback', async () => {
@@ -96,12 +93,14 @@ describe('TemplatesView Claude Code workflow imports', () => {
     const onImportClaudeWorkflow = vi.fn().mockResolvedValue('canvas-imported')
     renderView({ onImportClaudeWorkflow })
 
+    await screen.findByRole('heading', { name: 'Templates' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
     expect(await screen.findByText('deep-research')).toBeInTheDocument()
     expect(screen.getByText('Run a focused deep research workflow')).toBeInTheDocument()
     expect(screen.getByText('Plan')).toBeInTheDocument()
     expect(screen.getByText('Collect')).toBeInTheDocument()
     expect(screen.getByText('Report')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Import workflow' })).getByRole('button', { name: 'Import' }))
     expect(screen.getByRole('dialog', { name: /Import \/deep-research/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Import workflow' }))
 
@@ -114,7 +113,8 @@ describe('TemplatesView Claude Code workflow imports', () => {
     const onUploadClaudeWorkflow = vi.fn().mockResolvedValue('canvas-uploaded')
     renderView({ onUploadClaudeWorkflow })
 
-    await screen.findByText('Claude Code workflows')
+    await screen.findByRole('heading', { name: 'Templates' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')
     expect(input).not.toBeNull()
     const file = new File(['export default async () => {}'], 'uploaded-flow.js', { type: 'text/javascript' })
@@ -185,9 +185,15 @@ describe('TemplatesView Claude Code workflow imports', () => {
     renderView()
 
     expect(await screen.findByText('Release Checklist')).toBeInTheDocument()
-    expect(screen.queryByText('Ops Tower')).not.toBeInTheDocument()
+    expect(screen.getByText('Ops Tower')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Search templates'), { target: { value: 'Ops' } })
+    expect(screen.queryByText('Release Checklist')).not.toBeInTheDocument()
+    expect(screen.getByText('Ops Tower')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Search templates'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('tab', { name: /Team/ }))
-    expect(await screen.findByText('Ops Tower')).toBeInTheDocument()
+    expect(screen.queryByText('Release Checklist')).not.toBeInTheDocument()
+    expect(screen.getByText('Ops Tower')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Filter'))
     fireEvent.click(screen.getByRole('button', { name: 'ops' }))
     expect(screen.getByText('Ops Tower')).toBeInTheDocument()
   })
@@ -215,30 +221,16 @@ describe('TemplatesView Claude Code workflow imports', () => {
           canReplace: false,
           defaultNodesCount: 2,
           updatedAt: null,
-          defaultNodes: [],
-          renderObjects: [
+          defaultNodes: [
             {
-              id: 'node:a',
-              label: 'Run CI suite',
-              entityRef: { kind: 'node', id: 'a', nodeId: 'a' },
-              renderer: 'card',
-              values: { x: 0, y: 0, width: 240, height: 120 },
+              title: 'Run CI suite',
+              status: 'ready',
+              positionHint: { x: 0, y: 0, width: 240, height: 120 },
             },
             {
-              id: 'node:b',
-              label: 'Tag release',
-              entityRef: { kind: 'node', id: 'b', nodeId: 'b' },
-              renderer: 'card',
-              values: { x: 300, y: 0, width: 240, height: 120 },
-            },
-          ],
-          renderRelations: [
-            {
-              id: 'dep:a:b',
-              kind: 'dependency',
-              source: { objectId: 'node:a' },
-              target: { objectId: 'node:b' },
-              renderer: 'directed-edge',
+              title: 'Tag release',
+              status: 'ready',
+              positionHint: { x: 300, y: 0, width: 240, height: 120 },
             },
           ],
         },
@@ -247,6 +239,7 @@ describe('TemplatesView Claude Code workflow imports', () => {
     renderView({ onApplyTemplate })
 
     expect(await screen.findByText('Release Checklist')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Use template Release Checklist' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Preview template Release Checklist' }))
 
     expect(screen.getByRole('dialog', { name: /Preview - Release Checklist/ })).toBeInTheDocument()
@@ -296,13 +289,14 @@ describe('TemplatesView Claude Code workflow imports', () => {
     fireEvent.click(await screen.findByRole('tab', { name: /Team/ }))
     expect(await screen.findByText('Ops Tower')).toBeInTheDocument()
     expect(screen.getByText('Alice')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Edit draft' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Edit draft' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Manage template Ops Tower')).not.toBeInTheDocument()
   })
 
   it('keeps template creation out of the catalog header', async () => {
     renderView()
 
-    await screen.findByText('Claude Code workflows')
+    await screen.findByRole('heading', { name: 'Templates' })
     expect(screen.queryByRole('button', { name: 'Save current' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Blank template' })).not.toBeInTheDocument()
   })

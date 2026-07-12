@@ -1,14 +1,16 @@
 import {
   FileCode2,
+  FolderInput,
   Gamepad2,
   GitPullRequest,
   Globe2,
-  Eye,
   LockKeyhole,
+  MoreHorizontal,
   Moon,
   RefreshCw,
   Rocket,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Upload,
   Users,
@@ -25,7 +27,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { BoardState, CanvasInfo, CanvasObject, CanvasRelation, CanvasScope } from '../types'
+import type { CanvasScope } from '../types'
 import {
   fetchClaudeWorkflows,
   fetchTeamMembers,
@@ -45,14 +47,9 @@ interface OwnerIdentity {
 }
 
 interface TemplatesViewProps {
-  canvases: CanvasInfo[]
-  activeCanvasId: string
   userProfile: UserProfile | null
-  boardState: BoardState | null
-  onOpenCanvas: (canvasId: string) => void
   onApplyTemplate: (templateId: string, name: string, scope: CanvasScope) => Promise<string>
   onCreateTemplateDraft: (templateId: string) => Promise<string>
-  onReplaceTemplate: (templateId: string, canvasId: string, input: TemplateMetadataInput) => Promise<string>
   onUpdateTemplateMetadata: (templateId: string, input: TemplateMetadataInput) => Promise<string>
   onImportClaudeWorkflow: (workflowId: string, name: string, scope: CanvasScope) => Promise<string>
   onUploadClaudeWorkflow: (filename: string, source: string, name: string, scope: CanvasScope) => Promise<string>
@@ -62,7 +59,14 @@ type WorkflowImportTarget =
   | { kind: 'library'; id: string; name: string; commandName: string; path: string }
   | { kind: 'upload'; filename: string; source: string; name: string; commandName: string; path: string }
 
-const SOURCE_ORDER: CanvasTemplateSource[] = ['official', 'team', 'private', 'canvas-script']
+type TemplateSourceFilter = CanvasTemplateSource | 'all'
+
+const SOURCE_FILTERS: Array<{ value: TemplateSourceFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'official', label: 'Official' },
+  { value: 'team', label: 'Team' },
+  { value: 'private', label: 'Mine' },
+]
 const SOURCE_LABEL: Record<CanvasTemplateSource, string> = {
   official: 'Official',
   team: 'Team',
@@ -82,23 +86,15 @@ const ICONS_BY_NAME: Record<string, LucideIcon> = {
 }
 
 export function TemplatesView({
-  canvases,
-  activeCanvasId,
   userProfile,
-  boardState: _boardState,
-  onOpenCanvas: _onOpenCanvas,
   onApplyTemplate,
   onCreateTemplateDraft,
-  onReplaceTemplate: _onReplaceTemplate,
   onUpdateTemplateMetadata,
   onImportClaudeWorkflow,
   onUploadClaudeWorkflow,
 }: TemplatesViewProps) {
-  void _boardState
-  void _onOpenCanvas
-  void _onReplaceTemplate
   const [query, setQuery] = useState('')
-  const [source, setSource] = useState<CanvasTemplateSource>('official')
+  const [source, setSource] = useState<TemplateSourceFilter>('all')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [templates, setTemplates] = useState<CanvasTemplate[]>([])
   const [availableTags, setAvailableTags] = useState<string[]>([])
@@ -127,9 +123,7 @@ export function TemplatesView({
   const [workflowImportError, setWorkflowImportError] = useState<string | null>(null)
   const [workflowImporting, setWorkflowImporting] = useState(false)
   const [workflowUploadError, setWorkflowUploadError] = useState<string | null>(null)
-  void canvases
-  void activeCanvasId
-
+  const [workflowLibraryOpen, setWorkflowLibraryOpen] = useState(false)
   const refreshCatalog = () => {
     fetchTemplateCatalog()
       .then((catalog) => {
@@ -180,12 +174,10 @@ export function TemplatesView({
       .finally(() => setWorkflowsLoading(false))
   }
 
-  useEffect(refreshWorkflows, [])
-
   const visibleTemplates = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return templates.filter((template) => {
-      if (template.source !== source) return false
+      if (source !== 'all' && template.source !== source) return false
       if (selectedTags.length > 0 && !selectedTags.every((tag) => template.tags.includes(tag))) return false
       if (!normalizedQuery) return true
       const haystack = [
@@ -275,6 +267,7 @@ export function TemplatesView({
   }
 
   const openWorkflowImportDialog = (workflow: ClaudeWorkflow) => {
+    setWorkflowLibraryOpen(false)
     setWorkflowImportTarget({
       kind: 'library',
       id: workflow.id,
@@ -314,6 +307,7 @@ export function TemplatesView({
         setWorkflowScopeDraft('personal')
         setWorkflowImportError(null)
         setWorkflowUploadError(null)
+        setWorkflowLibraryOpen(false)
       })
       .catch((err) => setWorkflowUploadError((err as Error).message || 'Failed to read workflow file'))
   }
@@ -347,64 +341,92 @@ export function TemplatesView({
       <div className="templates-workspace__inner">
         <header className="templates-workspace__header">
           <div>
-            <span>Templates</span>
-            <h1>Canvas templates</h1>
-            <p className="templates-workspace__hint">Templates are created from tuned canvases. Open or create a canvas, then save it from Canvas settings.</p>
+            <h1>Templates</h1>
+            <p className="templates-workspace__hint">Start with a proven canvas, then make it your own.</p>
           </div>
           <div className="templates-workspace__tools">
             <label className="templates-search">
               <Search size={14} aria-hidden />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find template" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search templates" />
             </label>
+            <button
+              type="button"
+              className="ghost templates-import-button"
+              onClick={() => {
+                setWorkflowLibraryOpen(true)
+                if (!workflowList) refreshWorkflows()
+              }}
+            >
+              <FolderInput size={14} aria-hidden />
+              Import
+            </button>
           </div>
         </header>
 
         <section className="template-gallery" aria-label="Template catalog">
           <div className="template-gallery__header">
-            <h2 className="template-gallery__title">Start from a template</h2>
             <div className="template-gallery__tabs" role="tablist">
-              {SOURCE_ORDER.map((entry) => {
-                const count = templates.filter((template) => template.source === entry).length
-                const active = source === entry
+              {SOURCE_FILTERS.map((entry) => {
+                const count = entry.value === 'all'
+                  ? templates.length
+                  : templates.filter((template) => template.source === entry.value).length
+                const active = source === entry.value
                 return (
                   <button
-                    key={entry}
+                    key={entry.value}
                     type="button"
                     role="tab"
                     aria-selected={active}
                     className={`template-gallery__tab${active ? ' is-active' : ''}`}
-                    onClick={() => setSource(entry)}
+                    onClick={() => setSource(entry.value)}
                   >
-                    {SOURCE_LABEL[entry]}
+                    {entry.label}
                     <span className="template-gallery__tab-count">{count}</span>
                   </button>
                 )
               })}
             </div>
-          </div>
-
-          <div className="template-gallery__tags" aria-label="Template tags">
-            {availableTags.map((tag) => {
-              const active = selectedTags.includes(tag)
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  className={`template-gallery__tag${active ? ' is-active' : ''}`}
-                  aria-pressed={active}
-                  onClick={() => setSelectedTags((prev) => active ? prev.filter((item) => item !== tag) : [...prev, tag])}
-                >
-                  {tag}
-                </button>
-              )
-            })}
+            {availableTags.length > 0 && (
+              <details className="template-filter">
+                <summary className={`ghost template-filter__trigger${selectedTags.length > 0 ? ' is-active' : ''}`}>
+                  <SlidersHorizontal size={13} aria-hidden />
+                  Filter
+                  {selectedTags.length > 0 && <span>{selectedTags.length}</span>}
+                </summary>
+                <div className="template-filter__popover" aria-label="Filter by tag">
+                  <div className="template-filter__heading">
+                    <strong>Tags</strong>
+                    {selectedTags.length > 0 && (
+                      <button type="button" onClick={() => setSelectedTags([])}>Clear</button>
+                    )}
+                  </div>
+                  <div className="template-filter__options">
+                    {availableTags.map((tag) => {
+                      const active = selectedTags.includes(tag)
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          className={active ? 'is-active' : ''}
+                          aria-pressed={active}
+                          onClick={() => setSelectedTags((prev) => active ? prev.filter((item) => item !== tag) : [...prev, tag])}
+                        >
+                          {tag}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </details>
+            )}
           </div>
 
           {catalogError ? (
             <div className="inline-error template-gallery__error">{catalogError}</div>
           ) : visibleTemplates.length === 0 ? (
             <div className="template-gallery__empty">
-              No templates match this view. To create one, open or create a canvas, tune it, then save it from Canvas settings.
+              <strong>No templates found</strong>
+              <span>Try another search or clear your filters.</span>
             </div>
           ) : (
             <div className="template-gallery__grid">
@@ -413,7 +435,6 @@ export function TemplatesView({
                   key={template.id}
                   template={template}
                   owner={ownerIdentityForTemplate(template, userProfile, ownersById)}
-                  onUse={() => openApplyDialog(template)}
                   onPreview={() => setPreviewTarget(template)}
                   onEdit={() => void onCreateTemplateDraft(template.id)}
                   onMetadata={() => openMetadataDialog(template)}
@@ -423,39 +444,40 @@ export function TemplatesView({
           )}
         </section>
 
-        <section className="claude-workflows" aria-label="Claude Code workflows">
-          <div className="template-gallery__header">
-            <div>
-              <h2 className="template-gallery__title">Claude Code workflows</h2>
-              <p className="claude-workflows__root">{workflowList?.root ?? '~/.claude/workflows'}</p>
-              <p className="claude-workflows__root">Imported workflows create a canvas directly; tune it, then save the canvas as a template.</p>
-            </div>
-            <div className="claude-workflows__actions">
-              <label className="ghost claude-workflows__refresh claude-workflows__upload">
-                <Upload size={13} aria-hidden />
-                Upload .js
-                <input
-                  type="file"
-                  accept=".js,text/javascript,application/javascript"
-                  className="claude-workflows__file-input"
-                  onClick={() => setWorkflowUploadError(null)}
-                  onChange={handleWorkflowUploadSelected}
-                />
-              </label>
-              <button type="button" className="ghost claude-workflows__refresh" onClick={refreshWorkflows} disabled={workflowsLoading}>
-                <RefreshCw size={13} aria-hidden />
-                {workflowsLoading ? 'Scanning...' : 'Refresh'}
-              </button>
-            </div>
+      </div>
+
+      {workflowLibraryOpen && (
+        <TemplateModal
+          title="Import workflow"
+          subtitle="Choose a Claude Code workflow or upload a .js file. Scripts are read, never executed."
+          onClose={() => setWorkflowLibraryOpen(false)}
+          wide
+        >
+          <div className="claude-workflows__actions">
+            <label className="ghost claude-workflows__refresh claude-workflows__upload">
+              <Upload size={13} aria-hidden />
+              Upload .js
+              <input
+                type="file"
+                accept=".js,text/javascript,application/javascript"
+                className="claude-workflows__file-input"
+                onClick={() => setWorkflowUploadError(null)}
+                onChange={handleWorkflowUploadSelected}
+              />
+            </label>
+            <button type="button" className="ghost claude-workflows__refresh" onClick={refreshWorkflows} disabled={workflowsLoading}>
+              <RefreshCw size={13} aria-hidden />
+              {workflowsLoading ? 'Scanning...' : 'Refresh'}
+            </button>
           </div>
           {workflowUploadError ? (
             <div className="inline-error template-gallery__error">{workflowUploadError}</div>
           ) : workflowError ? (
             <div className="inline-error template-gallery__error">{workflowError}</div>
           ) : !workflowList || workflowsLoading ? (
-            <div className="template-gallery__empty">Scanning global Claude Code workflows...</div>
+            <div className="template-gallery__empty">Scanning workflows...</div>
           ) : workflowList.workflows.length === 0 ? (
-            <div className="template-gallery__empty">No global <code>*.js</code> workflows found.</div>
+            <div className="template-gallery__empty">No workflows found. Upload a .js file to continue.</div>
           ) : (
             <div className="claude-workflows__list">
               {workflowList.workflows.map((workflow) => (
@@ -463,8 +485,8 @@ export function TemplatesView({
               ))}
             </div>
           )}
-        </section>
-      </div>
+        </TemplateModal>
+      )}
 
       {applyTarget && (
         <TemplateModal title={`Use template - ${applyTarget.name}`} subtitle={`Creates a new canvas from v${applyTarget.version}.`} onClose={() => !applying && setApplyTarget(null)}>
@@ -556,53 +578,49 @@ export function TemplatesView({
 interface GalleryCardProps {
   template: CanvasTemplate
   owner: OwnerIdentity
-  onUse: () => void
   onPreview: () => void
   onEdit: () => void
   onMetadata: () => void
 }
 
-function GalleryCard({ template, owner, onUse, onPreview, onEdit, onMetadata }: GalleryCardProps) {
+function GalleryCard({ template, owner, onPreview, onEdit, onMetadata }: GalleryCardProps) {
   const Icon = ICONS_BY_NAME[template.icon] ?? Sparkles
   const nodeCount = template.defaultNodesCount || template.defaultNodes.length
   return (
     <article className="template-gallery__card">
       <div className="template-gallery__card-head">
         <span className="template-gallery__card-icon" aria-hidden><Icon size={18} /></span>
-        <span className={`templates-visibility templates-visibility--${template.source === 'team' ? 'public' : 'private'}`}>
-          {template.source === 'team' ? <Globe2 size={11} aria-hidden /> : template.source === 'private' ? <LockKeyhole size={11} aria-hidden /> : <Sparkles size={11} aria-hidden />}
-          {SOURCE_LABEL[template.source]}
-        </span>
-      </div>
-      <h3 className="template-gallery__card-name">{template.name}</h3>
-      <p className="template-gallery__card-desc">{template.description || 'Reusable canvas structure'}</p>
-      <div className="template-gallery__tags">
-        {template.tags.slice(0, 4).map((tag) => <span key={tag} className="template-gallery__tag">{tag}</span>)}
-      </div>
-      {template.source === 'team' && (
-        <span className="template-row__owner" title={`Owner: ${owner.name}`}>
-          <span className={`template-row__owner-avatar${owner.avatarUrl ? ' has-image' : ''}`}>
-            {owner.avatarUrl ? <img src={owner.avatarUrl} alt="" /> : owner.initials}
+        <div className="template-gallery__card-head-actions">
+          <span className={`templates-visibility templates-visibility--${template.source === 'team' ? 'public' : 'private'}`}>
+            {template.source === 'team' ? <Globe2 size={11} aria-hidden /> : template.source === 'private' ? <LockKeyhole size={11} aria-hidden /> : <Sparkles size={11} aria-hidden />}
+            {SOURCE_LABEL[template.source]}
           </span>
-          <span className="template-row__owner-name">{owner.name}</span>
-        </span>
-      )}
-      <div className="template-gallery__card-foot">
-        <span className="template-gallery__node-count">{nodeCount} node{nodeCount === 1 ? '' : 's'} · v{template.version}</span>
-        <div className="template-gallery__card-actions">
-          <button type="button" className="ghost template-gallery__preview-button" onClick={onPreview} aria-label={`Preview template ${template.name}`}>
-            <Eye size={12} aria-hidden />
-            Preview
-          </button>
-          <button type="button" className="primary template-gallery__use-button" onClick={onUse} aria-label={`Use template ${template.name}`}>Use template</button>
+          {!template.readOnly && template.canEdit && (
+            <details className="template-card-menu">
+              <summary className="ghost" aria-label={`Manage template ${template.name}`}><MoreHorizontal size={16} aria-hidden /></summary>
+              <div className="template-card-menu__popover">
+                <button type="button" onClick={onMetadata}>Edit details</button>
+                <button type="button" onClick={onEdit}>Create draft</button>
+              </div>
+            </details>
+          )}
         </div>
       </div>
-      {!template.readOnly && (
-        <div className="template-gallery__card-foot">
-          <button type="button" className="ghost" onClick={onMetadata} disabled={!template.canEdit} title={template.canEdit ? 'Edit template metadata' : 'Only the owner can edit this template'}>Details</button>
-          <button type="button" className="ghost" onClick={onEdit} disabled={!template.canEdit} title={template.canEdit ? 'Create an editable draft canvas' : 'Only the owner can edit this template'}>Edit draft</button>
+      <button type="button" className="template-gallery__card-main" onClick={onPreview} aria-label={`Preview template ${template.name}`}>
+        <h3 className="template-gallery__card-name">{template.name}</h3>
+        <p className="template-gallery__card-desc">{template.description || 'Reusable canvas structure'}</p>
+        <div className="template-gallery__card-meta">
+          {template.source === 'team' && (
+            <span className="template-row__owner" title={`Owner: ${owner.name}`}>
+              <span className={`template-row__owner-avatar${owner.avatarUrl ? ' has-image' : ''}`}>
+                {owner.avatarUrl ? <img src={owner.avatarUrl} alt="" /> : owner.initials}
+              </span>
+              <span className="template-row__owner-name">{owner.name}</span>
+            </span>
+          )}
+          <span className="template-gallery__node-count">{nodeCount} node{nodeCount === 1 ? '' : 's'}</span>
         </div>
-      )}
+      </button>
     </article>
   )
 }
@@ -730,13 +748,6 @@ interface TemplatePreviewModel {
 
 function TemplatePreviewCanvas({ template }: { template: CanvasTemplate }) {
   const model = useMemo(() => buildTemplatePreviewModel(template), [template])
-  const sceneKind = template.renderProfile?.logic.layout === 'spatial' || template.sceneSpec ? template.sceneSpec?.kind : null
-  if (template.sceneSpec?.kind === 'poker-table') {
-    return <PokerTemplatePreview template={template} />
-  }
-  if (template.sceneSpec?.kind === 'travel-squad') {
-    return <TravelTemplatePreview template={template} />
-  }
   if (model.objects.length === 0) {
     return (
       <div className="template-preview template-preview--empty">
@@ -747,8 +758,7 @@ function TemplatePreviewCanvas({ template }: { template: CanvasTemplate }) {
   }
   const objectById = new Map(model.objects.map((object) => [object.id, object]))
   return (
-    <div className={`template-preview${sceneKind ? ' template-preview--scene' : ''}`} aria-label={`${template.name} preview`}>
-      {sceneKind && <span className="template-preview__scene-pill">{sceneKind}</span>}
+    <div className="template-preview" aria-label={`${template.name} preview`}>
       <svg className="template-preview__edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
         {model.relations.map((relation) => {
           const source = objectById.get(relation.source)
@@ -787,118 +797,6 @@ function TemplatePreviewCanvas({ template }: { template: CanvasTemplate }) {
           </div>
         )
       })}
-    </div>
-  )
-}
-
-function PokerTemplatePreview({ template }: { template: CanvasTemplate }) {
-  const state = asRecord(template.sceneSpec?.initialState) ?? {}
-  const players = readArray(state.players)
-  const cards = normalizeCards(readArray(state.communityCards), 5)
-  const actions = template.sceneSpec?.actions ?? []
-  return (
-    <div className="template-preview template-preview--poker" aria-label={`${template.name} poker preview`}>
-      <div className="template-preview__scene-header">
-        <span>Poker Table</span>
-        <strong>{readString(state.title, template.name)}</strong>
-        <em>Rules Orchestrator · node-scoped state artifacts</em>
-      </div>
-      <div className="template-preview-poker__felt">
-        <div className="template-preview-poker__cards">
-          {cards.map((card, index) => <span key={`${card}-${index}`}>{card}</span>)}
-        </div>
-        {players.map((player, index) => {
-          const item = asRecord(player) ?? {}
-          const seat = readString(item.seat, `seat-${index}`)
-          const name = readString(item.name, readString(item.id, `Player ${index + 1}`))
-          const stack = readString(item.stack, '0')
-          const status = readString(item.status, 'ready')
-          return (
-            <div key={readString(item.id, name)} className={`template-preview-poker__seat template-preview-poker__seat--${cssToken(seat)}`}>
-              <strong>{name}</strong>
-              <span>{status}</span>
-              <em>{stack}</em>
-            </div>
-          )
-        })}
-      </div>
-      <aside className="template-preview__side-panel">
-        <div>
-          <span>Phase</span>
-          <strong>{readString(state.phase, 'Setup')}</strong>
-        </div>
-        <div>
-          <span>Pot</span>
-          <strong>{readString(state.pot, '0')}</strong>
-        </div>
-        <div>
-          <span>Actions</span>
-          <strong>{actions.length}</strong>
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-function TravelTemplatePreview({ template }: { template: CanvasTemplate }) {
-  const state = asRecord(template.sceneSpec?.initialState) ?? {}
-  const route = readArray(state.route)
-  const timeline = readArray(state.timeline).slice(0, 3)
-  const hotels = readArray(state.hotels).slice(0, 2)
-  const budget = asRecord(state.budget)
-  return (
-    <div className="template-preview template-preview--travel" aria-label={`${template.name} travel preview`}>
-      <div className="template-preview__scene-header">
-        <span>Travel Squad</span>
-        <strong>{readString(state.title, template.name)}</strong>
-        <em>{readString(state.summary, template.description)}</em>
-      </div>
-      <div className="template-preview-travel__map">
-        <svg viewBox="0 0 100 100" role="img" aria-label="Travel route preview">
-          <polyline
-            points={route.map((stop, index) => {
-              const item = asRecord(stop) ?? {}
-              return `${readNumber(item.x, 18 + index * 26)},${readNumber(item.y, 50)}`
-            }).join(' ')}
-          />
-          {route.map((stop, index) => {
-            const item = asRecord(stop) ?? {}
-            const x = readNumber(item.x, 18 + index * 26)
-            const y = readNumber(item.y, 50)
-            return (
-              <g key={readString(item.id, String(index))} transform={`translate(${x} ${y})`}>
-                <circle r="4.2" />
-                <text y="-7">{readString(item.label, `Stop ${index + 1}`)}</text>
-                <text y="10">{readString(item.days, '')}</text>
-              </g>
-            )
-          })}
-        </svg>
-      </div>
-      <aside className="template-preview__side-panel">
-        <div>
-          <span>Budget</span>
-          <strong>{readString(budget?.label, 'Awaiting')}</strong>
-        </div>
-        {timeline.map((item, index) => {
-          const row = asRecord(item) ?? {}
-          return (
-            <div key={`timeline-${index}`}>
-              <span>{readString(row.day, `D${index + 1}`)}</span>
-              <strong>{readString(row.title, 'Itinerary')}</strong>
-            </div>
-          )
-        })}
-        {hotels.map((item, index) => {
-          const row = asRecord(item) ?? {}
-          return (
-            <div key={`hotel-${index}`}>
-              <span>{readString(row.city, 'Hotel')}</span>
-              <strong>{readString(row.title, 'Candidate')}</strong>
-            </div>
-          )
-        })}
-      </aside>
     </div>
   )
 }
@@ -969,28 +867,7 @@ function ownerMatchesProfile(ownerId: string, userProfile: UserProfile): boolean
 }
 
 function buildTemplatePreviewModel(template: CanvasTemplate): TemplatePreviewModel {
-  const objects = previewObjectsForTemplate(template)
-  const relations = (template.renderRelations ?? [])
-    .filter((relation) => relation.values?.visible !== false)
-    .map((relation) => ({
-      id: relation.id,
-      source: relation.source.objectId,
-      target: relation.target.objectId,
-      kind: relation.kind,
-    }))
-  return {
-    objects,
-    relations,
-    bounds: boundsForObjects(objects),
-  }
-}
-
-function previewObjectsForTemplate(template: CanvasTemplate): TemplatePreviewObject[] {
-  const objects = (template.renderObjects ?? [])
-    .filter((object) => object.values?.hidden !== true && object.renderOnly?.kind !== 'background')
-    .map(previewObjectFromCanvasObject)
-  if (objects.length > 0) return objects
-  return template.defaultNodes.map((node, index) => {
+  const objects = template.defaultNodes.map((node, index) => {
     const width = node.positionHint?.width ?? 240
     const height = node.positionHint?.height ?? 120
     return {
@@ -1003,32 +880,10 @@ function previewObjectsForTemplate(template: CanvasTemplate): TemplatePreviewObj
       height,
     }
   })
-}
-
-function previewObjectFromCanvasObject(object: CanvasObject): TemplatePreviewObject {
-  const values = object.values ?? {}
-  const size = defaultPreviewSize(object)
   return {
-    id: object.id,
-    label: object.label,
-    kind: object.entityRef?.kind ?? object.renderOnly?.kind ?? object.renderer,
-    x: typeof values.x === 'number' ? values.x : 0,
-    y: typeof values.y === 'number' ? values.y : 0,
-    width: typeof values.width === 'number' ? values.width : size.width,
-    height: typeof values.height === 'number' ? values.height : size.height,
-  }
-}
-
-function defaultPreviewSize(object: CanvasObject): { width: number; height: number } {
-  switch (object.renderer) {
-    case 'kanban':
-    case 'matrix':
-    case 'grid': return { width: 320, height: 190 }
-    case 'list':
-    case 'document': return { width: 260, height: 150 }
-    case 'avatar': return { width: 150, height: 90 }
-    case 'container': return { width: 280, height: 150 }
-    default: return { width: 220, height: 110 }
+    objects,
+    relations: [],
+    bounds: boundsForObjects(objects),
   }
 }
 
@@ -1063,32 +918,6 @@ function objectCenterPercent(object: TemplatePreviewObject, bounds: TemplatePrev
     x: frame.left + frame.width / 2,
     y: frame.top + frame.height / 2,
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
-function readArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
-
-function readString(value: unknown, fallback: string): string {
-  if (typeof value === 'string' && value.trim()) return value
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-  return fallback
-}
-
-function readNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function normalizeCards(values: unknown[], count: number): string[] {
-  const cards = values.map((value) => readString(value, '??')).slice(0, count)
-  while (cards.length < count) cards.push('??')
-  return cards
 }
 
 function cssToken(value: string): string {

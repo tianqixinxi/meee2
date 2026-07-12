@@ -3674,9 +3674,9 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-3" })
     }
 
-    // MARK: - Canvas Render Protocol
+    // MARK: - Legacy Canvas Render Protocol
 
-    func testGraphStateLazilyMigratesMissingRenderProfile() throws {
+    func testGraphStateDoesNotLoadOrCreateLegacyRenderProfile() throws {
         let canvasId = "canvas-render-a"
         let snapshot = boardSnapshot(canvasId: canvasId, ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: canvasId, ownerId: "owner-a")
@@ -3689,31 +3689,11 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: profilePath))
-        XCTAssertEqual(graph.renderProfileStatus?.state, .missingMigrated)
-        XCTAssertEqual(graph.renderProfile?.version, CanvasRenderProfile.defaultVersion)
-        XCTAssertTrue(graph.renderObjects.contains { $0.entityRef?.kind == .node })
-        XCTAssertTrue(graph.renderRelations.contains { $0.kind == .dependency })
-    }
-
-    func testInvalidRenderProfileFallsBackToLastValidProfile() throws {
-        let canvasId = "canvas-render-invalid"
-        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: "owner-a")
-        _ = try seedPlannerNodes(canvasId: canvasId, ownerId: "owner-a")
-        _ = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: "owner-a")
-        let profilePath = PlannerBoardBridge.store.renderProfilePath(canvasId: canvasId)
-        try "{ not valid json".data(using: .utf8)!.write(to: URL(fileURLWithPath: profilePath), options: .atomic)
-
-        let graph = try PlannerBoardBridge.graphState(
-            for: canvasId,
-            snapshot: snapshot,
-            actorUserId: "owner-a"
-        )
-
-        XCTAssertEqual(graph.renderProfileStatus?.state, .invalidUsingLastValid)
-        XCTAssertNotNil(graph.renderProfileStatus?.error)
-        XCTAssertEqual(graph.renderProfile?.version, CanvasRenderProfile.defaultVersion)
-        XCTAssertFalse(graph.renderObjects.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: profilePath))
+        XCTAssertNil(graph.renderProfileStatus)
+        XCTAssertNil(graph.renderProfile)
+        XCTAssertTrue(graph.renderObjects.isEmpty)
+        XCTAssertTrue(graph.renderRelations.isEmpty)
     }
 
     func testRenderValuesPatchMergesObjectFields() throws {
@@ -3816,14 +3796,10 @@ final class PlannerCoreTests: XCTestCase {
             snapshot: snapshot,
             actorUserId: ownerId
         )
-        let graph = try PlannerBoardBridge.graphState(
-            for: canvasId,
-            snapshot: snapshot,
-            actorUserId: ownerId
-        )
+        let profile = try PlannerBoardBridge.store.renderProfileState(canvasId: canvasId).profile
 
-        XCTAssertEqual(graph.renderProfile?.logic.layout, .collection)
-        XCTAssertEqual(graph.renderProfile?.logic.actions.last?.id, "custom-reveal")
+        XCTAssertEqual(profile.logic.layout, .collection)
+        XCTAssertEqual(profile.logic.actions.last?.id, "custom-reveal")
     }
 
     // MARK: - Node Contract v2 (ENG-1)

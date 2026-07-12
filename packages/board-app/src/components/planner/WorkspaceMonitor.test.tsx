@@ -15,17 +15,6 @@ vi.mock('../../api', async () => {
   }
 })
 
-const canvas = {
-  id: 'canvas-1',
-  name: 'Launch Monitor',
-  scope: 'personal' as const,
-  kind: 'board' as const,
-  isDefault: false,
-  workspacePath: '',
-  ownerUserId: 'owner-user',
-  teamId: null,
-}
-
 describe('WorkspaceMonitor comfortable view', () => {
   beforeEach(() => {
     apiMocks.fetchPlannerWorkspaceMonitor.mockReset()
@@ -81,8 +70,6 @@ describe('WorkspaceMonitor comfortable view', () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
-          activeCanvasId="canvas-1"
-          canvases={[canvas]}
           refreshTick={0}
           onOpenItem={vi.fn()}
           onOpenAllSessions={vi.fn()}
@@ -91,6 +78,7 @@ describe('WorkspaceMonitor comfortable view', () => {
     )
 
     expect(await screen.findByText('Research launch sentiment')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Workspace monitor' })).toBeInTheDocument()
     expect(screen.getAllByText('Launch Monitor').length).toBeGreaterThan(0)
     expect(screen.getAllByText('blocked').length).toBeGreaterThan(0)
     expect(screen.getByText('3 evidence')).toBeInTheDocument()
@@ -112,8 +100,6 @@ describe('WorkspaceMonitor comfortable view', () => {
     render(
       <I18nProvider>
         <WorkspaceMonitor
-          activeCanvasId="canvas-1"
-          canvases={[canvas]}
           refreshTick={0}
           onOpenItem={vi.fn()}
           onOpenAllSessions={vi.fn()}
@@ -129,8 +115,6 @@ describe('WorkspaceMonitor comfortable view', () => {
     const { rerender } = render(
       <I18nProvider>
         <WorkspaceMonitor
-          activeCanvasId="canvas-1"
-          canvases={[canvas]}
           refreshTick={0}
           onOpenItem={vi.fn()}
           onOpenAllSessions={vi.fn()}
@@ -143,8 +127,6 @@ describe('WorkspaceMonitor comfortable view', () => {
     rerender(
       <I18nProvider>
         <WorkspaceMonitor
-          activeCanvasId="canvas-1"
-          canvases={[canvas]}
           refreshTick={1}
           onOpenItem={vi.fn()}
           onOpenAllSessions={vi.fn()}

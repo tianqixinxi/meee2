@@ -1751,6 +1751,16 @@ public final class BoardLayoutStore {
         let context = currentContext()
         let now = Date()
         let personalId = "personal-default"
+        // Monitor is now a standalone workspace, not a Canvas kind. Preserve
+        // legacy canvases as ordinary boards so persisted memberships and
+        // history remain addressable without keeping a second render mode.
+        for index in store.canvases.indices where store.canvases[index].kind == .monitor {
+            store.canvases[index].kind = .board
+            if store.canvases[index].name == "Monitor" || store.canvases[index].name == "Default canvas" {
+                store.canvases[index].name = "Canvas"
+            }
+            store.canvases[index].updatedAt = now
+        }
         let removedTeamDefaultIds = store.canvases
             .filter { $0.scope == .team && $0.isDefault }
             .map(\.id)
@@ -1777,9 +1787,9 @@ public final class BoardLayoutStore {
         if !store.canvases.contains(where: { $0.id == personalId }) {
             store.canvases.append(Canvas(
                 id: personalId,
-                name: "Monitor",
+                name: "Canvas",
                 scope: .personal,
-                kind: .monitor,
+                kind: .board,
                 ownerUserId: context.userId,
                 teamId: nil,
                 isDefault: true,
@@ -1790,14 +1800,6 @@ public final class BoardLayoutStore {
             ))
             store.layouts[personalId] = store.layouts[personalId] ?? .empty
             store.memberships[personalId] = store.memberships[personalId] ?? [:]
-        } else if let index = store.canvases.firstIndex(where: { $0.id == personalId }),
-                  store.canvases[index].isDefault,
-                  store.canvases[index].kind != .monitor || store.canvases[index].name == "Default canvas" {
-            store.canvases[index].kind = .monitor
-            if store.canvases[index].name == "Default canvas" {
-                store.canvases[index].name = "Monitor"
-            }
-            store.canvases[index].updatedAt = now
         }
         ensureWorkspaceFolderNamesLocked(&store)
         let defaultSessionIds = sessionIds.filter { (store.sessionHomeCanvasIds ?? [:])[$0] == nil }
