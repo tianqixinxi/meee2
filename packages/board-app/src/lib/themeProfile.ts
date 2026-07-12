@@ -40,7 +40,7 @@ export const THEME_PRESETS: Record<Exclude<ThemePresetId, 'custom'>, ThemeProfil
     light: {
       accentColor: '#339CFF',
       backgroundColor: '#FFFFFF',
-      sidebarColor: '#F3F6FA',
+      sidebarColor: '#FFFFFF',
       foregroundColor: '#1A1C1F',
       contrast: 45,
     },
@@ -54,7 +54,7 @@ export const THEME_PRESETS: Record<Exclude<ThemePresetId, 'custom'>, ThemeProfil
   },
 }
 
-export const DEFAULT_THEME_PROFILE: ThemeProfile = THEME_PRESETS.claude
+export const DEFAULT_THEME_PROFILE: ThemeProfile = THEME_PRESETS.codex
 
 const HEX_RE = /^#[0-9a-f]{6}$/i
 const PRESET_IDS = new Set<ThemePresetId>(['claude', 'codex', 'custom'])

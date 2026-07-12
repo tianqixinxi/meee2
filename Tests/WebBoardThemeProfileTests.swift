@@ -2,14 +2,14 @@ import XCTest
 @testable import meee2Kit
 
 final class WebBoardThemeProfileTests: XCTestCase {
-    func testDefaultProfileIsClaudeV1() {
+    func testDefaultProfileIsCodexV1() {
         let profile = WebBoardThemeProfile.defaultProfile()
 
         XCTAssertEqual(profile.schemaVersion, 1)
-        XCTAssertEqual(profile.presetId, "claude")
-        XCTAssertEqual(profile.light.accentColor, "#B95F43")
-        XCTAssertEqual(profile.light.sidebarColor, "#FBF8F1")
-        XCTAssertEqual(profile.dark.backgroundColor, "#262624")
+        XCTAssertEqual(profile.presetId, "codex")
+        XCTAssertEqual(profile.light.accentColor, "#339CFF")
+        XCTAssertEqual(profile.light.sidebarColor, "#FFFFFF")
+        XCTAssertEqual(profile.dark.backgroundColor, "#101214")
     }
 
     func testParseAcceptsSupportedProfileAndClampsContrast() {
@@ -96,5 +96,25 @@ final class WebBoardThemeProfileTests: XCTestCase {
 
         let profile = WebBoardThemeProfile.storedProfile(defaults: defaults)
         XCTAssertEqual(profile, WebBoardThemeProfile.defaultProfile())
+    }
+
+    func testStoredProfileMigratesTheLegacyClaudeDefaultOnce() {
+        let suiteName = "WebBoardThemeProfileTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let legacyProfile = WebBoardThemeProfileDTO(
+            schemaVersion: 1,
+            presetId: "claude",
+            light: WebBoardThemeProfile.codex.light,
+            dark: WebBoardThemeProfile.codex.dark
+        )
+        let encoded = try! JSONEncoder().encode(legacyProfile)
+        defaults.set(encoded, forKey: WebBoardThemeProfile.defaultsKey)
+
+        XCTAssertEqual(WebBoardThemeProfile.storedProfile(defaults: defaults), WebBoardThemeProfile.codex)
+        XCTAssertTrue(defaults.bool(forKey: WebBoardThemeProfile.codexDefaultMigrationKey))
+
+        WebBoardThemeProfile.store(WebBoardThemeProfile.claude, defaults: defaults)
+        XCTAssertEqual(WebBoardThemeProfile.storedProfile(defaults: defaults), WebBoardThemeProfile.claude)
     }
 }

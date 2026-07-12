@@ -2,6 +2,16 @@ import XCTest
 @testable import meee2Kit
 
 final class SessionWorkspaceInspectorTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        SessionWorkspaceInspector.resetCacheForTests()
+    }
+
+    override func tearDown() {
+        SessionWorkspaceInspector.resetCacheForTests()
+        super.tearDown()
+    }
+
     func testParseNumstatSumsTextChangesAndIgnoresBinaryMarkers() {
         let result = SessionWorkspaceInspector.parseNumstat("""
         12\t3\tSources/App.swift
@@ -96,6 +106,45 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
             snapshot.outputs[0]
         )
         XCTAssertNil(SessionWorkspaceInspector.output(in: snapshot, matching: "/tmp/project/secret.md"))
+    }
+
+    func testCachedInspectionReusesFreshSnapshotAndRefreshesAfterTTL() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-cached-environment-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try runGit(["init", "-b", "main"], cwd: root)
+        try runGit(["config", "user.email", "tests@meee2.local"], cwd: root)
+        try runGit(["config", "user.name", "Meee2 Tests"], cwd: root)
+        let tracked = root.appendingPathComponent("tracked.txt")
+        try Data("first\n".utf8).write(to: tracked)
+        try runGit(["add", "tracked.txt"], cwd: root)
+        try runGit(["commit", "-m", "initial"], cwd: root)
+
+        let startedAt = Date()
+        try Data("first\nsecond\n".utf8).write(to: tracked)
+        let initial = SessionWorkspaceInspector.inspectCached(
+            sessionId: "session-a",
+            cwd: root.path,
+            now: startedAt
+        )
+        XCTAssertEqual(initial.changes?.additions, 1)
+
+        try Data("first\nsecond\nthird\n".utf8).write(to: tracked)
+        let cached = SessionWorkspaceInspector.inspectCached(
+            sessionId: "session-b",
+            cwd: root.path,
+            now: startedAt.addingTimeInterval(1)
+        )
+        XCTAssertEqual(cached.sessionId, "session-b")
+        XCTAssertEqual(cached.changes?.additions, 1)
+
+        let refreshed = SessionWorkspaceInspector.inspectCached(
+            sessionId: "session-b",
+            cwd: root.path,
+            now: startedAt.addingTimeInterval(3)
+        )
+        XCTAssertEqual(refreshed.changes?.additions, 2)
     }
 
     private func runGit(_ arguments: [String], cwd: URL) throws {

@@ -21,6 +21,17 @@ struct SessionWorkspaceSnapshot: Encodable, Equatable {
 }
 
 enum SessionWorkspaceInspector {
+    private struct CacheEntry {
+        let snapshot: SessionWorkspaceSnapshot
+        let capturedAt: Date
+    }
+
+    private static let cacheCondition = NSCondition()
+    private static let cacheTTL: TimeInterval = 2
+    private static let cacheLimit = 32
+    private static var cache: [String: CacheEntry] = [:]
+    private static var inFlightKeys = Set<String>()
+
     static func output(
         in snapshot: SessionWorkspaceSnapshot,
         matching rawPath: String
@@ -83,6 +94,57 @@ enum SessionWorkspaceInspector {
         )
     }
 
+    /// Environment polling can arrive from focus changes and timers at nearly
+    /// the same moment. Cache by workspace + candidate set and make a cache
+    /// miss single-flight so those requests share one set of Git processes.
+    static func inspectCached(
+        sessionId: String,
+        cwd: String,
+        candidateFilePaths: [String] = [],
+        now: Date = Date()
+    ) -> SessionWorkspaceSnapshot {
+        let key = cacheKey(cwd: cwd, candidateFilePaths: candidateFilePaths)
+
+        cacheCondition.lock()
+        while true {
+            if let entry = cache[key], now.timeIntervalSince(entry.capturedAt) < cacheTTL {
+                cacheCondition.unlock()
+                return replacingSessionId(in: entry.snapshot, with: sessionId)
+            }
+            if !inFlightKeys.contains(key) {
+                inFlightKeys.insert(key)
+                cacheCondition.unlock()
+                break
+            }
+            cacheCondition.wait()
+        }
+
+        let snapshot = inspect(
+            sessionId: sessionId,
+            cwd: cwd,
+            candidateFilePaths: candidateFilePaths
+        )
+
+        cacheCondition.lock()
+        cache[key] = CacheEntry(snapshot: snapshot, capturedAt: now)
+        if cache.count > cacheLimit,
+           let oldest = cache.min(by: { $0.value.capturedAt < $1.value.capturedAt })?.key {
+            cache.removeValue(forKey: oldest)
+        }
+        inFlightKeys.remove(key)
+        cacheCondition.broadcast()
+        cacheCondition.unlock()
+        return snapshot
+    }
+
+    static func resetCacheForTests() {
+        cacheCondition.lock()
+        cache.removeAll()
+        inFlightKeys.removeAll()
+        cacheCondition.broadcast()
+        cacheCondition.unlock()
+    }
+
     static func parseNumstat(_ output: String) -> (additions: Int, deletions: Int) {
         output.split(separator: "\n").reduce(into: (additions: 0, deletions: 0)) { totals, line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
@@ -138,6 +200,25 @@ enum SessionWorkspaceInspector {
             let relative = String(absolute.path.dropFirst(root.path.count + 1))
             return workspaceOutput(url: absolute, relativePath: relative, root: root)
         }.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    private static func cacheKey(cwd: String, candidateFilePaths: [String]) -> String {
+        let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        return ([normalizedCwd] + candidateFilePaths.sorted()).joined(separator: "\0")
+    }
+
+    private static func replacingSessionId(
+        in snapshot: SessionWorkspaceSnapshot,
+        with sessionId: String
+    ) -> SessionWorkspaceSnapshot {
+        SessionWorkspaceSnapshot(
+            sessionId: sessionId,
+            cwd: snapshot.cwd,
+            isGit: snapshot.isGit,
+            changes: snapshot.changes,
+            branch: snapshot.branch,
+            outputs: snapshot.outputs
+        )
     }
 
     private static func workspaceOutput(

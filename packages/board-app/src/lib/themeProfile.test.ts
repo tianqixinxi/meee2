@@ -14,8 +14,9 @@ describe('themeProfile', () => {
     document.documentElement.removeAttribute('style')
   })
 
-  it('normalizes missing or invalid profiles to the Claude preset', () => {
+  it('normalizes missing or invalid profiles to the Codex preset', () => {
     expect(normalizeThemeProfile(null)).toEqual(DEFAULT_THEME_PROFILE)
+    expect(DEFAULT_THEME_PROFILE.presetId).toBe('codex')
     expect(parseThemeProfile({ schemaVersion: 2 })).toBeNull()
     expect(parseThemeProfile({
       ...DEFAULT_THEME_PROFILE,
@@ -37,7 +38,7 @@ describe('themeProfile', () => {
 
     expect(parsed?.presetId).toBe('codex')
     expect(parsed?.light.backgroundColor).toBe('#FFFFFF')
-    expect(parsed?.light.sidebarColor).toBe('#F3F6FA')
+    expect(parsed?.light.sidebarColor).toBe('#FFFFFF')
     expect(parsed?.dark.contrast).toBe(62)
     expect(exported.light.uiFont).toBeUndefined()
     expect(exported.light.translucentSidebar).toBeUndefined()
@@ -66,7 +67,7 @@ describe('themeProfile', () => {
     applyThemeProfile(profile, 'light')
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#339CFF')
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#FFFFFF')
-    expect(document.documentElement.style.getPropertyValue('--sidebar-bg')).toBe('#F3F6FA')
+    expect(document.documentElement.style.getPropertyValue('--sidebar-bg')).toBe('#FFFFFF')
     expect(document.documentElement.style.getPropertyValue('--rail-accent')).toBe('#339CFF')
     expect(document.documentElement.style.getPropertyValue('--bg-rail-gradient')).toContain('rgba')
 

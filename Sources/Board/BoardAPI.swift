@@ -1075,7 +1075,7 @@ enum BoardAPI {
             .filter { $0.kind == "file" }
             .map(\.value)
 
-        return SessionWorkspaceInspector.inspect(
+        return SessionWorkspaceInspector.inspectCached(
             sessionId: storedSession?.sessionId ?? pluginSession?.id ?? rawSessionId,
             cwd: cwd,
             candidateFilePaths: candidateFilePaths

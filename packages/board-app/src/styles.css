@@ -1,60 +1,50 @@
-/* Claude 风格 design tokens：warm paper / terracotta accent / serif headings。
-   原则：
-   - 背景偏暖褐（#262624 家族），避免冷硬的 #1a 纯灰
-   - accent 用 Claude 赤陶色 #CC785C，饱和度比 #ff9500 低一档
-   - 状态色从霓虹饱和 → 柔和有呼吸感
-   - 加一组字体 token：serif 用于标题 / 标签，sans 用于正文
-*/
+/* Codex 风格默认 tokens：neutral canvas / cool gray rail / blue accent。 */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
   --color-scheme: dark;
 
-  /* 背景阶梯 —— 暖褐 */
-  --bg: #262624;
-  --bg-elevated: #30302E;
-  --bg-elevated-2: #3A3A38;
-  --bg-paper: #2C2B29;          /* 卡片主体底色（比 bg 略亮，带一点"纸"感）*/
-  --surface: #30302E;           /* 抬起的卡片/列底色（widget 列、canvas-kind-hint 等），比 bg 高一档 */
+  --bg: #101214;
+  --bg-elevated: #1A1E22;
+  --bg-elevated-2: #242A31;
+  --bg-paper: #171B20;
+  --surface: #1A1E22;
   --bg-app-gradient:
-    linear-gradient(145deg, rgba(43, 43, 39, 0.96), rgba(27, 27, 25, 0.98) 52%, rgba(35, 32, 29, 0.98)),
+    linear-gradient(145deg, rgba(26, 30, 34, 0.97), rgba(16, 18, 20, 0.99) 52%, rgba(20, 24, 29, 0.98)),
     var(--bg);
   --bg-rail-gradient:
-    linear-gradient(180deg, rgba(32, 32, 29, 0.98), rgba(26, 26, 24, 0.98)),
+    linear-gradient(180deg, rgba(23, 27, 32, 0.99), rgba(16, 19, 23, 0.99)),
     var(--bg-elevated);
-  --input-bg: #242421;
-  --input-bg-focus: #292925;
+  --input-bg: #12161A;
+  --input-bg-focus: #171B20;
   --modal-backdrop:
-    linear-gradient(180deg, rgba(18, 17, 15, 0.72), rgba(8, 8, 7, 0.76));
-  --modal-bg: #2D2C29;
-  --modal-footer-bg: rgba(24, 23, 21, 0.36);
-  --panel-bg: rgba(35, 34, 31, 0.76);
-  --panel-bg-hover: rgba(204, 120, 92, 0.055);
+    linear-gradient(180deg, rgba(12, 15, 18, 0.72), rgba(5, 7, 9, 0.78));
+  --modal-bg: #171B20;
+  --modal-footer-bg: rgba(14, 17, 21, 0.42);
+  --panel-bg: rgba(23, 27, 32, 0.78);
+  --panel-bg-hover: rgba(77, 166, 255, 0.07);
   --terminal-bg: var(--bg);
   --terminal-fg: var(--text);
   --terminal-fallback: var(--text-dim);
-  --scrollbar-thumb: rgba(168, 165, 155, 0.42);
-  --scrollbar-thumb-hover: rgba(245, 244, 239, 0.55);
+  --scrollbar-thumb: rgba(158, 170, 184, 0.38);
+  --scrollbar-thumb-hover: rgba(244, 247, 251, 0.54);
 
-  /* 文字阶梯 —— 暖米白，不要纯白 */
-  --text: #F5F4EF;
-  --text-dim: #A8A59B;
-  --text-faint: #6B6862;
+  --text: #F4F7FB;
+  --text-dim: #9DA8B5;
+  --text-faint: #66717E;
 
-  /* Claude 赤陶色作为主 accent */
-  --accent: #CC785C;
-  --accent-hover: #D6896E;
-  --accent-subtle: rgba(204, 120, 92, 0.14);
-  --rail-accent: #CC785C;
-  --rail-accent-hover: #D6896E;
-  --rail-accent-subtle: rgba(204, 120, 92, 0.16);
-  --rail-active-bg: rgba(204, 120, 92, 0.18);
-  --rail-active-border: rgba(204, 120, 92, 0.30);
-  --rail-focus-ring: rgba(204, 120, 92, 0.28);
+  --accent: #4DA6FF;
+  --accent-hover: #74B9FF;
+  --accent-subtle: rgba(77, 166, 255, 0.16);
+  --rail-accent: #4DA6FF;
+  --rail-accent-hover: #74B9FF;
+  --rail-accent-subtle: rgba(77, 166, 255, 0.18);
+  --rail-active-bg: rgba(77, 166, 255, 0.18);
+  --rail-active-border: rgba(77, 166, 255, 0.30);
+  --rail-focus-ring: rgba(77, 166, 255, 0.28);
 
-  /* 边框 —— 和背景同色系 */
-  --border: #3A3A38;
-  --border-strong: #4B4A47;
+  --border: #29313A;
+  --border-strong: #3A4652;
 
   /* 状态色 —— 全部压低饱和度，跟 Claude 整体气质匹配 */
   --success: #7FA982;           /* 鼠尾草绿 */
@@ -82,48 +72,48 @@
 :root[data-theme="light"] {
   color-scheme: light;
   --color-scheme: light;
-  --bg: #F4F1EA;
-  --bg-elevated: #FFFFFF;
-  --bg-elevated-2: #ECE7DD;
-  --bg-paper: #FBF8F1;
-  --surface: #FFFFFF;           /* 抬起的卡片/列底色 —— light 下用纯白让它从暖底浮起 */
+  --bg: #FFFFFF;
+  --bg-elevated: #F7F9FC;
+  --bg-elevated-2: #E9EEF5;
+  --bg-paper: #FFFFFF;
+  --surface: #FFFFFF;
   --bg-app-gradient:
-    linear-gradient(145deg, rgba(255, 252, 244, 0.98), rgba(241, 235, 225, 0.98)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.99), rgba(243, 246, 250, 0.98)),
     var(--bg);
   --bg-rail-gradient:
-    linear-gradient(180deg, rgba(255, 253, 248, 0.98), rgba(239, 233, 224, 0.98)),
+    linear-gradient(180deg, rgba(247, 249, 252, 0.99), rgba(237, 242, 248, 0.99)),
     var(--bg-elevated);
-  --input-bg: #FFFDF8;
+  --input-bg: #F7F9FC;
   --input-bg-focus: #FFFFFF;
   --modal-backdrop:
-    linear-gradient(180deg, rgba(238, 232, 222, 0.72), rgba(218, 211, 200, 0.78));
-  --modal-bg: #FFFDF8;
-  --modal-footer-bg: rgba(238, 232, 222, 0.62);
-  --panel-bg: rgba(255, 253, 248, 0.88);
-  --panel-bg-hover: rgba(190, 92, 61, 0.08);
+    linear-gradient(180deg, rgba(231, 236, 243, 0.72), rgba(207, 215, 225, 0.78));
+  --modal-bg: #FFFFFF;
+  --modal-footer-bg: rgba(237, 242, 248, 0.68);
+  --panel-bg: rgba(247, 249, 252, 0.9);
+  --panel-bg-hover: rgba(51, 156, 255, 0.08);
   --terminal-bg: var(--bg);
   --terminal-fg: var(--text);
   --terminal-fallback: var(--text-dim);
-  --text: #25211D;
-  --text-dim: #6B6258;
-  --text-faint: #9A9084;
-  --accent: #B95F43;
-  --accent-hover: #A94F35;
-  --accent-subtle: rgba(185, 95, 67, 0.14);
-  --rail-accent: #B95F43;
-  --rail-accent-hover: #A94F35;
-  --rail-accent-subtle: rgba(185, 95, 67, 0.12);
-  --rail-active-bg: rgba(185, 95, 67, 0.14);
-  --rail-active-border: rgba(185, 95, 67, 0.24);
-  --rail-focus-ring: rgba(185, 95, 67, 0.22);
-  --border: #DDD4C7;
-  --border-strong: #C8BCAe;
+  --text: #1A1C1F;
+  --text-dim: #5D6875;
+  --text-faint: #8C98A6;
+  --accent: #339CFF;
+  --accent-hover: #2089EC;
+  --accent-subtle: rgba(51, 156, 255, 0.13);
+  --rail-accent: #339CFF;
+  --rail-accent-hover: #2089EC;
+  --rail-accent-subtle: rgba(51, 156, 255, 0.12);
+  --rail-active-bg: rgba(51, 156, 255, 0.14);
+  --rail-active-border: rgba(51, 156, 255, 0.24);
+  --rail-focus-ring: rgba(51, 156, 255, 0.22);
+  --border: #D9E0E8;
+  --border-strong: #BEC8D4;
   --success: #567F5E;
   --warning: #A76F36;
   --danger: #AD514F;
   --info: #4F7895;
-  --scrollbar-thumb: rgba(107, 98, 88, 0.36);
-  --scrollbar-thumb-hover: rgba(64, 57, 50, 0.54);
+  --scrollbar-thumb: rgba(93, 104, 117, 0.32);
+  --scrollbar-thumb-hover: rgba(49, 58, 68, 0.5);
 }
 
 html,
@@ -244,6 +234,10 @@ textarea {
   grid-template-rows: 1fr auto;
   grid-template-columns: var(--sidebar-width, 288px) 1fr;
   height: 100%;
+}
+
+html.board-sidebar-rail--collapsed .app {
+  --sidebar-width: 0px;
 }
 
 .first-run {
@@ -848,6 +842,50 @@ textarea {
   color: var(--text-dim);
   z-index: 140;
   transition: width 140ms ease, min-width 140ms ease, padding 140ms ease;
+}
+
+.workspace-rail[hidden] {
+  display: none;
+}
+
+/* Native app titlebar control: sits immediately after the real macOS traffic
+ * lights. BoardWebWindowController injects their measured position and keeps
+ * this rectangle clickable inside the WKWebView drag region. */
+.workspace-rail__toggle {
+  position: fixed;
+  z-index: 180;
+  top: 4px;
+  left: 72px;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.workspace-rail__toggle svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.workspace-rail__toggle:hover,
+.workspace-rail__toggle:focus-visible {
+  border: 0;
+  outline: none;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.meee2-board-shell .workspace-rail__toggle {
+  top: calc(var(--titlebar-btn-center-y, 13px) - 12px);
+  left: calc(var(--titlebar-lights-right, 64px) + 8px);
 }
 
 .workspace-rail__top {
@@ -16588,6 +16626,7 @@ body.session-launcher-sidebar-resizing * {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   min-height: 42px;
   padding: 4px 10px 8px 14px;
@@ -16601,8 +16640,15 @@ body.session-launcher-sidebar-resizing * {
   gap: 9px;
 }
 
+.session-launcher__composer-left {
+  flex: 1 1 360px;
+  flex-wrap: wrap;
+}
+
 .session-launcher__composer-right {
+  flex: 0 1 auto;
   justify-content: flex-end;
+  margin-left: auto;
 }
 
 .session-launcher__runtime {
@@ -16963,8 +17009,8 @@ body.session-launcher-sidebar-resizing * {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  background: #050505;
-  color: #e8e8e8;
+  background: var(--native-terminal-bg, var(--terminal-bg));
+  color: var(--native-terminal-fg, var(--text));
 }
 
 .session-launcher-terminal__header {
@@ -16974,7 +17020,15 @@ body.session-launcher-sidebar-resizing * {
   gap: 16px;
   min-height: 48px;
   padding: 9px 14px;
-  background: #101010;
+  background: var(--native-terminal-bg, var(--terminal-bg));
+  color: var(--native-terminal-fg, var(--text));
+}
+
+/* rail 折叠后，标题仍与 macOS traffic lights / 折叠按钮同处一行；
+ * 只避让左侧原生控件，不牺牲整行垂直空间。44px = 8px 间距 + 24px
+ * 折叠按钮 + 12px 内容间距。 */
+html.board-sidebar-rail--collapsed .session-launcher-terminal__header {
+  padding-left: calc(var(--titlebar-lights-right, 64px) + 44px);
 }
 
 .session-launcher-terminal__header div {
@@ -17005,20 +17059,20 @@ body.session-launcher-sidebar-resizing * {
   align-items: center;
   min-width: 0;
   gap: 6px;
-  color: rgba(232, 232, 232, 0.58);
+  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 58%, transparent);
   font-size: 11px;
 }
 
 .session-launcher-terminal__header span b,
 .session-launcher-terminal__header span i {
   flex: 0 0 auto;
-  color: rgba(232, 232, 232, 0.78);
+  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 78%, transparent);
   font-style: normal;
   font-weight: 650;
 }
 
 .session-launcher-terminal__header span i {
-  color: rgba(232, 232, 232, 0.34);
+  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 34%, transparent);
   font-weight: 500;
 }
 
@@ -17351,7 +17405,7 @@ body.session-launcher-sidebar-resizing * {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background: #050505;
+  background: var(--native-terminal-bg, var(--terminal-bg));
 }
 
 .session-launcher-terminal__content {
@@ -17363,11 +17417,13 @@ body.session-launcher-sidebar-resizing * {
 }
 
 .session-launcher-terminal__environment-dock {
+  display: flex;
   min-width: 0;
   min-height: 0;
+  align-items: flex-start;
+  padding: 12px;
   overflow: hidden;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
-  background: #111213;
+  background: var(--native-terminal-bg, var(--terminal-bg));
 }
 
 .session-artifacts-panel {
@@ -17387,13 +17443,25 @@ body.session-launcher-sidebar-resizing * {
 
 .session-environment {
   display: flex;
-  height: 100%;
+  width: 100%;
+  height: auto;
+  max-height: 33.333%;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
-  background: #111213;
-  color: rgba(232, 232, 232, 0.78);
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--native-terminal-fg, var(--text)) 16%, transparent);
+  border-radius: 12px;
+  background: var(--native-terminal-bg, var(--terminal-bg));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.26);
+  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 74%, transparent);
+}
+
+:root[data-theme="light"] .session-environment {
+  border-color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 13%, transparent);
+  box-shadow:
+    0 4px 14px rgba(37, 33, 29, 0.09),
+    0 1px 2px rgba(37, 33, 29, 0.05);
 }
 
 .session-environment__header {
@@ -17402,12 +17470,11 @@ body.session-launcher-sidebar-resizing * {
   align-items: center;
   justify-content: space-between;
   padding: 7px 11px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
 }
 
 .session-environment__header h3 {
   margin: 0;
-  color: rgba(232, 232, 232, 0.86);
+  color: var(--native-terminal-fg, var(--text));
   font-size: 12px;
   font-weight: 680;
 }
@@ -17416,7 +17483,7 @@ body.session-launcher-sidebar-resizing * {
   display: grid;
   align-content: start;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
 }
 
 .session-environment__section {
@@ -17425,7 +17492,6 @@ body.session-launcher-sidebar-resizing * {
   align-items: start;
   gap: 8px;
   padding: 10px 11px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
 }
 
 .session-environment__section h4 {
@@ -17433,7 +17499,7 @@ body.session-launcher-sidebar-resizing * {
   align-items: center;
   gap: 6px;
   margin: 1px 0 0;
-  color: rgba(232, 232, 232, 0.42);
+  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 44%, transparent);
   font-size: 11px;
   font-weight: 620;
 }
@@ -17473,7 +17539,7 @@ body.session-launcher-sidebar-resizing * {
 .session-environment__branch {
   display: block;
   overflow: hidden;
-  color: rgba(232, 232, 232, 0.72);
+  color: var(--text-dim);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -17482,7 +17548,7 @@ body.session-launcher-sidebar-resizing * {
 }
 
 .session-environment__empty {
-  color: rgba(232, 232, 232, 0.28);
+  color: var(--text-faint);
   line-height: 18px;
 }
 
@@ -17510,14 +17576,14 @@ body.session-launcher-sidebar-resizing * {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: rgba(232, 232, 232, 0.62);
+  color: var(--text-dim);
   text-align: left;
 }
 
 .session-environment__files button:hover,
 .session-environment__files button:focus-visible {
-  background: rgba(232, 232, 232, 0.07);
-  color: rgba(232, 232, 232, 0.9);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
 }
 
 .session-environment__files button:disabled {
@@ -17690,10 +17756,13 @@ body.session-launcher-sidebar-resizing * {
 
   .session-launcher__composer-left {
     justify-content: flex-start;
+    width: 100%;
   }
 
   .session-launcher__composer-right {
     justify-content: space-between;
+    width: 100%;
+    margin-left: 0;
   }
 
   .session-launcher__runtime {

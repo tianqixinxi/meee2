@@ -1,5 +1,5 @@
 import { FileText, GitBranch, GitCompare, Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { fetchSessionEnvironment, openSessionEnvironmentOutput } from '../api'
 import { useI18n } from '../lib/i18n'
@@ -8,6 +8,7 @@ import type { SessionEnvironmentSnapshot } from '../types'
 interface SessionEnvironmentPanelProps {
   sessionId: string
   refreshKey?: string | null
+  refreshStatus?: string | null
 }
 
 type CacheEntry = {
@@ -16,14 +17,19 @@ type CacheEntry = {
 }
 
 const CACHE_LIMIT = 24
+const ACTIVE_REFRESH_MS = 5_000
+const RESTING_REFRESH_MS = 15_000
 const cache = new Map<string, CacheEntry>()
 const pending = new Map<string, Promise<SessionEnvironmentSnapshot>>()
 
-function requestEnvironment(sessionId: string, refreshKey: string): Promise<SessionEnvironmentSnapshot> {
+function requestEnvironment(
+  sessionId: string,
+  refreshKey: string,
+  force = false,
+): Promise<SessionEnvironmentSnapshot> {
   const cached = cache.get(sessionId)
-  if (cached?.refreshKey === refreshKey) return Promise.resolve(cached.data)
-  const requestKey = `${sessionId}:${refreshKey}`
-  const existing = pending.get(requestKey)
+  if (!force && cached?.refreshKey === refreshKey) return Promise.resolve(cached.data)
+  const existing = pending.get(sessionId)
   if (existing) return existing
   const request = fetchSessionEnvironment(sessionId)
     .then((data) => {
@@ -36,12 +42,32 @@ function requestEnvironment(sessionId: string, refreshKey: string): Promise<Sess
       }
       return data
     })
-    .finally(() => pending.delete(requestKey))
-  pending.set(requestKey, request)
+    .finally(() => pending.delete(sessionId))
+  pending.set(sessionId, request)
   return request
 }
 
-export function SessionEnvironmentPanel({ sessionId, refreshKey }: SessionEnvironmentPanelProps) {
+export function sessionEnvironmentRefreshInterval(refreshStatus?: string | null): number {
+  const status = refreshStatus?.trim().toLowerCase() ?? ''
+  return status === 'starting'
+    || status === 'running'
+    || status === 'active'
+    || status === 'thinking'
+    || status === 'compacting'
+    || status.includes('tool')
+    ? ACTIVE_REFRESH_MS
+    : RESTING_REFRESH_MS
+}
+
+function canRefreshEnvironment(): boolean {
+  return document.visibilityState === 'visible' && document.hasFocus()
+}
+
+export function SessionEnvironmentPanel({
+  sessionId,
+  refreshKey,
+  refreshStatus,
+}: SessionEnvironmentPanelProps) {
   const { t } = useI18n()
   const normalizedRefreshKey = refreshKey ?? ''
   const initialData = cache.get(sessionId)?.data ?? null
@@ -49,24 +75,72 @@ export function SessionEnvironmentPanel({ sessionId, refreshKey }: SessionEnviro
   const [loading, setLoading] = useState(initialData === null)
   const [openingPath, setOpeningPath] = useState<string | null>(null)
   const [openError, setOpenError] = useState(false)
+  const mountedRef = useRef(true)
+  const activeSessionIdRef = useRef(sessionId)
+  activeSessionIdRef.current = sessionId
 
   useEffect(() => {
-    let cancelled = false
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const refresh = useCallback((force = false) => {
     const cached = cache.get(sessionId)?.data ?? null
-    setData(cached)
-    setLoading(cached === null)
-    requestEnvironment(sessionId, normalizedRefreshKey)
+    if (!force) {
+      setData(cached)
+      setLoading(cached === null)
+    }
+    return requestEnvironment(sessionId, normalizedRefreshKey, force)
       .then((next) => {
-        if (!cancelled) setData(next)
+        if (mountedRef.current && activeSessionIdRef.current === sessionId) setData(next)
       })
       .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (mountedRef.current && activeSessionIdRef.current === sessionId) setLoading(false)
       })
-    return () => {
-      cancelled = true
-    }
   }, [normalizedRefreshKey, sessionId])
+
+  useEffect(() => {
+    if (canRefreshEnvironment()) void refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    const intervalMs = sessionEnvironmentRefreshInterval(refreshStatus)
+    let timer: number | null = null
+    let stopped = false
+
+    const schedule = () => {
+      if (stopped) return
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(async () => {
+        timer = null
+        if (stopped) return
+        if (canRefreshEnvironment()) await refresh(true)
+        schedule()
+      }, intervalMs)
+    }
+    const refreshOnFocus = () => {
+      if (!canRefreshEnvironment()) return
+      void refresh(true)
+      schedule()
+    }
+    const refreshOnVisibility = () => {
+      if (document.visibilityState === 'visible') refreshOnFocus()
+    }
+
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnVisibility)
+    if (canRefreshEnvironment()) void refresh(true)
+    schedule()
+    return () => {
+      stopped = true
+      if (timer !== null) window.clearTimeout(timer)
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnVisibility)
+    }
+  }, [refresh, refreshStatus])
 
   const handleOpenOutput = async (path: string) => {
     setOpeningPath(path)
