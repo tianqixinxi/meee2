@@ -181,9 +181,9 @@ function fallbackCanvasList(): CanvasList {
     memberships: [],
     canvases: [{
       id: FALLBACK_CANVAS_ID,
-      name: 'Monitor',
+      name: 'Canvas',
       scope: 'personal',
-      kind: 'monitor',
+      kind: 'board',
       isDefault: true,
       workspacePath: '',
       ownerUserId: 'local-user',
@@ -198,8 +198,7 @@ function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): 
 }
 
 function isWorkspaceCanvas(canvas: CanvasList['canvases'][number] | null | undefined): boolean {
-  void canvas
-  return true
+  return canvasKind(canvas) === 'board'
 }
 
 function canvasListSignature(list: CanvasList): string {
@@ -1036,17 +1035,6 @@ export default function App() {
     window.dispatchEvent(new CustomEvent('meee2:open-command-palette'))
   }, [])
 
-  const initialMonitorCanvasSelectedRef = useRef(false)
-  useEffect(() => {
-    if (initialMonitorCanvasSelectedRef.current || !canvasList || workspaceMode !== 'planner') return
-    initialMonitorCanvasSelectedRef.current = true
-    const monitorCanvas = canvasList.canvases.find((canvas) => canvas.kind === 'monitor' && canvas.isDefault)
-      ?? canvasList.canvases.find((canvas) => canvas.kind === 'monitor')
-    if (monitorCanvas && monitorCanvas.id !== activeCanvasId) {
-      handleSetActiveCanvas(monitorCanvas.id)
-    }
-  }, [activeCanvasId, canvasList, handleSetActiveCanvas, workspaceMode])
-
   const workspaceCanvasIds = useMemo(() => (
     (canvasList?.canvases ?? [])
       .filter(isWorkspaceCanvas)
@@ -1247,8 +1235,12 @@ export default function App() {
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
     if (nextMode === 'artifacts') setArtifactSessionFilter(null)
     if (nextMode === 'settings') setSettingsCategory('general')
+    if (nextMode === 'planner' && activeWorkspaceCanvasKind === 'monitor') {
+      const firstCanvas = canvasList?.canvases.find((canvas) => canvasKind(canvas) === 'board')
+      if (firstCanvas) handleSetActiveCanvas(firstCanvas.id)
+    }
     setWorkspaceMode(nextMode)
-  }, [])
+  }, [activeWorkspaceCanvasKind, canvasList?.canvases, handleSetActiveCanvas])
 
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
@@ -1294,20 +1286,18 @@ export default function App() {
   }
 
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
-  const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
+  const showCanvasLoading = activeCanvasLoading && workspaceMode === 'planner'
 
   return (
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
         <WorkspaceRail
-          canvases={canvasList.canvases}
-          activeCanvasId={activeCanvasId}
           mode={workspaceMode}
           userProfile={userProfile}
           onModeChange={handleWorkspaceModeChange}
           detailRef={setWorkspaceRailDetail}
         />
-        <div className={`board-area${workspaceMode === 'planner' && activeWorkspaceCanvasKind === 'monitor' ? ' board-area--monitor' : ''}`}>
+        <div className={`board-area${workspaceMode === 'monitor' ? ' board-area--monitor' : ''}`}>
           {readinessReport && !readinessReport.ready && (
             <Notice
               tone="warning"
@@ -1365,61 +1355,34 @@ export default function App() {
               unifiedSidebar
               sidebarContainer={workspaceRailDetail}
             />
+          ) : workspaceMode === 'monitor' ? (
+            <WorkspaceMonitor
+              refreshTick={activeCanvasRefreshTick}
+              onOpenItem={handleOpenMonitorItem}
+              onOpenAllSessions={openQuickSessionSearch}
+            />
           ) : workspaceMode === 'planner' ? (
-            activeWorkspaceCanvasKind === 'monitor' ? (
-              <PlannerGraph
-                canvasId={activeWorkspaceCanvasId}
-                canvasName={activeWorkspaceCanvas?.name ?? 'Monitor'}
-                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
-                userProfile={userProfile}
-                boardState={boardState.state}
-                clearRevision={plannerClearRevision}
-                refreshTick={activeCanvasRefreshTick}
-                onPlannerStateChange={setActivePlannerState}
-                onOpenSubCanvas={handleSetActiveCanvas}
-                onNotify={pushToast}
-                onApplyTemplate={handleApplyTemplate}
-                canvasMonitor={activeCanvasMonitor}
-                dialogCollapsed={plannerPanelCollapsed}
-                onDialogCollapsedChange={setPlannerPanelCollapsed}
-                flowContent={(
-                  <WorkspaceMonitor
-                    activeCanvasId={activeWorkspaceCanvasId}
-                    canvases={workspaceCanvases}
-                    refreshTick={activeCanvasRefreshTick}
-                    onOpenItem={handleOpenMonitorItem}
-                    onOpenAllSessions={openQuickSessionSearch}
-                  />
-                )}
-              />
-            ) : (
-              <PlannerGraph
-                canvasId={activeWorkspaceCanvasId}
-                canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
-                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
-                userProfile={userProfile}
-                boardState={boardState.state}
-                clearRevision={plannerClearRevision}
-                refreshTick={activeCanvasRefreshTick}
-                onPlannerStateChange={setActivePlannerState}
-                onOpenSubCanvas={handleSetActiveCanvas}
-                onNotify={pushToast}
-                onApplyTemplate={handleApplyTemplate}
-                canvasMonitor={activeCanvasMonitor}
-                dialogCollapsed={plannerPanelCollapsed}
-                onDialogCollapsedChange={setPlannerPanelCollapsed}
-              />
-            )
+            <PlannerGraph
+              canvasId={activeWorkspaceCanvasId}
+              canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+              workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              clearRevision={plannerClearRevision}
+              refreshTick={activeCanvasRefreshTick}
+              onPlannerStateChange={setActivePlannerState}
+              onOpenSubCanvas={handleSetActiveCanvas}
+              onNotify={pushToast}
+              onApplyTemplate={handleApplyTemplate}
+              canvasMonitor={activeCanvasMonitor}
+              dialogCollapsed={plannerPanelCollapsed}
+              onDialogCollapsedChange={setPlannerPanelCollapsed}
+            />
           ) : workspaceMode === 'templates' ? (
             <TemplatesView
-              canvases={canvasList.canvases}
-              activeCanvasId={activeCanvasId}
 	              userProfile={userProfile}
-	              boardState={boardState.state}
-		              onOpenCanvas={handleSetActiveCanvas}
-		              onApplyTemplate={handleApplyTemplate}
-		              onCreateTemplateDraft={handleCreateTemplateDraft}
-	              onReplaceTemplate={handleReplaceTemplate}
+	              onApplyTemplate={handleApplyTemplate}
+	              onCreateTemplateDraft={handleCreateTemplateDraft}
 	              onUpdateTemplateMetadata={handleUpdateTemplateMetadata}
 	              onImportClaudeWorkflow={handleImportClaudeWorkflow}
 	              onUploadClaudeWorkflow={handleUploadClaudeWorkflow}

@@ -1,4 +1,5 @@
 import {
+  Activity,
   Cable,
   Archive,
   LayoutTemplate,
@@ -8,17 +9,14 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useLayoutEffect } from 'react'
-import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
 import { Tooltip } from './Tooltip'
 import meee2AppIcon from '../../../../Resources/AppIcon.iconset/icon_32x32@2x.png'
 
-export type WorkspaceMode = 'session' | 'planner' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
+export type WorkspaceMode = 'session' | 'planner' | 'monitor' | 'templates' | 'artifacts' | 'team' | 'integrations' | 'settings'
 
 interface WorkspaceRailProps {
-  canvases: CanvasInfo[]
-  activeCanvasId: string
   mode: WorkspaceMode
   userProfile: UserProfile | null
   onModeChange: (mode: WorkspaceMode) => void
@@ -103,6 +101,13 @@ export function WorkspaceRail({
           onClick={() => onModeChange('planner')}
         >
           <Network size={20} />
+        </RailButton>
+        <RailButton
+          label={t('rail.monitor')}
+          active={mode === 'monitor'}
+          onClick={() => onModeChange('monitor')}
+        >
+          <Activity size={20} />
         </RailButton>
         <RailButton
           label={t('rail.templates')}

@@ -2,17 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../lib/i18n'
 import { WorkspaceRail } from './WorkspaceRail'
-import type { CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
-
-const canvases: CanvasInfo[] = [{
-  id: 'monitor',
-  name: 'Monitor',
-  scope: 'personal',
-  kind: 'monitor',
-  isDefault: true,
-  workspacePath: '',
-}]
 
 const connectedProfile: UserProfile = {
   connected: true,
@@ -29,20 +19,22 @@ const connectedProfile: UserProfile = {
 
 describe('WorkspaceRail', () => {
   it('exposes Session as the default top-level workspace', () => {
+    const onModeChange = vi.fn()
     render(
       <I18nProvider>
         <WorkspaceRail
-          canvases={canvases}
-          activeCanvasId="monitor"
           mode="planner"
           userProfile={null}
-          onModeChange={vi.fn()}
+          onModeChange={onModeChange}
         />
       </I18nProvider>,
     )
 
     expect(screen.getByRole('button', { name: 'Session' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Canvas' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Monitor' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Monitor' }))
+    expect(onModeChange).toHaveBeenCalledWith('monitor')
     expect(screen.getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Progress' })).not.toBeInTheDocument()
     expect(screen.getByTestId('workspace-rail-detail')).toBeInTheDocument()
@@ -58,8 +50,6 @@ describe('WorkspaceRail', () => {
     const view = render(
       <I18nProvider>
         <WorkspaceRail
-          canvases={canvases}
-          activeCanvasId="monitor"
           mode="planner"
           userProfile={null}
           onModeChange={vi.fn()}
@@ -71,8 +61,6 @@ describe('WorkspaceRail', () => {
     view.rerender(
       <I18nProvider>
         <WorkspaceRail
-          canvases={canvases}
-          activeCanvasId="monitor"
           mode="session"
           userProfile={null}
           onModeChange={vi.fn()}
@@ -91,8 +79,6 @@ describe('WorkspaceRail', () => {
     render(
       <I18nProvider>
         <WorkspaceRail
-          canvases={canvases}
-          activeCanvasId="monitor"
           mode="planner"
           userProfile={null}
           onModeChange={onModeChange}
@@ -110,8 +96,6 @@ describe('WorkspaceRail', () => {
     render(
       <I18nProvider>
         <WorkspaceRail
-          canvases={canvases}
-          activeCanvasId="monitor"
           mode="planner"
           userProfile={connectedProfile}
           onModeChange={onModeChange}

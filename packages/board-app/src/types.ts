@@ -702,13 +702,13 @@ export interface PlanningCanvas {
   /**
    * Canvas runtime 5-atom model (canvas-runtime-data-model.md). Store-owned,
    * decode-tolerant — absent on legacy canvases. Surfaced by the Swift
-   * PlannerGraphStateEnvelope.canvas once a proposal creates it. Drives the
-   * MonitorGrid.
+   * PlannerGraphStateEnvelope.canvas once a proposal creates it. Retained for
+   * stored-data compatibility; Monitor is now a separate workspace surface.
    */
   monitorSpec?: MonitorSpec | null
   /**
-   * Atom 1 — named addressable storage locations on this canvas. Rendered as a
-   * read-only "数据源" rail on the canvas. Absent / `[]` on legacy canvases.
+   * Atom 1 — named addressable storage locations on this canvas. Used by node
+   * contracts and inspector actions; no longer rendered as a Canvas rail.
    * Twin of Zod contract/datasource.ts `DataSource` (only the fields we render
    * are mirrored). */
   dataSources?: DataSourceRecord[]
@@ -1442,10 +1442,8 @@ export interface Widget {
   source?: WidgetSource
   mapping?: WidgetMapping
   /**
-   * canvas-spec §7.2 — only meaningful when `kind === 'html'` (a Monitor:
-   * Artifact{source:canvas-runtime, widget:html}). Planner-authored HTML string
-   * rendered SAFELY in a sandboxed iframe (MonitorHtmlFrame) with the read-only
-   * CanvasRuntimeView injected via postMessage. Ignored for other kinds.
+   * Legacy planner-authored HTML monitor payload. Retained for decode
+   * compatibility and never executed by the simplified Canvas renderer.
    */
   html?: string
 }

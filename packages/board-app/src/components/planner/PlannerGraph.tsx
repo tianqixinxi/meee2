@@ -1,20 +1,15 @@
 import {
   Background,
   Controls,
-  MarkerType,
-  NodeResizer,
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
-  type Edge,
-  type Node,
   type NodeChange,
-  type NodeProps,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertTriangle, Database, EyeOff, FileText, Layers, Maximize2, Minimize2, Pin, PlayCircle, RefreshCw, UserCircle } from 'lucide-react'
+import { AlertTriangle, PlayCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
   applyPlannerProposal,
   approvePlannerProposal,
@@ -36,14 +31,13 @@ import {
   injectToSession,
   inspectPlannerDrift,
   openKanbanItemSubCanvas,
-  patchCanvasRenderValues,
   proposePlannerGraphChange,
   rejectPlannerProposal,
   rerunPlannerNode,
   resumeClosedPlannerSessions,
-  runCanvasSceneAction,
   sendPlannerActivity,
   updatePlannerNodeGate,
+  updatePlannerNodeLayout,
   updatePlannerNodeStatus,
   ApiRequestError,
 } from '../../api'
@@ -60,11 +54,6 @@ import type {
   PlanningNodeStatus,
   Session,
   CanvasScope,
-  CanvasSceneAction,
-  CanvasSceneSpec,
-  CanvasObject,
-  CanvasRelation,
-  CanvasRenderObjectValues,
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { CanvasTemplate, TeamMember, UserProfile } from '../../api'
@@ -84,7 +73,6 @@ import {
 import { classifyPlannerIntent } from '../../lib/plannerIntent'
 import {
   buildConfirmedPlanGraphChanges,
-  isScenePlanDraft,
   parseConfirmedPlanDraft,
 } from '../../lib/plannerPlanDraft'
 import {
@@ -102,13 +90,8 @@ import {
 } from '../../lib/guide'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
-import { DataSourceRail } from './DataSourceRail'
 import { NodeInspectorModal, truncateMessageText } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
-import { CanvasSceneLayer, resolveCanvasSceneState, type CanvasSceneActionPayload } from './CanvasSceneLayer'
-import { MonitorGrid } from './monitor/MonitorGrid'
-import { MonitorHtmlFrame } from './monitor/MonitorHtmlFrame'
-import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { TransformInsertEdge } from './TransformInsertEdge'
@@ -137,123 +120,19 @@ interface Props {
   onApplyTemplate?: (templateId: string, name: string, scope: CanvasScope, adaptationPrompt?: string) => Promise<string>
   onPlannerStateChange?: (state: PlannerGraphState | null) => void
   canvasMonitor?: CanvasMonitor | null
-  flowContent?: ReactNode
   forceDialogOpenTick?: number
   dialogCollapsed?: boolean
   onDialogCollapsedChange?: (collapsed: boolean) => void
 }
 
-type CanvasObjectAction = 'open' | 'hide' | 'toggleCollapsed' | 'togglePinned'
-
-interface CanvasObjectNodeData extends Record<string, unknown> {
-  object: CanvasObject
-  subtitle: string
-  detail?: string | null
-  badge: string
-  collapsed: boolean
-  pinned: boolean
-  canEdit: boolean
-  onAction: (object: CanvasObject, action: CanvasObjectAction) => void
-}
-
-type CanvasObjectFlowNode = Node<CanvasObjectNodeData, 'canvasObject'>
-type CanvasFlowNode = PlannerGraphNode | CanvasObjectFlowNode
-type CanvasFlowEdge = PlannerGraphEdge | Edge<NonNullable<PlannerGraphEdge['data']>>
+type CanvasFlowNode = PlannerGraphNode
 
 const nodeTypes = {
   plannerNode: PlannerNodeCard,
-  canvasObject: CanvasObjectCard,
 }
 
 const edgeTypes = {
   transformInsert: TransformInsertEdge,
-}
-
-function CanvasObjectCard({ data, selected }: NodeProps<CanvasObjectFlowNode>) {
-  const object = data.object
-  const kind = object.entityRef?.kind ?? object.renderOnly?.kind ?? 'object'
-  const Icon = iconForCanvasObject(object)
-  return (
-    <div
-      className={[
-        'canvas-object-card',
-        `canvas-object-card--${cssClassToken(kind)}`,
-        data.collapsed ? 'is-collapsed' : '',
-        data.pinned ? 'is-pinned' : '',
-        selected ? 'is-selected' : '',
-      ].filter(Boolean).join(' ')}
-      data-renderer={object.renderer}
-    >
-      <NodeResizer
-        minWidth={160}
-        minHeight={data.collapsed ? 64 : 96}
-        handleClassName="planner-node__resize-handle"
-        lineClassName="planner-node__resize-line"
-      />
-      <div className="canvas-object-card__header">
-        <span className="canvas-object-card__icon" aria-hidden>
-          <Icon size={15} />
-        </span>
-        <div className="canvas-object-card__title">
-          <strong>{object.label}</strong>
-          <span>{data.subtitle}</span>
-        </div>
-        <div className="canvas-object-card__actions nodrag">
-          <button
-            type="button"
-            title={data.collapsed ? 'Expand' : 'Collapse'}
-            aria-label={data.collapsed ? 'Expand object' : 'Collapse object'}
-            onClick={(event) => {
-              event.stopPropagation()
-              data.onAction(object, 'toggleCollapsed')
-            }}
-          >
-            {data.collapsed ? <Maximize2 size={13} /> : <Minimize2 size={13} />}
-          </button>
-          <button
-            type="button"
-            title={data.pinned ? 'Unpin' : 'Pin'}
-            aria-label={data.pinned ? 'Unpin object' : 'Pin object'}
-            onClick={(event) => {
-              event.stopPropagation()
-              data.onAction(object, 'togglePinned')
-            }}
-          >
-            <Pin size={13} />
-          </button>
-          {data.canEdit && (
-            <button
-              type="button"
-              title="Hide"
-              aria-label="Hide object"
-              onClick={(event) => {
-                event.stopPropagation()
-                data.onAction(object, 'hide')
-              }}
-            >
-              <EyeOff size={13} />
-            </button>
-          )}
-        </div>
-      </div>
-      {!data.collapsed && (
-        <div className="canvas-object-card__body">
-          <span className="canvas-object-card__badge">{data.badge}</span>
-          {data.detail && <p>{data.detail}</p>}
-          <button
-            type="button"
-            className="canvas-object-card__open nodrag"
-            onClick={(event) => {
-              event.stopPropagation()
-              data.onAction(object, 'open')
-            }}
-          >
-            Open
-          </button>
-        </div>
-      )}
-    </div>
-  )
 }
 
 const PANEL_WIDTH_KEY = 'meee2.planner.aiPanelWidth'
@@ -282,10 +161,8 @@ function PlannerGraphInner({
   refreshTick = 0,
   onOpenSubCanvas,
   onNotify,
-  onApplyTemplate,
   onPlannerStateChange,
   canvasMonitor = null,
-  flowContent = null,
   forceDialogOpenTick = 0,
   dialogCollapsed,
   onDialogCollapsedChange,
@@ -297,8 +174,6 @@ function PlannerGraphInner({
   // Chunk D: planner-side approval notifications. Diff node workflowRunState
   // for gate-wait transitions across PlannerGraph re-fetches.
   const prevPlannerNodesRef = useRef<Map<string, import('../../types').PlanningNode>>(new Map())
-  const processedPokerActionKeysRef = useRef<Set<string>>(new Set())
-  const processedPokerDispatchKeysRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     const nodes = plannerState?.nodes
     if (!nodes) return
@@ -804,57 +679,6 @@ function PlannerGraphInner({
       .finally(() => setBusy(false))
   }, [canvasId, handleGraphStateChanged, notifyError, openInternalSessionForNode, warnMCPWritebackIfNeeded, workspacePath])
 
-  const handleSceneAction = useCallback((nodeId: string, actionId: string, payload?: CanvasSceneActionPayload) => {
-    const scene = plannerState?.canvas.sceneSpec
-    if (scene?.kind === 'poker-table'
-        && ['start-game', 'step', 'resume-auto', 'pause-auto'].includes(actionId)) {
-      setBusy(true)
-      setError(null)
-      runCanvasSceneAction(canvasId, { actionId, ...payload })
-        .then((result) => {
-          handleGraphStateChanged(result.graph)
-          if (actionId !== 'pause-auto') {
-            dispatchNextPokerAutoNode(result.graph, handleCreateNodeSession, { force: actionId === 'step' })
-          }
-        })
-        .catch((err) => notifyError((err as Error).message || 'Failed to run scene action'))
-        .finally(() => setBusy(false))
-      return
-    }
-    const node = plannerState?.nodes.find((item) => item.id === nodeId)
-    if (!node) {
-      notifyError('Scene action target node is missing.')
-      return
-    }
-    const action = scene?.actions?.find((item) => item.id === actionId)
-    const pokerPrompt = scene?.kind === 'poker-table' && action
-      ? buildPokerSceneActionPrompt(scene, plannerState?.artifacts ?? [], action, node)
-      : ''
-    const initialPrompt = pokerPrompt
-      || action?.prompt?.trim()
-      || (action ? `${action.label} (${action.id})` : `Run scene action ${actionId}`)
-    handleCreateNodeSession(nodeId, dispatchRunnerForExecutor(node.executorType), initialPrompt)
-  }, [canvasId, handleCreateNodeSession, handleGraphStateChanged, notifyError, plannerState?.artifacts, plannerState?.canvas.sceneSpec, plannerState?.nodes])
-
-  useEffect(() => {
-    if (!plannerState) return
-    const request = pokerAutoStepRequest(plannerState)
-    if (request && !processedPokerActionKeysRef.current.has(request.key)) {
-      processedPokerActionKeysRef.current.add(request.key)
-      runCanvasSceneAction(canvasId, { actionId: 'step' })
-        .then((result) => {
-          handleGraphStateChanged(result.graph)
-          dispatchNextPokerAutoNode(result.graph, handleCreateNodeSession)
-        })
-        .catch((err) => notifyError((err as Error).message || 'Failed to advance Poker scene'))
-      return
-    }
-    const dispatchRequest = pokerAutoDispatchRequest(plannerState)
-    if (!dispatchRequest || processedPokerDispatchKeysRef.current.has(dispatchRequest.key)) return
-    processedPokerDispatchKeysRef.current.add(dispatchRequest.key)
-    dispatchNextPokerAutoNode(plannerState, handleCreateNodeSession)
-  }, [canvasId, handleCreateNodeSession, handleGraphStateChanged, notifyError, plannerState])
-
   const handleReplaceNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
     const cwd = workspacePath.trim()
     if (!cwd) {
@@ -1233,15 +1057,6 @@ function PlannerGraphInner({
     return map
   }, [boardState?.sessions, plannerState?.nodes])
 
-  const renderAwareNodes = useMemo(
-    () => nodesWithRenderValues(plannerState),
-    [plannerState],
-  )
-  const renderSceneSpec = useMemo(
-    () => sceneSpecForRender(plannerState),
-    [plannerState],
-  )
-
   const persistNodeLayout = useCallback((
     nodeId: string,
     layout: { x: number; y: number; width: number | null; height: number | null },
@@ -1252,79 +1067,14 @@ function PlannerGraphInner({
         nodes: current.nodes.map((item) => item.id === nodeId ? { ...item, layout } : item),
       }
       : current)
-    patchCanvasRenderValues(canvasId, {
-      objects: {
-        [`node:${nodeId}`]: {
-          x: layout.x,
-          y: layout.y,
-          width: layout.width,
-          height: layout.height,
-        },
-      },
-    })
+    updatePlannerNodeLayout(canvasId, nodeId, layout)
       .then(handleGraphStateChanged)
       .catch((err) => notifyError((err as Error).message || 'Failed to save node layout'))
   }, [canvasId, handleGraphStateChanged, notifyError])
 
-  const persistRenderObjectValues = useCallback((
-    objectId: string,
-    patch: CanvasRenderObjectValues,
-  ) => {
-    setPlannerState((current) => current
-      ? applyRenderObjectValuePatch(current, objectId, patch)
-      : current)
-    patchCanvasRenderValues(canvasId, {
-      objects: {
-        [objectId]: patch,
-      },
-    })
-      .then(handleGraphStateChanged)
-      .catch((err) => notifyError((err as Error).message || 'Failed to save render values'))
-  }, [canvasId, handleGraphStateChanged, notifyError])
-
-  const handleCanvasObjectAction = useCallback((object: CanvasObject, action: CanvasObjectAction) => {
-    const values = object.values ?? {}
-    if (action === 'hide') {
-      persistRenderObjectValues(object.id, { ...values, hidden: true })
-      return
-    }
-    if (action === 'toggleCollapsed') {
-      persistRenderObjectValues(object.id, { ...values, collapsed: !values.collapsed })
-      return
-    }
-    if (action === 'togglePinned') {
-      const pinned = !values.pinned
-      persistRenderObjectValues(object.id, { ...values, pinned, zIndex: pinned ? 1000 : 0 })
-      return
-    }
-    const ref = object.entityRef
-    if (!ref) return
-    if (ref.kind === 'node') {
-      handleOpenNodeDetails(ref.nodeId || ref.id)
-      return
-    }
-    if (ref.kind === 'artifact' && ref.nodeId) {
-      handleOpenNodeArtifact(ref.nodeId, ref.id)
-      return
-    }
-    if (ref.kind === 'session') {
-      handleOpenNodeSession(ref.id, ref.nodeId ?? '')
-      return
-    }
-    if (ref.kind === 'subCanvas') {
-      onOpenSubCanvas?.(ref.id)
-    }
-  }, [
-    handleOpenNodeArtifact,
-    handleOpenNodeDetails,
-    handleOpenNodeSession,
-    onOpenSubCanvas,
-    persistRenderObjectValues,
-  ])
-
   const graph = useMemo(() => {
     const built = buildPlannerGraph({
-      nodes: renderAwareNodes,
+      nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
       firstClassEdges: plannerState?.canvas.edges ?? [],
@@ -1367,35 +1117,21 @@ function PlannerGraphInner({
       canEditInternals: plannerState?.canEditInternals ?? true,
       monitorItemsByNodeId,
     })
-    const nodeObjects = applyRenderValuesToFlowNodes(built.nodes, plannerState)
-    const overlay = buildCanvasObjectOverlay({
-      state: plannerState,
-      baseNodes: nodeObjects,
-      onAction: handleCanvasObjectAction,
-      canEdit: variant !== 'template' && (plannerState?.canEditInternals ?? true),
-    })
-    const withObjects = {
-      nodes: [...nodeObjects, ...overlay.nodes],
-      edges: [...built.edges, ...overlay.edges],
-    }
-    if (!guidedNodeId) return withObjects
+    if (!guidedNodeId) return built
     return {
-      ...withObjects,
-      nodes: withObjects.nodes.map((node) => isPlannerGraphNode(node) && node.id === guidedNodeId
+      ...built,
+      nodes: built.nodes.map((node) => node.id === guidedNodeId
         ? { ...node, data: { ...node.data, guided: true } }
         : node),
     }
   }, [
-    renderAwareNodes,
+    plannerState?.nodes,
     plannerState?.states,
     plannerState?.edges,
     plannerState?.canvas.edges,
     plannerState?.artifacts,
     plannerState?.canvas.ownerId,
     plannerState?.canvas.visibility,
-    plannerState?.renderObjects,
-    plannerState?.renderRelations,
-    plannerState?.renderProfile,
     canvasId,
     liveSessionIds,
     ioArtifactVisibility,
@@ -1424,7 +1160,6 @@ function PlannerGraphInner({
     nodeAssignmentsByNodeId,
     handleRequestAssign,
     handleOpenAssignedSubCanvas,
-    handleCanvasObjectAction,
     plannerState?.canEditInternals,
     monitorItemsByNodeId,
     guidedNodeId,
@@ -1433,7 +1168,7 @@ function PlannerGraphInner({
   const reviewGraph = useMemo(() => {
     if (!plannerState || !proposal) return { nodes: [], edges: [] }
     return buildPlannerGraph({
-      nodes: renderAwareNodes,
+      nodes: plannerState.nodes,
       states: plannerState.states,
       edges: plannerState.edges,
       firstClassEdges: plannerState.canvas.edges ?? [],
@@ -1449,7 +1184,7 @@ function PlannerGraphInner({
       avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
     })
   }, [
-    renderAwareNodes,
+    plannerState?.nodes,
     plannerState?.states,
     plannerState?.edges,
     plannerState?.canvas.edges,
@@ -1514,7 +1249,6 @@ function PlannerGraphInner({
     setFlowNodes((current) => {
       let changed = false
       const next = current.map((node) => {
-        if (!isPlannerGraphNode(node)) return node
         if (node.data.virtual) return node
         const progress = nodeProgressByNodeId.get(node.id) ?? null
         if (liveProgressEqual(node.data.liveProgress ?? null, progress)) return node
@@ -1544,30 +1278,20 @@ function PlannerGraphInner({
           // setState updater 里不能直接触发别的 state 更新 / 网络请求,推到微任务。
           queueMicrotask(() => {
             for (const node of pending) {
-              if (isPlannerGraphNode(node)) {
-                if (node.data.virtual) continue
-                persistNodeLayout(node.data.node.id, {
-                  x: node.position.x,
-                  y: node.position.y,
-                  width: node.width ?? node.measured?.width ?? null,
-                  height: node.height ?? node.measured?.height ?? null,
-                })
-              } else {
-                persistRenderObjectValues(node.data.object.id, {
-                  ...(node.data.object.values ?? {}),
-                  x: node.position.x,
-                  y: node.position.y,
-                  width: node.width ?? node.measured?.width ?? null,
-                  height: node.height ?? node.measured?.height ?? null,
-                })
-              }
+              if (node.data.virtual) continue
+              persistNodeLayout(node.data.node.id, {
+                x: node.position.x,
+                y: node.position.y,
+                width: node.width ?? node.measured?.width ?? null,
+                height: node.height ?? node.measured?.height ?? null,
+              })
             }
           })
         }
       }
       return next
     })
-  }, [persistNodeLayout, persistRenderObjectValues])
+  }, [persistNodeLayout])
 
   // UI-5.2 — persist per-canvas viewport pose after every pan/zoom so the user
   // can opt in to "Lock viewport on switch" later and still get the right
@@ -1597,16 +1321,6 @@ function PlannerGraphInner({
   }, [])
 
   const handleNodeDragStop = useCallback((node: CanvasFlowNode) => {
-    if (!isPlannerGraphNode(node)) {
-      persistRenderObjectValues(node.data.object.id, {
-        ...(node.data.object.values ?? {}),
-        x: node.position.x,
-        y: node.position.y,
-        width: node.width ?? node.measured?.width ?? node.data.object.values?.width ?? null,
-        height: node.height ?? node.measured?.height ?? node.data.object.values?.height ?? null,
-      })
-      return
-    }
     if (node.data.virtual) return
     // 拖动只改位置 —— 尺寸保留 layout 里已有的值(可能为空)。不要把当时测量到的
     // 内容高度写进 layout,否则一拖动就把高度冻死,后续内容变多会被裁切。宽高只由
@@ -1618,7 +1332,7 @@ function PlannerGraphInner({
       width: prior?.width ?? null,
       height: prior?.height ?? null,
     })
-  }, [persistNodeLayout, persistRenderObjectValues])
+  }, [persistNodeLayout])
 
   useEffect(() => {
     if (dialogCollapsed === undefined) {
@@ -1723,7 +1437,7 @@ function PlannerGraphInner({
     if (!selectedNodeId) return null
     const graphNode = graph.nodes.find((node) => node.id === selectedNodeId)
     return plannerState?.nodes.find((node) => node.id === selectedNodeId)
-      ?? (graphNode && isPlannerGraphNode(graphNode) ? graphNode.data.node : null)
+      ?? graphNode?.data.node
       ?? null
   }, [graph.nodes, plannerState, selectedNodeId])
 
@@ -1732,7 +1446,7 @@ function PlannerGraphInner({
     if (!assignDialogNodeId) return null
     const graphNode = graph.nodes.find((node) => node.id === assignDialogNodeId)
     return plannerState?.nodes.find((node) => node.id === assignDialogNodeId)
-      ?? (graphNode && isPlannerGraphNode(graphNode) ? graphNode.data.node : null)
+      ?? graphNode?.data.node
       ?? null
   }, [assignDialogNodeId, graph.nodes, plannerState])
 
@@ -1931,32 +1645,6 @@ function PlannerGraphInner({
     const trimmed = message.trim()
     const confirmedPlan = parseConfirmedPlanDraft(trimmed)
     if (confirmedPlan) {
-      if (isScenePlanDraft(confirmedPlan)) {
-        if (!onApplyTemplate) {
-          notifyError('Scene template creation is not available in this surface.')
-          return
-        }
-        setBusy(true)
-        setError(null)
-        onApplyTemplate(
-          confirmedPlan.templateId,
-          confirmedPlan.title,
-          'personal',
-          confirmedPlan.adaptationPrompt ?? confirmedPlan.prompt,
-        )
-          .then(() => {
-            emitPlannerEvent('planner.scene_template_applied', {
-              canvasId,
-              templateId: confirmedPlan.templateId,
-              message: confirmedPlan.title,
-              intent: 'edit',
-            })
-            onNotify?.('success', `Created scene canvas from ${confirmedPlan.templateId}.`)
-          })
-          .catch((err) => notifyError((err as Error).message || 'Failed to create scene canvas'))
-          .finally(() => setBusy(false))
-        return
-      }
       setBusy(true)
       setError(null)
       const actorId = plannerState?.access.actorId
@@ -2080,32 +1768,9 @@ function PlannerGraphInner({
     }
 
     handleGenerate(trimmed)
-  }, [canvasId, handleGenerate, hasActionableDrift, notifyError, onApplyTemplate, onNotify, plannerState, proposal, selectedNode, userProfile?.userId])
+  }, [canvasId, handleGenerate, hasActionableDrift, notifyError, onNotify, plannerState, proposal, selectedNode, userProfile?.userId])
 
-  const handleUseRecommendedTemplate = useCallback((recommendation?: { id?: string; title?: string; templateId?: string; adaptationPrompt?: string }) => {
-    if (recommendation?.templateId) {
-      if (!onApplyTemplate) {
-        notifyError('Scene template creation is not available in this surface.')
-        return
-      }
-      setBusy(true)
-      setError(null)
-      const name = recommendation.title?.trim() || canvasName || 'Scene Canvas'
-      onApplyTemplate(recommendation.templateId, name, 'personal', recommendation.adaptationPrompt)
-        .then(() => {
-          emitPlannerEvent('planner.scene_template_applied', {
-            canvasId,
-            templateId: recommendation.templateId,
-            message: name,
-            intent: 'edit',
-            reason: 'recommended-template',
-          })
-          onNotify?.('success', `Created scene canvas from ${recommendation.templateId}.`)
-        })
-        .catch((err) => notifyError((err as Error).message || 'Failed to create scene canvas'))
-        .finally(() => setBusy(false))
-      return
-    }
+  const handleUseRecommendedTemplate = useCallback(() => {
     setBusy(true)
     setError(null)
     createPlannerDeliveryPipeline(canvasId)
@@ -2118,7 +1783,7 @@ function PlannerGraphInner({
       })
       .catch((err) => setError((err as Error).message || 'Failed to create recommended template proposal'))
       .finally(() => setBusy(false))
-  }, [canvasId, canvasName, notifyError, onApplyTemplate, onNotify])
+  }, [canvasId])
 
   const handleApproveAndApply = useCallback(() => {
     if (!proposal || busy) return
@@ -2317,69 +1982,7 @@ function PlannerGraphInner({
             )}
           </div>
         )}
-        <div
-          className={[
-            'planner-flow',
-            renderSceneSpec ? 'planner-flow--scene' : '',
-          ].filter(Boolean).join(' ')}
-          data-guide-target="planner-flow"
-        >
-          {flowContent ? (
-            flowContent
-          ) : renderSceneSpec ? (
-            <CanvasSceneLayer
-              sceneSpec={renderSceneSpec}
-              nodes={plannerState?.nodes ?? []}
-              artifacts={plannerState?.artifacts ?? []}
-              onOpenNode={handleOpenNodeDetails}
-              onSceneAction={handleSceneAction}
-            />
-          ) : (
-            <>
-          {/* Canvas runtime Atom 4 — owner-curated monitor grid. Self-gates on
-              the canvas.monitor.v2 flag and renders nothing when the canvas has
-              no monitorSpec, so legacy canvases are visually unchanged. */}
-          {plannerState && plannerState.canvas.id === canvasId && (
-            <MonitorGrid
-              spec={plannerState.canvas.monitorSpec}
-              nodes={plannerState.nodes ?? []}
-              states={plannerState.states ?? []}
-              artifacts={plannerState.artifacts ?? []}
-              viewerId={userProfile?.userId}
-            />
-          )}
-          {/* canvas-spec §7.2 — planner-authored HTML Monitor(s). A monitor is an
-              artifact node with artifactSource=canvas-runtime + widget.kind='html';
-              its planner-authored HTML renders SANDBOXED in MonitorHtmlFrame and
-              consumes the read-only canvasRuntime snapshot. Additive — the card
-              MonitorGrid above is unchanged. */}
-          {plannerState &&
-            plannerState.canvas.id === canvasId &&
-            (plannerState.nodes ?? [])
-              .filter(
-                (n) =>
-                  n.widget?.kind === 'html' &&
-                  n.widget?.html &&
-                  n.artifactSource?.kind === 'canvas-runtime',
-              )
-              .map((n) => (
-                <div key={`monitor-html-${n.id}`} className="planner-monitor-html">
-                  <MonitorHtmlFrame
-                    title={n.title}
-                    html={n.widget!.html!}
-                    runtime={plannerState.canvasRuntime}
-                  />
-                </div>
-              ))}
-          {/* Canvas runtime Atom 1 — read-only "数据源" rail. Renders nothing
-              when the canvas has no dataSources, so legacy canvases are
-              visually unchanged. */}
-          {plannerState && plannerState.canvas.id === canvasId && (
-            <DataSourceRail
-              canvasId={canvasId}
-              dataSources={plannerState.canvas.dataSources}
-            />
-          )}
+        <div className="planner-flow" data-guide-target="planner-flow">
           {((showWorkspacePreview && activeProposal) || hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
               {showWorkspacePreview && activeProposal && (
@@ -2494,12 +2097,8 @@ function PlannerGraphInner({
               edgeTypes={edgeTypes}
               onNodesChange={handleNodesChange}
               onNodeClick={(_, node) => {
-                if (isPlannerGraphNode(node)) {
-                  setSelectedNodeId(node.data.node.id)
-                  setNodeModalOpen(true)
-                } else {
-                  handleCanvasObjectAction(node.data.object, 'open')
-                }
+                setSelectedNodeId(node.data.node.id)
+                setNodeModalOpen(true)
               }}
               onNodeDragStop={(_, node) => handleNodeDragStop(node)}
               onPaneClick={() => {
@@ -2517,7 +2116,6 @@ function PlannerGraphInner({
               proOptions={{ hideAttribution: true }}
             >
               <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
-              <PlannerOverviewMap nodes={flowNodes} edges={graph.edges} />
               <Controls className="planner-flow__controls" />
             </ReactFlow>
           ) : error ? (
@@ -2529,8 +2127,6 @@ function PlannerGraphInner({
             </div>
           ) : (
             <PlannerCanvasSkeleton canvasName={canvasName} />
-          )}
-            </>
           )}
         </div>
         </div>
@@ -2954,8 +2550,6 @@ function mergeGraphNodesPreservingPositions(
     if (!current) return nextNode
     const shouldUseProgramPosition =
       !current.dragging &&
-      isPlannerGraphNode(nextNode) &&
-      isPlannerGraphNode(current) &&
       (
         nextNode.data.virtual === true ||
         current.data.virtual === true ||
@@ -2981,305 +2575,11 @@ function mergeGraphNodesPreservingPositions(
       // 简略进展 — liveProgress 由 nodeProgressByNodeId 注入到 flowNodes(见上面的
       // 注入 effect),buildPlannerGraph 不产出它。结构重建时从 current 带过来,
       // 否则 plannerState 一变就把卡片上的「最近 AI 回复」清掉、要等下一次轮询才回填。
-      data: isPlannerGraphNode(nextNode) && isPlannerGraphNode(current) && current.data.liveProgress != null
+      data: current.data.liveProgress != null
         ? { ...nextNode.data, liveProgress: current.data.liveProgress }
         : nextNode.data,
     } as CanvasFlowNode
   })
-}
-
-function applyRenderValuesToFlowNodes(
-  nodes: PlannerGraphNode[],
-  state: PlannerGraphState | null,
-): PlannerGraphNode[] {
-  const objectByNodeId = new Map<string, CanvasObject>()
-  for (const object of state?.renderObjects ?? []) {
-    if (object.entityRef?.kind !== 'node') continue
-    const nodeId = object.entityRef.nodeId || object.entityRef.id
-    if (nodeId) objectByNodeId.set(nodeId, object)
-  }
-  if (objectByNodeId.size === 0) return nodes
-  return nodes
-    .filter((node) => objectByNodeId.get(node.data.node.id)?.values?.hidden !== true)
-    .map((node) => {
-      const values = objectByNodeId.get(node.data.node.id)?.values
-      if (!values) return node
-      return {
-        ...node,
-        zIndex: values.pinned ? 1000 : values.zIndex ?? node.zIndex,
-        className: [
-          node.className,
-          values.pinned ? 'is-render-pinned' : '',
-          values.collapsed ? 'is-render-collapsed' : '',
-        ].filter(Boolean).join(' '),
-      }
-    })
-}
-
-function buildCanvasObjectOverlay(input: {
-  state: PlannerGraphState | null
-  baseNodes: PlannerGraphNode[]
-  onAction: (object: CanvasObject, action: CanvasObjectAction) => void
-  canEdit: boolean
-}): { nodes: CanvasObjectFlowNode[]; edges: CanvasFlowEdge[] } {
-  const state = input.state
-  if (!state) return { nodes: [], edges: [] }
-  const baseByObjectId = new Map<string, PlannerGraphNode>()
-  const flowNodeIds = new Set<string>()
-  for (const node of input.baseNodes) {
-    baseByObjectId.set(`node:${node.data.node.id}`, node)
-    flowNodeIds.add(node.id)
-  }
-  const artifactsById = new Map((state.artifacts ?? []).map((artifact) => [artifact.id, artifact]))
-  const dataSourcesById = new Map((state.canvas.dataSources ?? []).map((source) => [source.id, source]))
-  const objects = (state.renderObjects ?? []).filter((object) =>
-    object.entityRef?.kind !== 'node'
-    && object.entityRef?.kind !== 'session'
-    && object.values?.hidden !== true
-    && object.renderOnly?.kind !== 'background',
-  )
-  const nodes = objects.map((object, index): CanvasObjectFlowNode => {
-    const values = object.values ?? {}
-    const position = positionForCanvasObject(object, index, baseByObjectId)
-    const size = defaultCanvasObjectSize(object)
-    const artifact = object.entityRef?.kind === 'artifact' ? artifactsById.get(object.entityRef.id) : undefined
-    const dataSource = object.entityRef?.kind === 'dataSource' ? dataSourcesById.get(object.entityRef.id) : undefined
-    const collapsed = values.collapsed === true
-    return {
-      id: object.id,
-      type: 'canvasObject',
-      position,
-      width: typeof values.width === 'number' ? values.width : size.width,
-      height: typeof values.height === 'number' ? values.height : (collapsed ? 72 : size.height),
-      zIndex: values.pinned ? 1000 : values.zIndex ?? 0,
-      data: {
-        object,
-        subtitle: subtitleForCanvasObject(object),
-        detail: detailForCanvasObject(object, artifact, dataSource),
-        badge: badgeForCanvasObject(object),
-        collapsed,
-        pinned: values.pinned === true,
-        canEdit: input.canEdit,
-        onAction: input.onAction,
-      },
-    }
-  })
-  for (const node of nodes) flowNodeIds.add(node.id)
-  const edges = buildRenderRelationEdges(state.renderRelations ?? [], flowNodeIds)
-  return { nodes, edges }
-}
-
-function buildRenderRelationEdges(
-  relations: CanvasRelation[],
-  flowNodeIds: Set<string>,
-): CanvasFlowEdge[] {
-  const result: CanvasFlowEdge[] = []
-  const seen = new Set<string>()
-  for (const relation of relations) {
-    if (relation.values?.visible === false) continue
-    const source = flowNodeIdForObjectId(relation.source.objectId)
-    const target = flowNodeIdForObjectId(relation.target.objectId)
-    if (!flowNodeIds.has(source) || !flowNodeIds.has(target)) continue
-    if (relation.kind === 'dependency' && !source.includes(':') && !target.includes(':')) continue
-    const id = `render-relation:${relation.id}`
-    const pairKey = `${source}->${target}:${relation.kind}`
-    if (seen.has(pairKey)) continue
-    seen.add(pairKey)
-    result.push({
-      id,
-      source,
-      target,
-      type: 'transformInsert',
-      animated: relation.kind === 'dataflow',
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: 'rgba(178, 174, 163, 0.52)',
-        width: 16,
-        height: 16,
-      },
-      data: {
-        preview: false,
-        perception: relation.kind === 'dataflow' ? 'flow' : 'neutral',
-        suppressInsert: true,
-      },
-      className: [
-        'planner-flow__edge',
-        'planner-flow__edge--render',
-        `planner-flow__edge--render-${cssClassToken(relation.kind)}`,
-      ].join(' '),
-      label: relation.values?.label,
-    })
-  }
-  return result
-}
-
-function flowNodeIdForObjectId(objectId: string): string {
-  return objectId.startsWith('node:') ? objectId.slice('node:'.length) : objectId
-}
-
-function positionForCanvasObject(
-  object: CanvasObject,
-  index: number,
-  baseByObjectId: Map<string, PlannerGraphNode>,
-): { x: number; y: number } {
-  const values = object.values ?? {}
-  if (typeof values.x === 'number' && typeof values.y === 'number') {
-    return { x: values.x, y: values.y }
-  }
-  const ownerNodeId = object.entityRef?.nodeId
-  const owner = ownerNodeId ? baseByObjectId.get(`node:${ownerNodeId}`) : undefined
-  if (owner) {
-    const lane = index % 3
-    const kind = object.entityRef?.kind
-    if (kind === 'session') return { x: owner.position.x, y: owner.position.y - 96 }
-    if (kind === 'subCanvas') return { x: owner.position.x, y: owner.position.y + (owner.height ?? 220) + 90 }
-    return { x: owner.position.x + (owner.width ?? 320) + 96, y: owner.position.y + lane * 132 }
-  }
-  if (object.entityRef?.kind === 'dataSource') {
-    return { x: -420, y: index * 132 }
-  }
-  return { x: 80 + (index % 4) * 260, y: 80 + Math.floor(index / 4) * 160 }
-}
-
-function defaultCanvasObjectSize(object: CanvasObject): { width: number; height: number } {
-  switch (object.entityRef?.kind ?? object.renderOnly?.kind) {
-    case 'artifact': return { width: 300, height: 132 }
-    case 'session': return { width: 220, height: 104 }
-    case 'dataSource': return { width: 280, height: 128 }
-    case 'subCanvas': return { width: 300, height: 132 }
-    case 'label': return { width: 220, height: 72 }
-    case 'asset': return { width: 260, height: 140 }
-    case 'region':
-    case 'container': return { width: 360, height: 220 }
-    default: return { width: 260, height: 116 }
-  }
-}
-
-function subtitleForCanvasObject(object: CanvasObject): string {
-  const kind = object.entityRef?.kind
-  if (kind === 'artifact') return object.entityRef?.reference ?? 'Artifact'
-  if (kind === 'session') return object.entityRef?.nodeId ? `Session for ${object.entityRef.nodeId}` : 'Session'
-  if (kind === 'dataSource') return 'Data source'
-  if (kind === 'subCanvas') return 'Sub-canvas'
-  if (kind === 'integrationEntity') return 'Integration'
-  return object.renderOnly?.kind ?? 'Render object'
-}
-
-function detailForCanvasObject(
-  object: CanvasObject,
-  artifact?: PlannerArtifact,
-  dataSource?: NonNullable<PlannerGraphState['canvas']['dataSources']>[number],
-): string | null {
-  if (artifact) return `${artifact.kind} · ${artifact.status || 'attached'}`
-  if (dataSource) return `${dataSource.kind} · v${dataSource.currentVersion}`
-  if (object.entityRef?.reference) return object.entityRef.reference
-  return null
-}
-
-function badgeForCanvasObject(object: CanvasObject): string {
-  return object.entityRef?.kind ?? object.renderOnly?.kind ?? object.renderer
-}
-
-function iconForCanvasObject(object: CanvasObject) {
-  switch (object.entityRef?.kind ?? object.renderOnly?.kind) {
-    case 'artifact': return FileText
-    case 'session': return UserCircle
-    case 'dataSource': return Database
-    case 'subCanvas':
-    case 'container':
-    case 'region': return Layers
-    default: return FileText
-  }
-}
-
-function cssClassToken(value: string): string {
-  return value.replace(/([a-z])([A-Z])/g, '$1-$2').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()
-}
-
-function isPlannerGraphNode(node: CanvasFlowNode): node is PlannerGraphNode {
-  return node.type === 'plannerNode'
-}
-
-function applyRenderObjectValuePatch(
-  state: PlannerGraphState,
-  objectId: string,
-  patch: CanvasRenderObjectValues,
-): PlannerGraphState {
-  const mergeValues = (current: CanvasRenderObjectValues | null | undefined): CanvasRenderObjectValues => ({
-    ...(current ?? {}),
-    ...patch,
-  })
-  const nextProfile = state.renderProfile
-    ? {
-      ...state.renderProfile,
-      values: {
-        ...state.renderProfile.values,
-        objects: {
-          ...(state.renderProfile.values.objects ?? {}),
-          [objectId]: mergeValues(state.renderProfile.values.objects?.[objectId]),
-        },
-      },
-    }
-    : state.renderProfile
-  return {
-    ...state,
-    renderProfile: nextProfile,
-    renderObjects: (state.renderObjects ?? []).map((object) => object.id === objectId
-      ? { ...object, values: mergeValues(object.values) }
-      : object),
-  }
-}
-
-function nodesWithRenderValues(state: PlannerGraphState | null): PlanningNode[] {
-  const nodes = state?.nodes ?? []
-  const objects = state?.renderObjects ?? []
-  if (nodes.length === 0 || objects.length === 0) return nodes
-  const valuesByNodeId = new Map<string, { x?: number | null; y?: number | null; width?: number | null; height?: number | null }>()
-  for (const object of objects) {
-    if (object.entityRef?.kind !== 'node') continue
-    const nodeId = object.entityRef.nodeId || object.entityRef.id
-    if (!nodeId || !object.values) continue
-    valuesByNodeId.set(nodeId, object.values)
-  }
-  if (valuesByNodeId.size === 0) return nodes
-  return nodes.map((node) => {
-    const values = valuesByNodeId.get(node.id)
-    if (!values) return node
-    const x = typeof values.x === 'number' ? values.x : node.layout?.x
-    const y = typeof values.y === 'number' ? values.y : node.layout?.y
-    if (typeof x !== 'number' || typeof y !== 'number') return node
-    return {
-      ...node,
-      layout: {
-        x,
-        y,
-        width: typeof values.width === 'number' ? values.width : (node.layout?.width ?? null),
-        height: typeof values.height === 'number' ? values.height : (node.layout?.height ?? null),
-      },
-    }
-  })
-}
-
-function sceneSpecForRender(state: PlannerGraphState | null): CanvasSceneSpec | null {
-  if (!state) return null
-  if (state.canvas.sceneSpec) return state.canvas.sceneSpec
-  if (state.renderProfile?.logic.layout !== 'spatial') return null
-  for (const object of state.renderObjects ?? []) {
-    if (object.renderOnly?.kind !== 'background') continue
-    const metadata = object.metadata
-    if (!isRecord(metadata)) continue
-    const sceneSpec = metadata.sceneSpec
-    if (isCanvasSceneSpec(sceneSpec)) return sceneSpec
-  }
-  return null
-}
-
-function isCanvasSceneSpec(value: unknown): value is CanvasSceneSpec {
-  return isRecord(value) && (value.kind === 'travel-squad' || value.kind === 'poker-table')
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 // 简略进展蒸馏 —— 从实时会话 DTO 里挑出卡片放大后要露的最少信息。优先使用
@@ -3517,158 +2817,6 @@ function PlannerWorkspacePreview({
       </ReactFlow>
     </div>
   )
-}
-
-function buildPokerSceneActionPrompt(
-  scene: CanvasSceneSpec,
-  artifacts: PlannerArtifact[],
-  action: CanvasSceneAction,
-  node: PlanningNode,
-): string {
-  if (!action.id.startsWith('ask-')) return ''
-  const playerId = action.id.replace(/^ask-/, '').toLowerCase()
-  if (!playerId || playerId === 'dealer') return ''
-  const state = resolveCanvasSceneState(scene, artifacts)
-  const players = Array.isArray(state.players) ? state.players : []
-  const actor = players
-    .map((item) => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null)
-    .find((item) => String(item?.id ?? '').toLowerCase() === playerId)
-  if (!actor) return action.prompt?.trim() ?? ''
-  const publicPlayers = players
-    .map((item) => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null)
-    .filter(Boolean)
-    .map((item) => ({
-      id: String(item?.id ?? ''),
-      name: String(item?.name ?? ''),
-      stack: item?.stack ?? null,
-      status: String(item?.status ?? ''),
-      seat: String(item?.seat ?? ''),
-      style: String(item?.style ?? ''),
-      holeCards: String(item?.id ?? '').toLowerCase() === playerId ? item?.holeCards ?? [] : ['hidden', 'hidden'],
-    }))
-  const pack = {
-    nodeContract: {
-      nodeId: node.id,
-      title: node.title,
-      goal: node.schema.goal,
-      output: `${playerId}-action.json`,
-    },
-    roleSlice: {
-      playerId,
-      phase: state.phase ?? 'Pre-flop',
-      pot: state.pot ?? 0,
-      nextActor: state.nextActor ?? state.nextAction ?? '',
-      communityCards: state.communityCards ?? [],
-      legalActions: state.legalActions ?? ['fold', 'call', 'raise'],
-      players: publicPlayers,
-      recentActionLog: Array.isArray(state.actionLog) ? state.actionLog.slice(-8) : [],
-    },
-    outputSchema: {
-      artifact: `${playerId}-action.json`,
-      playerId,
-      action: 'fold | call | raise | check',
-      amount: 'number | null',
-      rationale: 'string',
-    },
-  }
-  return [
-    action.prompt?.trim() || `现在轮到 ${playerId} 行动。`,
-    '',
-    'Use this deterministic Poker Context Pack. Do not assume hidden cards outside your role slice.',
-    JSON.stringify(pack, null, 2),
-  ].join('\n')
-}
-
-function dispatchNextPokerAutoNode(
-  graph: PlannerGraphState,
-  createSession: (nodeId: string, runner: PlannerDispatchRunner, initialPrompt?: string) => void,
-  options: { force?: boolean } = {},
-) {
-  const scene = graph.canvas.sceneSpec
-  if (!scene || scene.kind !== 'poker-table') return
-  const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
-  const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
-    ? state.setup as Record<string, unknown>
-    : {}
-  if (setup.autoRun === false && !options.force) return
-  const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
-  if (!nextActor || nextActor === 'setup') return
-  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
-  if (!action) return
-  const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
-  if (!node || node.executionMode === 'human' || node.executorType === 'human') return
-  if (node.status !== 'ready') return
-  createSession(node.id, dispatchRunnerForExecutor(node.executorType), buildPokerSceneActionPrompt(scene, graph.artifacts ?? [], action, node))
-}
-
-function pokerAutoDispatchRequest(graph: PlannerGraphState): { key: string } | null {
-  const scene = graph.canvas.sceneSpec
-  if (!scene || scene.kind !== 'poker-table') return null
-  const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
-  const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
-    ? state.setup as Record<string, unknown>
-    : {}
-  if (setup.autoRun === false) return null
-  const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
-  if (!['ada', 'bruno', 'mina'].includes(nextActor)) return null
-  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
-  if (!action) return null
-  const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
-  if (!node || node.executionMode === 'human' || node.executorType === 'human' || node.status !== 'ready') return null
-  const dealerNodeId = scene.orchestration?.stateNodeId
-    ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
-    ?? ''
-  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], dealerNodeId, scene.orchestration?.stateReference ?? 'game-state.json')
-  return {
-    key: [
-      graph.canvas.id,
-      nextActor,
-      node.id,
-      gameStateArtifact?.id ?? 'no-game-state',
-    ].join(':'),
-  }
-}
-
-function pokerAutoStepRequest(graph: PlannerGraphState): { key: string } | null {
-  const scene = graph.canvas.sceneSpec
-  if (!scene || scene.kind !== 'poker-table') return null
-  const state = resolveCanvasSceneState(scene, graph.artifacts ?? [])
-  const setup = state.setup && typeof state.setup === 'object' && !Array.isArray(state.setup)
-    ? state.setup as Record<string, unknown>
-    : {}
-  if (setup.autoRun === false) return null
-  const nextActor = String(state.nextActor ?? state.nextAction ?? '').trim().toLowerCase()
-  if (!['ada', 'bruno', 'mina'].includes(nextActor)) return null
-  const action = (scene.actions ?? []).find((item) => item.id === `ask-${nextActor}`)
-  if (!action) return null
-  const node = (graph.nodes ?? []).find((item) => item.id === action.nodeId)
-  if (!node || node.status !== 'done') return null
-  const actionArtifact = latestArtifactForSlot(graph.artifacts ?? [], node.id, `${nextActor}-action.json`)
-  if (!actionArtifact) return null
-  const dealerNodeId = scene.orchestration?.stateNodeId
-    ?? (scene.artifactBindings ?? []).find((item) => item.id === 'game-state')?.nodeId
-    ?? ''
-  const gameStateArtifact = latestArtifactForSlot(graph.artifacts ?? [], dealerNodeId, scene.orchestration?.stateReference ?? 'game-state.json')
-  return {
-    key: [
-      graph.canvas.id,
-      nextActor,
-      node.id,
-      actionArtifact.id,
-      gameStateArtifact?.id ?? 'no-game-state',
-    ].join(':'),
-  }
-}
-
-function latestArtifactForSlot(
-  artifacts: PlannerArtifact[],
-  nodeId: string,
-  reference: string,
-): PlannerArtifact | null {
-  return artifacts
-    .filter((artifact) => artifact.nodeId === nodeId && artifact.reference === reference)
-    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
-    .slice(-1)[0] ?? null
 }
 
 function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {

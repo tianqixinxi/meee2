@@ -366,10 +366,8 @@ enum WidgetKind: String, Codable, Equatable, CaseIterable {
     case matrix
     case badge
     case artifactPreview = "artifact-preview"
-    /// canvas-spec §7.2 — a Monitor is an Artifact{source:canvas-runtime,
-    /// widget:html}. `html` carries planner-authored HTML rendered in a
-    /// sandboxed iframe (board-app MonitorHtmlFrame). Additive; existing kinds
-    /// unchanged.
+    /// Legacy canvas-authored HTML monitor. Decoded for stored-data
+    /// compatibility, but the simplified Canvas renderer does not execute it.
     case html
 }
 
@@ -8482,7 +8480,6 @@ enum PlannerBoardBridge {
             detail: "canvas=\(String(canvasId.prefix(24)))"
         ) {
             let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-            let render = try store.renderProfileState(canvasId: canvasId)
             return PlannerGraphState(
                 canvas: state.canvas,
                 nodes: state.nodes,
@@ -8493,10 +8490,12 @@ enum PlannerBoardBridge {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                renderProfile: render.profile,
-                renderProfileStatus: render.status,
-                renderObjects: render.objects,
-                renderRelations: render.relations,
+                // Legacy render-profile fields stay on the wire for compatibility,
+                // but Canvas now renders directly from nodes, edges, and node.layout.
+                renderProfile: nil,
+                renderProfileStatus: nil,
+                renderObjects: [],
+                renderRelations: [],
                 canvasRuntime: canvasRuntimeView(
                     canvasId: canvasId,
                     canvas: state.canvas,

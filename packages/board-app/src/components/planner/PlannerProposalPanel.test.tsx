@@ -91,19 +91,19 @@ describe('PlannerProposalPanel empty canvas intake', () => {
     expect(screen.queryByText(/\*\*Input:/)).not.toBeInTheDocument()
     expect(screen.queryByText('What should I optimize for?')).not.toBeInTheDocument()
     const prompt = JSON.stringify(apiMocks.streamAssistantChat.mock.calls[0]?.[0]?.messages ?? [])
-    expect(prompt).toContain('A Meee2 canvas can be a workflow, monitor, or scene')
-    expect(prompt).toContain('Scene canvas rule')
-    expect(prompt).not.toContain('A Meee2 canvas is a graph of executable node cards connected by dependencies')
+    expect(prompt).toContain('A Meee2 canvas is an executable workflow graph')
+    expect(prompt).not.toContain('sceneSpec')
+    expect(prompt).not.toContain('travel-squad')
   })
 
-  it('submits a confirmed scene template payload when the model returns a poker scene plan', async () => {
+  it('normalizes a legacy scene response into an executable workflow plan', async () => {
     const onSubmit = vi.fn()
     apiMocks.streamAssistantChat.mockImplementation(() => streamText(JSON.stringify({
       action: 'plan',
       message: '这是一个牌桌 scene canvas。',
       plan: {
-        title: '德州扑克 Scene Canvas',
-        intro: '确认后用官方 Poker Table 模板创建新画布。',
+        title: '德州扑克执行计划',
+        intro: '确认后创建执行节点。',
         canvasPresentation: 'scene',
         templateId: 'poker-table',
         adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
@@ -118,7 +118,7 @@ describe('PlannerProposalPanel empty canvas intake', () => {
     render(
       <I18nProvider>
         <PlannerProposalPanel
-          canvasId="empty-canvas-scene-plan-test"
+          canvasId="empty-canvas-legacy-plan-test"
           canvasName="德州扑克"
           proposal={null}
           previewGraph={{ nodes: [], edges: [] }}
@@ -145,16 +145,15 @@ describe('PlannerProposalPanel empty canvas intake', () => {
       </I18nProvider>,
     )
 
-    expect(await screen.findByRole('heading', { name: '德州扑克 Scene Canvas' })).toBeInTheDocument()
-    expect(screen.getByText('Official scene template · Poker Table')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Use scene template' }))
+    expect(await screen.findByRole('heading', { name: '德州扑克执行计划' })).toBeInTheDocument()
+    expect(screen.queryByText('Official scene template · Poker Table')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Draft canvas' }))
 
     expect(onSubmit).toHaveBeenCalledTimes(1)
     const draft = parseConfirmedPlanDraft(String(onSubmit.mock.calls[0][0]))
     expect(draft).toMatchObject({
-      canvasPresentation: 'scene',
-      templateId: 'poker-table',
-      adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
+      canvasPresentation: 'workflow',
+      title: '德州扑克执行计划',
     })
   })
 

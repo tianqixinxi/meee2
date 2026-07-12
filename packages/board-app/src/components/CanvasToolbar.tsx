@@ -24,7 +24,6 @@ import {
 import {
   fetchTeamMembers,
   fetchTemplateCatalog,
-  revealCanvasRenderProfile,
   setPlannerCanvasDescription,
   streamAssistantChat,
   type TemplateMetadataInput,
@@ -719,9 +718,6 @@ export function CanvasToolbar({
   const recapSummary = recap?.summary?.trim() || ''
   const recapDetails = recap?.details ?? []
   const canExpandRecap = recapSummary.length > 0 || recapDetails.length > 0
-  const isSceneCanvas = Boolean(plannerState?.canvas.id === activeCanvas.id && hasScenePresentation(plannerState))
-  const renderProfileStatus = plannerState?.canvas.id === activeCanvas.id ? plannerState.renderProfileStatus : null
-  const renderProfileHasError = renderProfileStatus?.state === 'invalid-using-last-valid'
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
   const canSaveActiveCanvasAsTemplate = Boolean(
     onSaveCanvasAsTemplate && activeCanvas.kind !== 'monitor',
@@ -730,19 +726,11 @@ export function CanvasToolbar({
     ? { position: 'fixed', left: recapPosition.x, top: recapPosition.y }
     : undefined
 
-  const revealRenderProfile = () => {
-    revealCanvasRenderProfile(activeCanvas.id)
-      .catch((error) => {
-        setInfoError((error as Error).message || 'Failed to reveal render profile')
-      })
-  }
-
   return (
     <div
       className={[
         'canvas-toolbar',
         isMonitorCanvas ? 'canvas-toolbar--monitor' : '',
-        isSceneCanvas ? 'canvas-toolbar--scene' : '',
       ].filter(Boolean).join(' ')}
       ref={rootRef}
     >
@@ -826,18 +814,6 @@ export function CanvasToolbar({
         >
           <Info size={14} aria-hidden />
         </button>
-        {renderProfileHasError && (
-          <button
-            type="button"
-            className="canvas-toolbar__info"
-            aria-label="Render profile has an error"
-            title={renderProfileStatus?.error || 'Render profile has an error'}
-            onClick={revealRenderProfile}
-          >
-            <AlertTriangle size={14} aria-hidden />
-          </button>
-        )}
-
         {menuOpen && (
           <div className="canvas-toolbar__panel">
             <div className="canvas-toolbar__menu-tools">
@@ -1247,24 +1223,6 @@ export function CanvasToolbar({
                       <span>{t('canvas.aggregation')}</span>
                       <strong>{t('canvas.monitorAggregation')}</strong>
                     </div>
-                  )}
-                  {renderProfileStatus && (
-                    <>
-                      <div className="canvas-info-modal__row">
-                        <span>Render profile</span>
-                        <strong>{renderProfileStatus.state}</strong>
-                      </div>
-                      <div className="canvas-info-modal__row">
-                        <span>Profile file</span>
-                        <button type="button" className="ghost canvas-info-modal__inline-action" onClick={revealRenderProfile}>Reveal</button>
-                      </div>
-                      {renderProfileStatus.error && (
-                        <div className="canvas-info-modal__row">
-                          <span>Error</span>
-                          <strong>{renderProfileStatus.error}</strong>
-                        </div>
-                      )}
-                    </>
                   )}
                   <div className="canvas-info-modal__row">
                     <span>{t('canvas.visibility')}</span>
@@ -1848,13 +1806,6 @@ function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
 
 function templateKindForCanvas(canvas: CanvasInfo): TemplateMetadataInput['defaultCanvasKind'] {
   return canvas.kind === 'monitor' ? 'monitor' : 'board'
-}
-
-function hasScenePresentation(state: PlannerGraphState | null | undefined): boolean {
-  if (!state) return false
-  if (state.canvas.sceneSpec) return true
-  return state.renderProfile?.logic.layout === 'spatial'
-    && (state.renderObjects ?? []).some((object) => object.renderOnly?.kind === 'background')
 }
 
 function clampRecapPosition(x: number, y: number, width: number, height: number): { x: number; y: number } {

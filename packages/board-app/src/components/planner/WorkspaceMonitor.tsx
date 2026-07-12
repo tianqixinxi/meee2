@@ -16,8 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
 import { monitorItemOpenLabel, monitorItemSourceKind } from '../../lib/workspaceNavigation'
-import type { CanvasInfo, NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
-import { CanvasKindHint } from './CanvasKindHint'
+import type { NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
 import './planner.css'
 
 const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
@@ -41,16 +40,12 @@ interface MonitorLane {
 }
 
 interface WorkspaceMonitorProps {
-  activeCanvasId: string
-  canvases: CanvasInfo[]
   refreshTick: number
   onOpenItem: (item: PlannerMonitorItem) => void
   onOpenAllSessions: () => void
 }
 
 export function WorkspaceMonitor({
-  activeCanvasId,
-  canvases,
   refreshTick,
   onOpenItem,
   onOpenAllSessions,
@@ -63,8 +58,6 @@ export function WorkspaceMonitor({
   const [sourceFilter, setSourceFilter] = useState<MonitorSourceFilter>('all')
   const [sortMode, setSortMode] = useState<MonitorSort>('severity')
   const [collapsedLanes, setCollapsedLanes] = useState<MonitorLaneKey[]>([])
-  const activeCanvasName = monitorCanvasName(canvases.find((canvas) => canvas.id === activeCanvasId)?.name ?? t('monitor.title'))
-
   const loadMonitor = useCallback(() => {
     setError(null)
     fetchPlannerWorkspaceMonitor()
@@ -109,7 +102,10 @@ export function WorkspaceMonitor({
   return (
     <section className="planner-monitor" aria-label={t('monitor.title')}>
       <div className="planner-monitor__body">
-        <CanvasKindHint kind="monitor" />
+        <header className="planner-monitor__header">
+          <h1>{t('monitor.title')}</h1>
+          <p>{t('monitor.subtitle')}</p>
+        </header>
         <div className="planner-monitor__tools">
           <div className="planner-monitor__search">
             <Search size={13} aria-hidden />
@@ -208,7 +204,7 @@ export function WorkspaceMonitor({
                         />
                       ))}
                       {lane.items.length === 0 && (
-                        <div className="planner-monitor__empty">{activeCanvasName}: {t('monitor.empty')}</div>
+                        <div className="planner-monitor__empty">{t('monitor.empty')}</div>
                       )}
                     </div>
                   )}

@@ -3,7 +3,6 @@ import {
   CONFIRMED_PLAN_DRAFT_PREFIX,
   buildConfirmedPlanGraphChanges,
   parseConfirmedPlanDraft,
-  isScenePlanDraft,
   serializeConfirmedPlanDraft,
 } from './plannerPlanDraft'
 
@@ -17,6 +16,7 @@ describe('planner confirmed plan drafts', () => {
         { title: '生成飞书文档草稿', body: '整理结论并保留引用来源。' },
       ],
       prompt: 'legacy model prompt',
+      canvasPresentation: 'workflow',
     })
 
     expect(payload.startsWith(`${CONFIRMED_PLAN_DRAFT_PREFIX}\n`)).toBe(true)
@@ -28,6 +28,7 @@ describe('planner confirmed plan drafts', () => {
         { title: '生成飞书文档草稿', body: '整理结论并保留引用来源。' },
       ],
       prompt: 'legacy model prompt',
+      canvasPresentation: 'workflow',
     })
   })
 
@@ -63,23 +64,15 @@ describe('planner confirmed plan drafts', () => {
     expect(changes[1].node?.dependsOnNodeIds).toEqual(['node-test-seed-1-collect-sources'])
   })
 
-  it('round-trips a confirmed scene template plan', () => {
-    const draft = parseConfirmedPlanDraft(serializeConfirmedPlanDraft({
+  it('rejects legacy scene payloads without executable nodes', () => {
+    const draft = parseConfirmedPlanDraft(`${CONFIRMED_PLAN_DRAFT_PREFIX}\n${JSON.stringify({
       title: 'AI Poker Table',
-      intro: '创建一个德州扑克 scene canvas。',
+      intro: 'Legacy scene payload.',
       steps: [],
       canvasPresentation: 'scene',
       templateId: 'poker-table',
-      adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
-    }))
+    })}`)
 
-    expect(draft).toMatchObject({
-      title: 'AI Poker Table',
-      canvasPresentation: 'scene',
-      templateId: 'poker-table',
-      adaptationPrompt: '4 人德州扑克，有 Dealer、3 个玩家和 GM 审批。',
-    })
-    expect(draft?.steps.length).toBeGreaterThan(0)
-    expect(draft && isScenePlanDraft(draft)).toBe(true)
+    expect(draft).toBeNull()
   })
 })

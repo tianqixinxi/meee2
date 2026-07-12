@@ -7936,13 +7936,8 @@ enum BoardAPI {
               let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
-        let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
-        guard rawKind != "template",
-              let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board or monitor", status: 400)
-        }
         do {
-            let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
+            let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: .board)
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -8049,17 +8044,20 @@ enum BoardAPI {
             .filter { $0.templateMetadata != nil }
             .compactMap { canvas -> CanvasTemplateDTO? in
                 customTemplateDTO(canvas, actor: actor)
-            }
+        }
         // canvas-script(Part F)模板 —— 从 meee2-online sidecar 拉(env 配了才有,失败静默)。
         let canvasScript = fetchSidecarTemplates()
+        let templates = official + custom + canvasScript
+        let visibleTags = canvasTemplateTags.filter { tag in
+            templates.contains { $0.tags.contains(tag) }
+        }
         return jsonResponse(CanvasTemplatesEnvelope(
-            templates: official + custom + canvasScript,
-            tags: canvasTemplateTags
+            templates: templates,
+            tags: visibleTags
         ))
     }
 
     private static func officialTemplateDTO(_ template: CanvasTemplate) -> CanvasTemplateDTO {
-        let preview = officialTemplateRenderPreview(template)
         return CanvasTemplateDTO(
             id: template.id,
             name: template.name,
@@ -8079,10 +8077,10 @@ enum BoardAPI {
             defaultNodesCount: template.defaultNodes.count,
             updatedAt: nil,
             defaultNodes: template.defaultNodes.map(templateNodeDTO(_:)),
-            sceneSpec: template.sceneSpec,
-            renderProfile: preview.profile,
-            renderObjects: preview.objects,
-            renderRelations: preview.relations
+            sceneSpec: nil,
+            renderProfile: nil,
+            renderObjects: [],
+            renderRelations: []
         )
     }
 
@@ -8103,8 +8101,6 @@ enum BoardAPI {
         let metadata = templateMetadata(for: canvas)
         let canEdit = ownerId == actor.userId
         let count = PlannerBoardBridge.store.reusableNodeCount(canvasId: canvas.id)
-        let renderProfile = try? PlannerBoardBridge.store.renderProfileState(canvasId: canvas.id).profile
-        let renderPreview = customTemplateRenderPreview(canvasId: canvas.id)
         return CanvasTemplateDTO(
             id: canvas.id,
             name: canvas.name,
@@ -8124,49 +8120,11 @@ enum BoardAPI {
             defaultNodesCount: count,
             updatedAt: metadata.updatedAt,
             defaultNodes: [],
-            sceneSpec: PlannerBoardBridge.store.reusableSceneSpec(canvasId: canvas.id),
-            renderProfile: renderProfile,
-            renderObjects: renderPreview.objects,
-            renderRelations: renderPreview.relations
+            sceneSpec: nil,
+            renderProfile: nil,
+            renderObjects: [],
+            renderRelations: []
         )
-    }
-
-    private static func officialTemplateRenderPreview(
-        _ template: CanvasTemplate
-    ) -> (profile: CanvasRenderProfile, objects: [CanvasObject], relations: [CanvasRelation]) {
-        let canvasId = template.id
-        let ownerId = "meee2"
-        let profile = CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId)
-        let canvas = PlanningCanvas(
-            id: canvasId,
-            ownerId: ownerId,
-            title: template.name,
-            plannerContext: template.description,
-            sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(template: template, canvasId: canvasId)
-        )
-        let nodes = CanvasTemplateRegistry.materializeNodes(
-            template: template,
-            canvasId: canvasId,
-            ownerId: ownerId
-        )
-        let resolved = CanvasRenderResolver.resolve(
-            record: PlannerStore.CanvasRecord(canvas: canvas, nodes: nodes, proposals: []),
-            profile: profile
-        )
-        return (profile, resolved.objects, resolved.relations)
-    }
-
-    private static func customTemplateRenderPreview(
-        canvasId: String
-    ) -> (objects: [CanvasObject], relations: [CanvasRelation]) {
-        guard let state = try? PlannerBoardBridge.graphState(
-            for: canvasId,
-            snapshot: BoardLayoutStore.shared.snapshot(),
-            actorUserId: PlannerPermission.currentActorId()
-        ) else {
-            return ([], [])
-        }
-        return (state.renderObjects, state.renderRelations)
     }
 
     private static func templateNodeDTO(_ spec: TemplateNodeSpec) -> CanvasTemplateNodeSpecDTO {
@@ -8183,24 +8141,8 @@ enum BoardAPI {
     private static func tagsForOfficialTemplate(_ template: CanvasTemplate) -> [String] {
         var tags = Set([template.category])
         switch template.id {
-        case "code-review":
-            tags.formUnion(["engineering", "code-review", "workflow"])
-        case "release-checklist":
-            tags.formUnion(["engineering", "release", "workflow"])
-        case "overnight-recap":
-            tags.formUnion(["team", "recap", "ops"])
-        case "team-control-tower":
-            tags.formUnion(["team", "monitor", "ops"])
-        case "engineering-refactor":
-            tags.formUnion(["engineering", "workflow"])
         case "coding-orchestration":
             tags.formUnion(["engineering", "workflow"])
-        case "npc-canvas":
-            tags.formUnion(["demo", "design"])
-        case "travel-squad":
-            tags.formUnion(["demo", "travel", "scene"])
-        case "poker-table":
-            tags.formUnion(["demo", "game", "scene"])
         default:
             tags.insert("workflow")
         }
@@ -8281,12 +8223,9 @@ enum BoardAPI {
     }
 
     private static func canvasKind(from raw: String?, fallback: BoardLayoutStore.CanvasKind = .board) -> BoardLayoutStore.CanvasKind {
-        guard let raw,
-              raw != "template",
-              let kind = BoardLayoutStore.CanvasKind(rawValue: raw) else {
-            return fallback
-        }
-        return kind
+        _ = raw
+        _ = fallback
+        return .board
     }
 
     private struct TemplateCreateRequest: Decodable {
@@ -8376,11 +8315,7 @@ enum BoardAPI {
                 id: boardCanvas.id,
                 ownerId: ownerId,
                 title: boardCanvas.name,
-                plannerContext: templatePlannerContext(template.id, adaptationPrompt: adaptationPrompt),
-                sceneSpec: CanvasTemplateRegistry.materializeSceneSpec(
-                    template: template,
-                    canvasId: canvasId
-                )
+                plannerContext: templatePlannerContext(template.id, adaptationPrompt: adaptationPrompt)
             )
             let seedNodes = CanvasTemplateRegistry.materializeNodes(
                 template: template,
@@ -8389,10 +8324,6 @@ enum BoardAPI {
             )
             _ = try PlannerBoardBridge.store.record(for: planning, seedNodes: [])
             _ = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
-            try PlannerBoardBridge.store.writeRenderProfile(
-                CanvasTemplateRegistry.materializeRenderProfile(template: template, canvasId: canvasId),
-                canvasId: canvasId
-            )
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)

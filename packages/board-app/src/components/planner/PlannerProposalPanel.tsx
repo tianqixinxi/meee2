@@ -11,7 +11,7 @@ import {
 } from '../../api'
 import { useI18n } from '../../lib/i18n'
 import { readLlmSettings } from '../../lib/llmSettings'
-import { serializeConfirmedPlanDraft, type OfficialSceneTemplateId, type PlannerCanvasPresentation } from '../../lib/plannerPlanDraft'
+import { serializeConfirmedPlanDraft, type PlannerCanvasPresentation } from '../../lib/plannerPlanDraft'
 import type { PlanProposal, PlannerAccess } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
@@ -96,8 +96,6 @@ interface PlannerPlanCard {
   steps: PlannerPlanCardStep[]
   prompt: string
   canvasPresentation?: PlannerCanvasPresentation
-  templateId?: OfficialSceneTemplateId
-  adaptationPrompt?: string
 }
 
 const PERSISTED_CHAT_LIMIT = 30
@@ -795,12 +793,10 @@ export function PlannerProposalPanel({
 }
 
 interface TemplateRecommendation {
-  id: 'delivery-pipeline' | OfficialSceneTemplateId
+  id: 'delivery-pipeline'
   title: string
   body: string
   label: string
-  templateId?: OfficialSceneTemplateId
-  adaptationPrompt?: string
 }
 
 function RecommendedTemplate({
@@ -878,19 +874,6 @@ function recommendTemplate(
 ): TemplateRecommendation | null {
   if (variant === 'template' || nodeCount > 0) return null
   const task = readableCanvasTask(canvasName, canvasTask)
-  const scene = scenePlanCardFromRequest(task)
-  if (scene?.templateId) {
-    return {
-      id: scene.templateId,
-      title: scene.templateId === 'poker-table' ? 'Poker Table' : 'Travel Squad',
-      body: scene.templateId === 'poker-table'
-        ? 'Best fit for table-game simulations with system-owned table state, player agents, GM rulings, and node-scoped game-state artifacts.'
-        : 'Best fit for collaborative travel planning with route, hotel, food, budget, and final confirmation roles.',
-      label: 'Use scene',
-      templateId: scene.templateId,
-      adaptationPrompt: scene.adaptationPrompt,
-    }
-  }
   return {
     id: 'delivery-pipeline',
     title: 'Delivery pipeline',
@@ -1002,21 +985,15 @@ function PlannerPlanCardView({
   onBuild: (plan: PlannerPlanCard) => void
 }) {
   const { t } = useI18n()
-  const scenePlan = plan.canvasPresentation === 'scene' && plan.templateId
   return (
-    <div className={`planner-plan-card${scenePlan ? ' planner-plan-card--scene' : ''}`} aria-label={t('planner.draftPlan')}>
+    <div className="planner-plan-card" aria-label={t('planner.draftPlan')}>
       <div className="planner-plan-card__header">
         <span className="planner-plan-card__icon" aria-hidden>
-          {scenePlan ? <LayoutTemplate size={16} /> : <Check size={16} />}
+          <Check size={16} />
         </span>
         <div>
           <p>{plan.intro}</p>
           <h3>{plan.title}</h3>
-          {scenePlan && (
-            <small className="planner-plan-card__template">
-              Official scene template · {plan.templateId === 'poker-table' ? 'Poker Table' : 'Travel Squad'}
-            </small>
-          )}
         </div>
       </div>
       <ol className="planner-plan-card__steps">
@@ -1042,9 +1019,9 @@ function PlannerPlanCardView({
               <i />
             </span>
           )}
-          {busy ? t('planner.buildingPlan') : scenePlan ? 'Use scene template' : t('planner.buildIt')}
+          {busy ? t('planner.buildingPlan') : t('planner.buildIt')}
         </button>
-        <span>{scenePlan ? 'Creates a new scene canvas from the official template.' : t('planner.buildPlanHelp')}</span>
+        <span>{t('planner.buildPlanHelp')}</span>
       </div>
     </div>
   )
@@ -1210,12 +1187,9 @@ function buildEmptyCanvasAIMessages(
   const prompt = {
     instruction: [
       'You are Meee2 AI helping a user start from an empty Meee2 canvas.',
-      'A Meee2 canvas can be a workflow, monitor, or scene. Do not assume every canvas is a dependency graph.',
-      'First choose the canvas mental model from the user request: workflow for ordered work, monitor for operating views, scene for spatial/simulated/role-based experiences.',
-      'Scene canvas rule: only AI sessions or human-owned responsibilities are nodes. Places, cards, pots, seats, routes, hotels, and similar entities are scene state, template assets, or node-scoped artifacts.',
-      'For workflow plans, each plan step should become a concrete executable node card, not a generic document section.',
-      'For scene plans, use only supported official scene templates: travel-squad for travel planning squads, poker-table for poker/table game simulations.',
-      'For each workflow step or scene node role, describe the input, operation/tool or actor, and expected output/artifact.',
+      'A Meee2 canvas is an executable workflow graph made of node cards and dependency edges.',
+      'Each plan step should become a concrete executable node card, not a generic document section.',
+      'For each step, describe the input, operation/tool or actor, and expected output/artifact.',
       'Do not add a "canvas interaction/design" step unless the user explicitly asked to design the canvas UI itself.',
       'Do not create a canvas proposal yet. Your job is only to conduct intake and decide the next conversational step.',
       'If the request lacks critical information, ask exactly one helpful follow-up question.',
@@ -1240,9 +1214,7 @@ function buildEmptyCanvasAIMessages(
         plan: {
           title: 'Plan title',
           intro: 'Summary asking whether this looks right.',
-          canvasPresentation: 'workflow | scene',
-          templateId: 'Required only for scene. One of: travel-squad, poker-table.',
-          adaptationPrompt: 'Required for scene. Preserve the user details that should adapt the official template.',
+          canvasPresentation: 'workflow',
           steps: [
             { title: 'Executable node title', body: 'Inputs, operation/tool or actor, and expected output/artifact.' },
           ],
@@ -1253,11 +1225,8 @@ function buildEmptyCanvasAIMessages(
     rules: [
       'Return JSON only, no markdown fence.',
       'For action=ask, choices must come from your reasoning about the user request, not a generic fixed template.',
-      'For action=plan with canvasPresentation=workflow, include 3-5 node steps. Every step must be actionable on the canvas.',
-      'For action=plan with canvasPresentation=scene, set templateId to travel-squad or poker-table, include 3-5 executable role nodes, and include adaptationPrompt.',
-      'For scene plans, do not invent arbitrary sceneSpec JSON or unsupported renderers.',
-      'For workflow plans, the prompt must preserve all user details and describe the exact node graph the canvas proposal generator should draft.',
-      'For scene plans, the adaptationPrompt must preserve all user details and describe how the official template should be adapted.',
+      'For action=plan, include 3-5 actionable node steps.',
+      'The prompt must preserve all user details and describe the exact node graph the canvas proposal generator should draft.',
       'If the response contains a concrete plan object with steps, action must be plan, never ask.',
       'Do not ask a generic optimization question when the request already specifies source, goal, and output.',
       'If the user is correcting a previous plan, produce an updated plan instead of asking again unless one key detail is still missing.',
@@ -1283,9 +1252,8 @@ function buildEmptyCanvasAIRepairMessages(
       instruction: [
         'Convert the previous assistant response into the required meee2 empty-canvas intake JSON.',
         'Do not add new facts. Preserve the user language and intent.',
-        'A Meee2 canvas can be a workflow, monitor, or scene. Do not force scene-like requests into workflow steps.',
-        'Plan steps must be executable Meee2 canvas node cards or scene role nodes with inputs, operation/tool or actor, and expected outputs/artifacts.',
-        'Scene plans may only use supported official scene templates: travel-squad or poker-table.',
+        'A Meee2 canvas is an executable workflow graph made of node cards and dependency edges.',
+        'Plan steps must be executable node cards with inputs, operation/tool or actor, and expected outputs/artifacts.',
         'Do not add a "canvas interaction/design" step unless the user explicitly asked to design the canvas UI itself.',
         'Return JSON only, no markdown fence.',
       ],
@@ -1304,9 +1272,7 @@ function buildEmptyCanvasAIRepairMessages(
           plan: {
             title: 'Plan title',
             intro: 'Summary asking whether this looks right.',
-            canvasPresentation: 'workflow | scene',
-            templateId: 'Required only for scene. One of: travel-squad, poker-table.',
-            adaptationPrompt: 'Required for scene. Preserve the user details that should adapt the official template.',
+            canvasPresentation: 'workflow',
             steps: [
               { title: 'Executable node title', body: 'Inputs, operation/tool or actor, and expected output/artifact.' },
             ],
@@ -1398,8 +1364,6 @@ function fallbackPlanForGenericOptimizationAsk(
   if (!isGenericOptimizationQuestion(question)) return null
   const request = latestSubstantiveUserRequest(history)
   if (!request || !requestLooksReadyForPlan(request)) return null
-  const scene = scenePlanCardFromRequest(request)
-  if (scene) return scene
   return buildFallbackPlanCardFromRequest(request, message)
 }
 
@@ -1432,53 +1396,6 @@ function requestLooksReadyForPlan(value: string): boolean {
   const text = value.trim()
   if (text.length < 16) return false
   return /(收集|分析|总结|输出|生成|整理|创建|调研|文档|报告|旅行|行程|酒店|美食|预算|德扑|扑克|牌局|玩家|build|create|collect|research|analy[sz]e|summari[sz]e|generate|document|report|travel|trip|itinerary|hotel|poker|table game|player)/i.test(text)
-}
-
-function scenePlanCardFromRequest(request: string): PlannerPlanCard | null {
-  const text = request.trim()
-  if (!text) return null
-  const chinese = containsCJK(text)
-  if (/(德扑|德州|扑克|牌局|玩家|发牌|dealer|poker|texas hold|hold'em|table game|gm|game master)/i.test(text)) {
-    const adaptationPrompt = chinese
-      ? `基于用户需求创建 Poker Table scene canvas：${compactRequestForPlan(text)}。玩家 Agent 和 GM/规则裁判是可执行 nodes；Dealer / Table State 是系统状态挂载点；座位、手牌、公共牌、底池和行动日志作为 scene state 或 node artifacts。`
-      : `Create a Poker Table scene canvas from the user request: ${compactRequestForPlan(text)}. Player agents and GM/rules judge are executable nodes; Dealer / Table State is a system state owner; seats, hands, community cards, pot, and action log are scene state or node artifacts.`
-    return {
-      title: chinese ? '德州扑克 Scene Canvas' : 'Poker Table Scene Canvas',
-      intro: chinese
-        ? '这更像一张牌桌 scene canvas，而不是线性 workflow。确认后我会用官方 Poker Table 模板创建新画布。'
-        : 'This fits a poker table scene canvas rather than a linear workflow. Confirm to create a new canvas from the official Poker Table template.',
-      canvasPresentation: 'scene',
-      templateId: 'poker-table',
-      adaptationPrompt,
-      steps: [
-        { title: 'Dealer / Table State', body: chinese ? '系统状态挂载点；Rules Orchestrator 在这里写入 game-state.json 和 action-log.json。' : 'System state slot where Rules Orchestrator writes game-state.json and action-log.json.' },
-        { title: chinese ? '玩家 Agent' : 'Player Agents', body: chinese ? '每个玩家 node 根据当前 game-state.json 选择行动并输出 player action artifact。' : 'Each player node reads game-state.json and outputs a player action artifact.' },
-        { title: 'GM / 规则裁判', body: chinese ? '人工审批揭示、规则争议和牌局推进。' : 'Human review for reveals, rule disputes, and table progression.' },
-      ],
-      prompt: adaptationPrompt,
-    }
-  }
-  if (/(旅行|行程|酒店|住宿|美食|餐厅|预算|路线|travel|trip|itinerary|hotel|restaurant|food|budget|route)/i.test(text)) {
-    const adaptationPrompt = chinese
-      ? `基于用户需求创建 Travel Squad scene canvas：${compactRequestForPlan(text)}。只把路线规划、酒店、美食、预算审批、最终确认作为 nodes；城市、路线、酒店候选、餐厅和预算值作为 scene state 或 node artifacts。`
-      : `Create a Travel Squad scene canvas from the user request: ${compactRequestForPlan(text)}. Only route planning, hotel, food, budget approval, and final confirmation are nodes; cities, route, hotel candidates, restaurants, and budget values are scene state or node artifacts.`
-    return {
-      title: chinese ? '旅行小队 Scene Canvas' : 'Travel Squad Scene Canvas',
-      intro: chinese
-        ? '这更像一张旅行协作 scene canvas，而不是线性 workflow。确认后我会用官方 Travel Squad 模板创建新画布。'
-        : 'This fits a travel squad scene canvas rather than a linear workflow. Confirm to create a new canvas from the official Travel Squad template.',
-      canvasPresentation: 'scene',
-      templateId: 'travel-squad',
-      adaptationPrompt,
-      steps: [
-        { title: chinese ? '路线规划 Agent' : 'Route Planning Agent', body: chinese ? '产出 itinerary.json，推进地图路线和行程时间线。' : 'Produces itinerary.json to advance the map route and timeline.' },
-        { title: chinese ? '酒店 / 美食 Agent' : 'Hotel / Food Agents', body: chinese ? '产出 booking-candidates.json 和 places.json，推进住宿与地点候选。' : 'Produce booking-candidates.json and places.json to advance lodging and place candidates.' },
-        { title: chinese ? '预算审批 / 最终确认' : 'Budget Approval / Final Confirmation', body: chinese ? '人工确认预算和最终 travel brief。' : 'Human approval for budget and the final travel brief.' },
-      ],
-      prompt: adaptationPrompt,
-    }
-  }
-  return null
 }
 
 function buildFallbackPlanCardFromRequest(request: string, introHint?: string): PlannerPlanCard {
@@ -1642,10 +1559,6 @@ function normalizeAIPlanCard(
   const intro = stringValue(plan.intro)
     ?? stringValue(rawMessage)
     ?? 'Here is the plan I understand. Does this look right?'
-  const canvasPresentation = normalizeCanvasPresentation(plan.canvasPresentation)
-  const templateId = normalizeOfficialSceneTemplateId(plan.templateId)
-  const adaptationPrompt = stringValue(plan.adaptationPrompt)
-  const scenePlan = canvasPresentation === 'scene' && templateId
   const steps = Array.isArray(plan.steps)
     ? plan.steps
       .map((step): PlannerPlanCardStep | null => {
@@ -1661,57 +1574,20 @@ function normalizeAIPlanCard(
     : []
   const finalSteps = steps.length > 0
     ? steps
-    : scenePlan
-      ? sceneTemplatePlanSteps(templateId)
-      : [{ title: 'Clarify the canvas structure', body: 'Turn the conversation into a concrete Meee2 canvas plan.' }]
+    : [{ title: 'Clarify the canvas structure', body: 'Turn the conversation into a concrete Meee2 canvas plan.' }]
   const modelPrompt = stringValue(plan.prompt)
-  const prompt = scenePlan
-    ? adaptationPrompt ?? modelPrompt ?? buildSceneAdaptationPrompt(templateId, history)
-    : buildEmptyCanvasPlanPromptFromHistory(title, intro, finalSteps, history, modelPrompt)
+  const prompt = buildEmptyCanvasPlanPromptFromHistory(title, intro, finalSteps, history, modelPrompt)
   return {
     title,
     intro,
     steps: finalSteps,
     prompt,
-    canvasPresentation: scenePlan ? 'scene' : 'workflow',
-    templateId: scenePlan ? templateId : undefined,
-    adaptationPrompt: scenePlan ? prompt : undefined,
+    canvasPresentation: 'workflow',
   }
 }
 
 function normalizeCanvasPresentation(value: unknown): PlannerCanvasPresentation | undefined {
-  return value === 'scene' || value === 'workflow' ? value : undefined
-}
-
-function normalizeOfficialSceneTemplateId(value: unknown): OfficialSceneTemplateId | undefined {
-  return value === 'travel-squad' || value === 'poker-table' ? value : undefined
-}
-
-function sceneTemplatePlanSteps(templateId: OfficialSceneTemplateId): PlannerPlanCardStep[] {
-  return templateId === 'poker-table'
-    ? [
-        { title: 'Dealer / Table State', body: '系统状态挂载点；Rules Orchestrator 在这里写入 game-state.json 和 action-log.json。' },
-        { title: '玩家 Agent', body: '每个玩家 node 根据当前 game-state.json 选择行动并输出 player action artifact。' },
-        { title: 'GM / 规则裁判', body: '人工审批揭示、规则争议和牌局推进。' },
-      ]
-    : [
-        { title: '路线规划 Agent', body: '产出 itinerary.json，推进地图路线和行程时间线。' },
-        { title: '酒店 / 美食 Agent', body: '产出 booking-candidates.json 和 places.json，推进住宿与地点候选。' },
-        { title: '预算审批 / 最终确认', body: '人工确认预算和最终 travel brief。' },
-      ]
-}
-
-function buildSceneAdaptationPrompt(templateId: OfficialSceneTemplateId, history: PlannerChatMessage[]): string {
-  const userMessages = history
-    .filter((item) => item.role === 'user')
-    .map((item) => item.markdown)
-    .join('\n\n')
-  return [
-    `Create a scene canvas from official template ${templateId}.`,
-    'Adapt node titles, goals, and artifact expectations to the user request, but do not invent an unsupported renderer or arbitrary sceneSpec.',
-    'User conversation:',
-    userMessages || '(not provided)',
-  ].join('\n')
+  return value === 'workflow' ? value : undefined
 }
 
 function choiceMarkdown(intro: string, question: string, choices: PlannerChatChoice[]): string {
@@ -1848,10 +1724,6 @@ function normalizePersistedPlanCard(raw: unknown): PlannerPlanCard | undefined {
   if (typeof item.title !== 'string' || typeof item.intro !== 'string' || typeof item.prompt !== 'string') {
     return undefined
   }
-  const canvasPresentation = normalizeCanvasPresentation(item.canvasPresentation)
-  const templateId = normalizeOfficialSceneTemplateId(item.templateId)
-  const scenePlan = canvasPresentation === 'scene' && templateId
-  const sceneTemplateId = scenePlan ? templateId : undefined
   if (!Array.isArray(item.steps)) return undefined
   const steps = item.steps
     .map((step): PlannerPlanCardStep | null => {
@@ -1861,15 +1733,13 @@ function normalizePersistedPlanCard(raw: unknown): PlannerPlanCard | undefined {
       return { title: next.title, body: next.body }
     })
     .filter((step): step is PlannerPlanCardStep => Boolean(step))
-  if (steps.length === 0 && !scenePlan) return undefined
+  if (steps.length === 0) return undefined
   return {
     title: item.title,
     intro: item.intro,
-    steps: steps.length > 0 ? steps : sceneTemplateId ? sceneTemplatePlanSteps(sceneTemplateId) : steps,
+    steps,
     prompt: item.prompt,
-    canvasPresentation: scenePlan ? 'scene' : undefined,
-    templateId: sceneTemplateId,
-    adaptationPrompt: scenePlan ? stringValue(item.adaptationPrompt) ?? item.prompt : undefined,
+    canvasPresentation: normalizeCanvasPresentation(item.canvasPresentation),
   }
 }
 
