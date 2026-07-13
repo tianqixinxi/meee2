@@ -1,5 +1,11 @@
 export type GuideSource = 'island' | 'monitor' | 'palette' | 'system'
 
+export const GUIDE_EFFECT_DURATION_MS = 2000
+
+export function guideEffectDuration(durationMs?: number): number {
+  return Math.min(durationMs ?? GUIDE_EFFECT_DURATION_MS, GUIDE_EFFECT_DURATION_MS)
+}
+
 export interface PlannerNodeSelectionDetail {
   canvasId?: string
   nodeId?: string

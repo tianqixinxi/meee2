@@ -4879,6 +4879,7 @@
 }
 
 .planner-monitor__error {
+  grid-row: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5314,6 +5315,7 @@
 .planner-monitor__body {
   --monitor-page-inset: clamp(18px, 3vw, 40px);
   width: min(1440px, 100%);
+  height: 100%;
   margin: 0 auto;
   box-sizing: border-box;
   min-width: 0;
@@ -5420,13 +5422,15 @@
 }
 
 .planner-monitor__kanban {
+  grid-row: 4;
   min-height: 0;
   min-width: min(100%, 1120px);
   overflow-x: auto;
   overflow-y: hidden;
   display: grid;
-  align-items: start;
+  align-items: stretch;
   grid-template-columns: repeat(5, minmax(190px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   gap: 8px;
   padding-bottom: 6px;
 }
@@ -9830,16 +9834,18 @@
 
 /* Monitor — simplified feed surface. */
 .planner-monitor {
-  overflow: auto;
+  overflow: hidden;
   background: var(--bg);
 }
 
 .planner-monitor__body {
-  width: min(1120px, calc(100% - 56px));
-  min-height: 100%;
-  display: block;
-  overflow: visible;
-  padding: 46px 0 64px;
+  width: min(1280px, calc(100% - 56px));
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  padding: 46px 0 22px;
 }
 
 .planner-monitor__header {
@@ -9922,58 +9928,88 @@
   align-self: center;
 }
 
-.planner-monitor__feed {
-  display: grid;
-  gap: 26px;
+.planner-monitor__kanban {
+  grid-template-columns: repeat(5, minmax(240px, 1fr));
+  gap: 12px;
+  padding: 2px 2px 8px;
+}
+
+.planner-monitor__kanban[data-density="comfortable"] {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.planner-monitor__kanban[data-density="comfortable"] .planner-monitor-lane {
+  min-width: 0;
+}
+
+.planner-monitor__kanban[data-filtered="true"] {
+  grid-template-columns: minmax(280px, 440px);
+  overflow-x: hidden;
 }
 
 .planner-monitor-lane {
-  display: block;
+  min-width: 240px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg) 78%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 8%, transparent);
+}
+
+.planner-monitor__kanban[data-filtered="true"] .planner-monitor-lane {
   min-width: 0;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
 }
 
 .planner-monitor-lane__header {
-  display: flex;
-  width: auto;
-  height: auto;
-  gap: 7px;
-  margin-bottom: 8px;
-  padding: 0 2px;
-  border: 0;
-  background: transparent;
-  color: var(--text-dim);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  height: 40px;
+  padding: 0 11px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--text);
   font-size: 11px;
+  letter-spacing: 0.035em;
   text-transform: uppercase;
-  letter-spacing: 0.045em;
 }
 
 .planner-monitor-lane__header strong {
-  min-width: 0;
-  padding: 0;
-  background: transparent;
+  min-width: 22px;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   font-size: 10px;
 }
 
+.planner-monitor-lane--blocked .planner-monitor-lane__header svg {
+  color: var(--danger);
+}
+
+.planner-monitor-lane--approval .planner-monitor-lane__header svg {
+  color: var(--warning);
+}
+
+.planner-monitor-lane--running .planner-monitor-lane__header svg {
+  color: var(--info);
+}
+
+.planner-monitor-lane--done .planner-monitor-lane__header svg {
+  color: var(--success);
+}
+
 .planner-monitor-lane__items {
-  display: grid;
+  min-height: 72px;
   gap: 8px;
-  overflow: visible;
-  padding: 0;
+  overflow-y: auto;
+  padding: 8px;
 }
 
 .planner-monitor-card,
 .planner-monitor-card--comfortable {
   gap: 7px;
-  padding: 13px 15px;
+  padding: 11px;
   border: 1px solid var(--border);
-  border-left-width: 2px;
-  border-radius: 10px;
-  background: transparent;
-  box-shadow: none;
+  border-left-width: 3px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  box-shadow: 0 3px 12px color-mix(in srgb, #000 7%, transparent);
 }
 
 .planner-monitor-card:hover,
@@ -9986,17 +10022,71 @@
 
 .planner-monitor-card h3 {
   font-size: 13px;
+  line-height: 1.35;
 }
 
 .planner-monitor-card__meta span {
   background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
+.planner-monitor-card__source,
+.planner-monitor-card__time,
+.planner-monitor-card__meta,
+.planner-monitor-card__footer,
+.planner-monitor-card p {
+  color: color-mix(in srgb, var(--text) 66%, transparent);
+}
+
+.planner-monitor-card__summary,
+.planner-monitor-card__attention {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.planner-monitor-card__summary {
+  -webkit-line-clamp: 3;
+}
+
+.planner-monitor-card__attention {
+  -webkit-line-clamp: 4;
+}
+
+.planner-monitor-card__open-target {
+  opacity: 0.62;
+}
+
 .planner-monitor__empty {
+  grid-column: 1 / -1;
   padding: 56px 20px;
   border: 1px dashed var(--border);
   border-radius: 12px;
   text-align: center;
+}
+
+@media (max-width: 1320px) {
+  .planner-monitor__kanban:not([data-filtered="true"]) {
+    grid-template-columns: repeat(3, minmax(240px, 1fr));
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 980px) {
+  .planner-monitor__kanban:not([data-filtered="true"]) {
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .planner-monitor__kanban:not([data-filtered="true"]),
+  .planner-monitor__kanban[data-filtered="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .planner-monitor__kanban[data-density="comfortable"] .planner-monitor-lane {
+    min-width: 0;
+  }
 }
 
 @media (max-width: 820px) {

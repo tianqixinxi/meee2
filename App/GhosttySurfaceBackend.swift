@@ -759,5 +759,9 @@ extension GhosttySurfaceSession:
                      exitCode.map { String($0) } ?? "nil",
                      durationMs,
                      command.trimmingCharacters(in: .whitespacesAndNewlines)))
+        if let exitCode, exitCode != 0, isReusable {
+            markExited()
+            onExit(surfaceId)
+        }
     }
 }

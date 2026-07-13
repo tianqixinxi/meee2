@@ -84,6 +84,7 @@ import { useI18n } from '../../lib/i18n'
 import { sessionRecapProgressText } from '../../lib/sessionRecap'
 import {
   cssEscape,
+  guideEffectDuration,
   requestBoardGuide,
   type BoardGuideTarget,
   type PlannerNodeSelectionDetail,
@@ -444,7 +445,7 @@ function PlannerGraphInner({
       guidedNodeTimerRef.current = window.setTimeout(() => {
         setGuidedNodeId((current) => (current === nodeId ? null : current))
         guidedNodeTimerRef.current = null
-      }, detail.durationMs ?? 5200)
+      }, guideEffectDuration(detail.durationMs))
     }
     return true
   }, [canvasId, flowNodes, plannerState, reactFlow])

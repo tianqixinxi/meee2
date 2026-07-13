@@ -158,8 +158,12 @@ export function WorkspaceMonitor({
             <span>{t('monitor.loading')}</span>
           </div>
         ) : (
-          <div className="planner-monitor__feed">
-            {visibleLanes.filter((lane) => lane.items.length > 0).map((lane) => {
+          <div
+            className="planner-monitor__kanban"
+            data-density="comfortable"
+            data-filtered={laneFilter === 'all' ? undefined : 'true'}
+          >
+            {totalItems > 0 && visibleLanes.map((lane) => {
               const Icon = lane.icon
               return (
                 <section key={lane.key} className={`planner-monitor-lane planner-monitor-lane--${lane.key}`}>
@@ -331,8 +335,11 @@ function isPlaceholderBlocker(value: string): boolean {
 function laneForItem(item: PlannerMonitorItem): MonitorLaneKey {
   if (item.runState === 'blocked' || item.riskRank <= 0 || item.blockers.length > 0) return 'blocked'
   if (item.needsOwnerReview || item.proposalStatus === 'pending') return 'approval'
-  if (item.runState === 'working' || item.runState === 'draft' || item.riskRank === 2 || item.riskRank === 3) return 'running'
-  if (item.runState === 'done' || item.riskRank >= 5) return 'done'
+  if (item.runState === 'working' || item.runState === 'draft') return 'running'
+  if (item.runState === 'ready') return 'ready'
+  if (item.runState === 'done') return 'done'
+  if (item.riskRank === 2 || item.riskRank === 3) return 'running'
+  if (item.riskRank >= 5) return 'done'
   return 'ready'
 }
 

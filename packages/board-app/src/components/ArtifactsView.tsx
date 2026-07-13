@@ -483,24 +483,16 @@ export function ArtifactsView({
                   </tbody>
                 </table>
               )}
-              {allItems.length > 0 && (
+              {hasMore && (
                 <div className="artifacts-index__pagination" role="status" aria-live="polite">
-                  <span>
-                    {t('artifacts.showingCount', {
-                      count: allItems.length,
-                      total: artifactTotal,
-                    })}
-                  </span>
-                  {hasMore && (
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={loadingMore}
-                      onClick={loadMore}
-                    >
-                      {loadingMore ? t('common.loading') : t('artifacts.loadMore')}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={loadingMore}
+                    onClick={loadMore}
+                  >
+                    {loadingMore ? t('common.loading') : t('artifacts.loadMore')}
+                  </button>
                 </div>
               )}
             </div>

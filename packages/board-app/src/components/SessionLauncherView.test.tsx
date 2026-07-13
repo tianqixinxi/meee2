@@ -332,6 +332,35 @@ describe('SessionLauncherView', () => {
     expect(api.reopenLauncherSession).toHaveBeenCalledTimes(2)
   })
 
+  it('does not default an unknown historical session provider to Claude', async () => {
+    localStorage.setItem(lastSelectionKey, JSON.stringify({
+      kind: 'session',
+      sessionId: 'provider-unknown-session',
+    }))
+    const staleSession = makeSession({
+      id: 'provider-unknown-session',
+      pluginId: 'com.meee2.plugin.internal',
+      pluginDisplayName: 'Meee2',
+      surfaceId: null,
+      providerResumeSessionId,
+      surfaceStatus: 'exited',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
+    })
+
+    renderWithI18n(<SessionLauncherView state={makeState([staleSession])} />)
+
+    await waitFor(() => {
+      expect(api.reopenLauncherSession).toHaveBeenCalledWith({
+        sessionId: 'provider-unknown-session',
+        providerResumeSessionId,
+        provider: undefined,
+        permissionMode: 'onRequest',
+        cwd: '/Users/kai/Code/meee2-workspace',
+      })
+    })
+  })
+
   it('uses an explicitly remembered workspace permission when resuming', async () => {
     localStorage.setItem('meee2.sessionLauncher.permissionModes.v1', JSON.stringify({
       [project.id]: 'fullAccess',

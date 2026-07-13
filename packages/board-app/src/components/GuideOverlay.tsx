@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BoardGuideTarget } from '../lib/guide'
+import { guideEffectDuration, type BoardGuideTarget } from '../lib/guide'
 
 interface ActiveGuide {
   target: BoardGuideTarget
   rect: DOMRectReadOnly
 }
-
-const DEFAULT_DURATION_MS = 5200
 
 export function GuideOverlay() {
   const [active, setActive] = useState<ActiveGuide | null>(null)
@@ -48,7 +46,7 @@ export function GuideOverlay() {
         const next = { target, rect }
         activeRef.current = next
         setActive(next)
-        clearTimerRef.current = window.setTimeout(clearGuide, target.durationMs ?? DEFAULT_DURATION_MS)
+        clearTimerRef.current = window.setTimeout(clearGuide, guideEffectDuration(target.durationMs))
         return
       }
       if (performance.now() - startedAt > 1800) return
@@ -95,37 +93,23 @@ export function GuideOverlay() {
 
   if (!active) return null
 
-  const { rect, target } = active
+  const { rect } = active
   const pad = 10
   const left = Math.max(8, rect.left - pad)
   const top = Math.max(8, rect.top - pad)
   const width = Math.min(window.innerWidth - left - 8, rect.width + pad * 2)
   const height = Math.min(window.innerHeight - top - 8, rect.height + pad * 2)
-  const calloutTop = top + height + 10
-  const calloutBelow = calloutTop + 72 < window.innerHeight
 
   return (
     <div
       className="guide-overlay"
-      aria-live="polite"
+      aria-hidden="true"
       onPointerDown={clearGuide}
     >
       <div
         className="guide-overlay__ring"
         style={{ left, top, width, height }}
       />
-      {(target.title || target.body) && (
-        <div
-          className="guide-overlay__callout"
-          style={{
-            left: Math.min(left, window.innerWidth - 288),
-            top: calloutBelow ? calloutTop : Math.max(8, top - 82),
-          }}
-        >
-          {target.title && <strong>{target.title}</strong>}
-          {target.body && <span>{target.body}</span>}
-        </div>
-      )}
     </div>
   )
 }

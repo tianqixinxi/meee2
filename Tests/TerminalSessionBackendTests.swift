@@ -3,6 +3,21 @@ import Meee2PluginKit
 @testable import meee2Kit
 
 final class TerminalSessionBackendTests: XCTestCase {
+    func testCodexProviderSessionIndexRecognizesRolloutFilename() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-provider-index-\(UUID().uuidString)", isDirectory: true)
+        let day = root.appendingPathComponent("2026/07/11", isDirectory: true)
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessionId = "019f522a-e52b-7182-bb44-ec09f86812b6"
+        let rollout = day.appendingPathComponent("rollout-2026-07-11T00-00-00-\(sessionId).jsonl")
+        try Data().write(to: rollout)
+
+        XCTAssertTrue(CodexProviderSessionBackfill.isKnownProviderSessionId(sessionId, sessionsRoot: root))
+        XCTAssertFalse(CodexProviderSessionBackfill.isKnownProviderSessionId(UUID().uuidString, sessionsRoot: root))
+    }
+
     func testTerminalSessionRequestCarriesWorkspaceSemantics() {
         let request = TerminalSessionRequest(
             provider: "codex",
