@@ -138,12 +138,6 @@ enum SessionSurfaceLauncher {
         guard let cwd, !cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "session cwd not found: \(sessionId)"])
         }
-        let provider = inferProvider(
-            override: providerOverride,
-            terminalInfo: terminalInfo,
-            sessionData: sessionData,
-            fallbackSessionId: sessionId
-        )
         if let existingSurface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
            isReusableInternalSurface(existingSurface) {
             return SessionSurfaceRestoreResult(surface: existingSurface, action: .reuse, providerResumeSessionId: nil)
@@ -160,6 +154,13 @@ enum SessionSurfaceLauncher {
                 userInfo: [NSLocalizedDescriptionKey: "session cannot be resumed because no provider resume id was recorded"]
             )
         }
+        let provider = inferProvider(
+            override: providerOverride,
+            terminalInfo: terminalInfo,
+            sessionData: sessionData,
+            fallbackSessionId: sessionId,
+            resumeSessionId: resumeSessionId
+        )
         return try restoreSessionSurface(
             sessionId: resumeSessionId,
             cwd: cwd,
@@ -222,10 +223,29 @@ enum SessionSurfaceLauncher {
         override: String?,
         terminalInfo: SessionTerminalInfo?,
         sessionData: SessionData?,
-        fallbackSessionId: String
+        fallbackSessionId: String,
+        resumeSessionId: String? = nil
     ) -> String {
-        let haystack = [
-            override,
+        // Local provider storage outranks mutable UI and managed-surface hints.
+        // A failed reopen can otherwise persist the wrong provider and poison
+        // every later attempt, as happened when a Codex UUID was sent to Claude.
+        if let resumeSessionId,
+           CodexProviderSessionBackfill.isKnownProviderSessionId(resumeSessionId) {
+            return "codex"
+        }
+        if let resumeSessionId,
+           let providerSession = SessionStore.shared.get(resumeSessionId),
+           let transcriptPath = providerSession.transcriptPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !transcriptPath.isEmpty {
+            return "claude"
+        }
+
+        let explicit = override?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if explicit.contains("codex") { return "codex" }
+        if explicit.contains("claude") { return "claude" }
+
+        let storedHaystack = [
             terminalInfo?.provider,
             terminalInfo?.command,
             sessionData?.sessionId,
@@ -234,7 +254,10 @@ enum SessionSurfaceLauncher {
         ]
             .compactMap { $0 }
             .joined(separator: " ")
-        return AgentLaunchCommand.normalizedProvider(haystack)
+            .lowercased()
+        if storedHaystack.contains("codex") { return "codex" }
+        if storedHaystack.contains("claude") { return "claude" }
+        return "claude"
     }
 
     private static func recordInitialPrompt(

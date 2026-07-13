@@ -1061,7 +1061,6 @@ export function CanvasToolbar({
                 <button
                   type="button"
                   className="canvas-toolbar__status-pill is-attention canvas-toolbar__attention-trigger"
-                  title={t('canvas.attentionPillTitle')}
                   aria-label={t('canvas.attentionPill', { count: String(count) })}
                   aria-haspopup={count > 1 ? 'menu' : undefined}
                   aria-expanded={count > 1 ? attentionMenuOpen : undefined}

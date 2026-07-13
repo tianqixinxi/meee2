@@ -22,6 +22,42 @@ enum CodexProviderSessionBackfill {
     private static let sessionMetaReadLimit = 256 * 1024
     private static var cachedBySessionId: [String: ResumeIdCacheEntry] = [:]
     private static var cachedCandidatesByDirectory: [String: CandidateDirectoryCacheEntry] = [:]
+    private static var cachedKnownProviderSessionIds: Set<String> = []
+
+    /// Checks the Codex rollout index by filename, which is authoritative even
+    /// when a stale managed-surface record was later mislabeled as Claude.
+    static func isKnownProviderSessionId(
+        _ rawSessionId: String,
+        sessionsRoot overrideRoot: URL? = nil
+    ) -> Bool {
+        let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard AgentLaunchCommand.isLikelyProviderResumeSessionId(sessionId) else { return false }
+
+        let root = overrideRoot ?? codexSessionsRoot()
+        let cacheKey = "\(root.standardizedFileURL.path)\u{0}\(sessionId)"
+        cacheLock.lock()
+        if cachedKnownProviderSessionIds.contains(cacheKey) {
+            cacheLock.unlock()
+            return true
+        }
+        cacheLock.unlock()
+
+        let suffix = "-\(sessionId).jsonl"
+        let found = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        )?.compactMap { $0 as? URL }.contains { url in
+            url.lastPathComponent.lowercased().hasSuffix(suffix)
+        } ?? false
+
+        if found {
+            cacheLock.lock()
+            cachedKnownProviderSessionIds.insert(cacheKey)
+            cacheLock.unlock()
+        }
+        return found
+    }
 
     static func findAndPersistProviderResumeSessionId(
         sessionData: SessionData?,
@@ -166,9 +202,7 @@ enum CodexProviderSessionBackfill {
     private static func rolloutSearchDirectories(around anchor: Date) -> [URL] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        let root = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".codex")
-            .appendingPathComponent("sessions")
+        let root = codexSessionsRoot()
         return (-1...1).compactMap { offset in
             guard let day = calendar.date(byAdding: .day, value: offset, to: anchor) else { return nil }
             let components = calendar.dateComponents([.year, .month, .day], from: day)
@@ -182,6 +216,12 @@ enum CodexProviderSessionBackfill {
                 .appendingPathComponent(String(format: "%02d", month))
                 .appendingPathComponent(String(format: "%02d", day))
         }
+    }
+
+    private static func codexSessionsRoot() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".codex")
+            .appendingPathComponent("sessions")
     }
 
     private static func rolloutFiles(in directory: URL) -> [URL] {

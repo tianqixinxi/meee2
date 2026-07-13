@@ -485,10 +485,10 @@ export function SessionLauncherView({
   const reopenLauncherSessionForSession = useCallback((session: Session) => {
     const resumeSessionId = providerResumeTargetForSession(session)
     if (!sessionCanBeReopened(session) || reopeningSessionId === session.id) return
-    const provider = launcherProviderForSession(session) ?? 'claude'
+    const provider = launcherProviderForSession(session)
     const project = projectByPath.get(normalizePath(session.project))
     const permissionMode = project
-      ? normalizePermissionMode(provider, permissionModeByProjectId[project.id])
+      ? normalizePermissionMode(provider ?? project.preferredProvider, permissionModeByProjectId[project.id])
       : DEFAULT_PERMISSION_MODE
     setReopeningSessionId(session.id)
     reopenLauncherSession({

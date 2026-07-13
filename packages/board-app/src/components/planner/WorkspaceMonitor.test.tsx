@@ -62,6 +62,27 @@ describe('WorkspaceMonitor comfortable view', () => {
         updatedAt: '2026-05-31T04:30:00.000Z',
         nextAction: '1/2 nodes',
         awaitingInputSince: null,
+      }, {
+        id: 'monitor-node-ready',
+        kind: 'node',
+        canvasId: 'canvas-1',
+        canvasTitle: 'Launch Monitor',
+        nodeId: 'node-ready',
+        nodeTitle: 'Ready for launch',
+        sessionId: null,
+        deliveryId: null,
+        proposalId: null,
+        proposalStatus: null,
+        summary: 'Ready for launch',
+        runState: 'ready',
+        blockers: [],
+        needsOwnerReview: false,
+        doerId: 'member-b',
+        riskRank: 3,
+        evidenceCount: 1,
+        updatedAt: '2026-05-31T04:20:00.000Z',
+        nextAction: null,
+        awaitingInputSince: null,
       }],
     })
   })
@@ -79,7 +100,12 @@ describe('WorkspaceMonitor comfortable view', () => {
 
     expect(await screen.findByText('Research launch sentiment')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Monitor' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'All 2' })).toHaveAttribute('aria-pressed', 'true')
+    const kanban = document.querySelector('.planner-monitor__kanban')
+    expect(kanban).toBeInTheDocument()
+    expect(kanban?.querySelectorAll('.planner-monitor-lane')).toHaveLength(5)
+    expect(document.querySelector('.planner-monitor__feed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All 3' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Ready for launch').closest('.planner-monitor-lane')).toHaveClass('planner-monitor-lane--ready')
     expect(screen.getAllByText('Launch Monitor').length).toBeGreaterThan(0)
     expect(screen.getAllByText('blocked').length).toBeGreaterThan(0)
     expect(screen.getByText('3 evidence')).toBeInTheDocument()

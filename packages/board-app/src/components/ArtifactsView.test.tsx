@@ -521,10 +521,12 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
 
     const table = await screen.findByRole('table')
     expect(within(table).getAllByRole('row')).toHaveLength(51)
-    expect(screen.getByText('Showing 50 of 120')).toBeInTheDocument()
+    expect(screen.queryByText(/Showing \d+ of \d+/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Load 50 more' }))
-    await screen.findByText('Showing 100 of 120')
+    await waitFor(() => expect(apiMocks.fetchArtifactsPage).toHaveBeenCalledTimes(2))
+    expect(screen.queryByText(/Showing \d+ of \d+/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Load 50 more' })).toBeInTheDocument()
     expect(within(table).getAllByRole('row').length).toBeLessThanOrEqual(61)
     expect(apiMocks.fetchPlannerGraphState).not.toHaveBeenCalled()
     expect(apiMocks.fetchArtifactsPage.mock.calls.every(([params]) => params.limit <= 50)).toBe(true)

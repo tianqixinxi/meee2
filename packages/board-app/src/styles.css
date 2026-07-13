@@ -896,6 +896,10 @@ html.board-sidebar-rail--collapsed .app {
   gap: 8px;
 }
 
+.workspace-rail:not(.workspace-rail--compact) .workspace-rail__top {
+  transform: translateY(-4px);
+}
+
 .workspace-rail__brand {
   display: inline-flex;
   min-width: 0;
@@ -10367,36 +10371,6 @@ html.board-empty-omni .canvas-toolbar__panel {
     0 0 0 8px color-mix(in srgb, var(--accent) 18%, transparent),
     0 18px 54px rgba(0, 0, 0, 0.34);
   animation: guide-overlay-pulse 1300ms ease-in-out infinite;
-}
-
-.guide-overlay__callout {
-  position: fixed;
-  pointer-events: none;
-  width: min(280px, calc(100vw - 24px));
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
-  color: var(--text);
-}
-
-.guide-overlay__callout strong,
-.guide-overlay__callout span {
-  display: block;
-}
-
-.guide-overlay__callout strong {
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.3;
-}
-
-.guide-overlay__callout span {
-  margin-top: 3px;
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.4;
 }
 
 @keyframes guide-overlay-pulse {
