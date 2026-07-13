@@ -12,6 +12,7 @@ final class TerminalSessionBackendTests: XCTestCase {
 
         let sessionId = "019f522a-e52b-7182-bb44-ec09f86812b6"
         let rollout = day.appendingPathComponent("rollout-2026-07-11T00-00-00-\(sessionId).jsonl")
+        XCTAssertFalse(CodexProviderSessionBackfill.isKnownProviderSessionId(sessionId, sessionsRoot: root))
         try Data().write(to: rollout)
 
         XCTAssertTrue(CodexProviderSessionBackfill.isKnownProviderSessionId(sessionId, sessionsRoot: root))

@@ -22,7 +22,7 @@ enum CodexProviderSessionBackfill {
     private static let sessionMetaReadLimit = 256 * 1024
     private static var cachedBySessionId: [String: ResumeIdCacheEntry] = [:]
     private static var cachedCandidatesByDirectory: [String: CandidateDirectoryCacheEntry] = [:]
-    private static var cachedKnownProviderSessionIds: [String: Bool] = [:]
+    private static var cachedKnownProviderSessionIds: Set<String> = []
 
     /// Checks the Codex rollout index by filename, which is authoritative even
     /// when a stale managed-surface record was later mislabeled as Claude.
@@ -33,16 +33,15 @@ enum CodexProviderSessionBackfill {
         let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard AgentLaunchCommand.isLikelyProviderResumeSessionId(sessionId) else { return false }
 
-        if overrideRoot == nil {
-            cacheLock.lock()
-            if let cached = cachedKnownProviderSessionIds[sessionId] {
-                cacheLock.unlock()
-                return cached
-            }
-            cacheLock.unlock()
-        }
-
         let root = overrideRoot ?? codexSessionsRoot()
+        let cacheKey = "\(root.standardizedFileURL.path)\u{0}\(sessionId)"
+        cacheLock.lock()
+        if cachedKnownProviderSessionIds.contains(cacheKey) {
+            cacheLock.unlock()
+            return true
+        }
+        cacheLock.unlock()
+
         let suffix = "-\(sessionId).jsonl"
         let found = FileManager.default.enumerator(
             at: root,
@@ -52,9 +51,9 @@ enum CodexProviderSessionBackfill {
             url.lastPathComponent.lowercased().hasSuffix(suffix)
         } ?? false
 
-        if overrideRoot == nil {
+        if found {
             cacheLock.lock()
-            cachedKnownProviderSessionIds[sessionId] = found
+            cachedKnownProviderSessionIds.insert(cacheKey)
             cacheLock.unlock()
         }
         return found

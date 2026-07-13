@@ -241,6 +241,10 @@ enum SessionSurfaceLauncher {
             return "claude"
         }
 
+        let explicit = override?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if explicit.contains("codex") { return "codex" }
+        if explicit.contains("claude") { return "claude" }
+
         let storedHaystack = [
             terminalInfo?.provider,
             terminalInfo?.command,
@@ -253,10 +257,6 @@ enum SessionSurfaceLauncher {
             .lowercased()
         if storedHaystack.contains("codex") { return "codex" }
         if storedHaystack.contains("claude") { return "claude" }
-
-        let explicit = override?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if explicit.contains("codex") { return "codex" }
-        if explicit.contains("claude") { return "claude" }
         return "claude"
     }
 
