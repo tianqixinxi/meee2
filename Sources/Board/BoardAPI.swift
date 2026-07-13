@@ -991,12 +991,11 @@ enum BoardAPI {
     }
 
     static func getSessionArtifacts(_ req: HttpRequest) -> HttpResponse {
-        MWarn("[Deprecated] GET /api/sessions/:id/artifacts; use cursor-paged GET /api/artifacts")
         guard let sessionId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !sessionId.isEmpty else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        return jsonResponse(SessionArtifactCandidateStore.shared.combinedArtifacts(sessionId: sessionId))
+        return jsonResponse(SessionArtifactsAPI.artifacts(sessionId: sessionId))
     }
 
     static func getSessionEnvironment(_ req: HttpRequest) -> HttpResponse {
@@ -1061,160 +1060,10 @@ enum BoardAPI {
             return nil
         }
 
-        let aliases = [
-            rawSessionId,
-            pluginSession?.id,
-            surface?.sessionId,
-            storedSession?.sessionId,
-            storedSession?.providerResumeSessionId,
-            terminalInfo?.providerResumeSessionId
-        ].compactMap { $0 }.filter { !$0.isEmpty }
-        let candidateFilePaths = SessionArtifactCandidateStore.shared
-            .list(sessionIds: aliases)
-            .flatMap(\.references)
-            .filter { $0.kind == "file" }
-            .map(\.value)
-
-        return SessionWorkspaceInspector.inspect(
+        return SessionWorkspaceInspector.inspectCached(
             sessionId: storedSession?.sessionId ?? pluginSession?.id ?? rawSessionId,
-            cwd: cwd,
-            candidateFilePaths: candidateFilePaths
+            cwd: cwd
         )
-    }
-
-    static func listArtifactCandidates(_ req: HttpRequest) -> HttpResponse {
-        MWarn("[Deprecated] GET /api/artifact-candidates; use GET /api/artifacts?status=candidate")
-        let sessionIdRaw = req.queryParams.first(where: { $0.0 == "sessionId" })?.1
-        let sessionId = sessionIdRaw?.removingPercentEncoding ?? sessionIdRaw
-        let includeDiscarded = req.queryParams.first(where: { $0.0 == "includeDiscarded" })?.1 == "true"
-        let candidates = SessionArtifactCandidateStore.shared.list(
-            sessionId: sessionId,
-            includeDiscarded: includeDiscarded
-        )
-        return jsonResponse(ArtifactCandidateListEnvelope(candidates: candidates))
-    }
-
-    static func ingestArtifactCandidateHook(_ req: HttpRequest) -> HttpResponse {
-        struct Response: Encodable {
-            let ok: Bool
-            let inserted: Int
-        }
-        guard let raw = parseJSONBody(req) else {
-            return errorResponse("invalid_json", "body must be a JSON object", status: 400)
-        }
-        let inserted = SessionArtifactCandidateStore.shared.ingestCodexHookPayload(raw)
-        if !inserted.isEmpty {
-            BoardServer.shared.broadcastStateChanged()
-        }
-        return jsonResponse(Response(ok: true, inserted: inserted.count))
-    }
-
-    static func promoteArtifactCandidate(_ req: HttpRequest) -> HttpResponse {
-        struct PromoteRequest: Decodable {
-            let canvasId: String?
-            let nodeId: String?
-            let kind: PlannerArtifactKind?
-            let title: String?
-            let reference: String?
-            let status: String?
-        }
-        guard let candidateId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !candidateId.isEmpty else {
-            return errorResponse("bad_request", "missing candidate id", status: 400)
-        }
-        let body = decodeJSONBody(req, as: PromoteRequest.self)
-        do {
-            guard let candidate = SessionArtifactCandidateStore.shared.get(candidateId: candidateId) else {
-                throw SessionArtifactCandidateStoreError.candidateNotFound(candidateId)
-            }
-            let targets = SessionArtifactCandidateStore.shared.attachTargets(sessionId: candidate.sessionId)
-            let reference = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? candidate.references.first?.value
-                ?? candidate.id
-            let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? candidate.title
-            let kind = body?.kind ?? plannerArtifactKind(forCandidateKind: candidate.kind)
-            let status = body?.status ?? "attached"
-            let target: SessionArtifactAttachTarget?
-            if let canvasId = body?.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !canvasId.isEmpty,
-               let nodeId = body?.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !nodeId.isEmpty {
-                guard let selected = targets.first(where: { $0.canvasId == canvasId && $0.nodeId == nodeId }) else {
-                    throw SessionArtifactCandidateStoreError.attachTargetNotFound
-                }
-                target = selected
-            } else {
-                target = nil
-            }
-
-            guard let target else {
-                let artifactId = "session-artifact-\(candidate.id)"
-                let updated = try SessionArtifactCandidateStore.shared.markPromoted(
-                    candidateId: candidateId,
-                    canvasId: nil,
-                    nodeId: nil,
-                    artifactId: artifactId
-                )
-                let artifact = SessionArtifactCandidateStore.shared.sessionScopedArtifact(
-                    for: updated,
-                    kind: kind,
-                    title: title,
-                    reference: reference,
-                    status: body?.status ?? "promoted"
-                )
-                BoardServer.shared.broadcastStateChanged()
-                return jsonResponse(ArtifactCandidateMutationEnvelope(candidate: updated, artifact: artifact, attachTargets: targets))
-            }
-
-            let state = try PlannerBoardBridge.attachArtifact(
-                nodeId: target.nodeId,
-                kind: kind,
-                title: title,
-                reference: reference,
-                status: status,
-                payload: artifactPayload(for: candidate),
-                for: target.canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
-            )
-            guard let artifact = state.artifacts
-                .filter({ $0.nodeId == target.nodeId && $0.reference == reference })
-                .sorted(by: { $0.createdAt > $1.createdAt })
-                .first else {
-                throw SessionArtifactCandidateStoreError.artifactAttachFailed
-            }
-            let updated = try SessionArtifactCandidateStore.shared.markPromoted(
-                candidateId: candidateId,
-                canvasId: target.canvasId,
-                nodeId: target.nodeId,
-                artifactId: artifact.id
-            )
-            BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(ArtifactCandidateMutationEnvelope(candidate: updated, artifact: artifact, attachTargets: targets))
-        } catch let err as SessionArtifactCandidateStoreError {
-            return mapArtifactCandidateError(err)
-        } catch let err as PlannerCoreError {
-            return mapPlannerCoreError(err)
-        } catch {
-            return errorResponse("artifact_candidate_error", error.localizedDescription, status: 400)
-        }
-    }
-
-    static func discardArtifactCandidate(_ req: HttpRequest) -> HttpResponse {
-        guard let candidateId = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !candidateId.isEmpty else {
-            return errorResponse("bad_request", "missing candidate id", status: 400)
-        }
-        do {
-            let updated = try SessionArtifactCandidateStore.shared.discard(candidateId: candidateId)
-            BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(ArtifactCandidateMutationEnvelope(candidate: updated, artifact: nil, attachTargets: []))
-        } catch let err as SessionArtifactCandidateStoreError {
-            return mapArtifactCandidateError(err)
-        } catch {
-            return errorResponse("artifact_candidate_error", error.localizedDescription, status: 400)
-        }
     }
 
     static func reopenLauncherSession(_ req: HttpRequest) -> HttpResponse {
@@ -4267,6 +4116,55 @@ enum BoardAPI {
         }
     }
 
+    static func getPlannerArtifactVersionContent(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let versionId = req.params[":versionId"], !versionId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or version id", status: 400)
+        }
+        do {
+            let snapshot = BoardLayoutStore.shared.snapshot()
+            let actorId = PlannerPermission.currentActorId()
+            guard let version = try PlannerBoardBridge.getArtifactVersion(
+                canvasId: canvasId,
+                versionId: versionId,
+                snapshot: snapshot,
+                actorUserId: actorId
+            ) else {
+                return errorResponse("not_found", "version not found", status: 404)
+            }
+            let state = try PlannerBoardBridge.canvasState(
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorId
+            )
+            guard var artifact = state.artifacts.first(where: { candidate in
+                if candidate.id == version.artifactId { return true }
+                let normalizedReference = candidate.reference
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                return candidate.canvasId == version.canvasId
+                    && candidate.nodeId == version.nodeId
+                    && "\(candidate.canvasId)|\(candidate.nodeId)|\(normalizedReference)" == version.artifactSlotKey
+            }) else {
+                return errorResponse("not_found", "artifact for version not found", status: 404)
+            }
+            artifact.payload = version.payloadInline
+            artifact.createdAt = version.createdAt
+            if let metadata = version.metadata?.objectValue {
+                if let title = metadata["title"]?.stringValue, !title.isEmpty { artifact.title = title }
+                if let status = metadata["status"]?.stringValue, !status.isEmpty { artifact.status = status }
+                if let kind = metadata["kind"]?.stringValue.flatMap(PlannerArtifactKind.init(rawValue:)) {
+                    artifact.kind = kind
+                }
+            }
+            return jsonResponse(try PlannerArtifactStorage.content(for: artifact))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     // MARK: - Wave 1-3 integration · OnlineProxy routes
     //
     // These proxy the desktop board-app's UI-2 and UI-6 calls to
@@ -5510,52 +5408,6 @@ enum BoardAPI {
         }
     }
 
-    static func mapArtifactCandidateError(_ err: SessionArtifactCandidateStoreError) -> HttpResponse {
-        switch err {
-        case .candidateNotFound:
-            return errorResponse("not_found", err.localizedDescription, status: 404)
-        case .attachTargetNotFound:
-            return errorResponse("attach_target_not_found", err.localizedDescription, status: 404)
-        case .artifactAttachFailed:
-            return errorResponse("artifact_attach_failed", err.localizedDescription, status: 500)
-        case .missingSession:
-            return errorResponse("bad_request", err.localizedDescription, status: 400)
-        }
-    }
-
-    private static func plannerArtifactKind(forCandidateKind kind: String) -> PlannerArtifactKind {
-        switch kind {
-        case "impl-pr":
-            return .implPR
-        case "check-result":
-            return .checkResult
-        case "prd":
-            return .prd
-        case "kanban":
-            return .kanban
-        default:
-            return .generic
-        }
-    }
-
-    private static func artifactPayload(for candidate: SessionArtifactCandidate) -> BoardJSONValue {
-        let refs = candidate.references.map { reference in
-            BoardJSONValue.object([
-                "kind": .string(reference.kind),
-                "value": .string(reference.value),
-                "label": reference.label.map(BoardJSONValue.string) ?? .null
-            ])
-        }
-        return .object([
-            "type": .string(PlannerArtifactPayloadType.text.rawValue),
-            "text": .string(candidate.summary),
-            "source": .string("artifact-candidate"),
-            "candidateId": .string(candidate.id),
-            "candidateKind": .string(candidate.kind),
-            "references": .array(refs)
-        ])
-    }
-
     private static func recordPlannerDispatchIntents(canvasId: String, proposal: PlanProposal, nodes: [PlanningNode]) {
         let changedNodeIds = Set(proposal.changes.compactMap { change in
             change.nodeId ?? change.node?.id
@@ -6665,7 +6517,6 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
         if TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: sid) {
-            SessionArtifactCandidateStore.shared.removeSession(sid)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
         }
@@ -6689,7 +6540,6 @@ enum BoardAPI {
         // 进程已经走了：kill(pid, 0) 返回 -1 / ESRCH。直接清掉 lingering card 算成功
         if kill(pid_t(pid), 0) != 0 {
             SessionStore.shared.delete(session.sessionId)
-            SessionArtifactCandidateStore.shared.removeSession(session.sessionId)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(CloseEnvelope(ok: true, alreadyDead: true))
         }
@@ -6701,7 +6551,6 @@ enum BoardAPI {
             return errorResponse("kill_failed", "SIGTERM failed: \(err)", status: 500)
         }
         SessionStore.shared.delete(session.sessionId)
-        SessionArtifactCandidateStore.shared.removeSession(session.sessionId)
         BoardServer.shared.broadcastStateChanged()
         MLog("[BoardAPI] Closed session \(session.sessionId.prefix(8)) (SIGTERM pid \(pid))")
         return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))

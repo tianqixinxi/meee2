@@ -78,7 +78,8 @@ describe('WorkspaceMonitor comfortable view', () => {
     )
 
     expect(await screen.findByText('Research launch sentiment')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Workspace monitor' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Monitor' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All 2' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getAllByText('Launch Monitor').length).toBeGreaterThan(0)
     expect(screen.getAllByText('blocked').length).toBeGreaterThan(0)
     expect(screen.getByText('3 evidence')).toBeInTheDocument()
@@ -139,5 +140,33 @@ describe('WorkspaceMonitor comfortable view', () => {
     apiMocks.fetchPlannerWorkspaceMonitor.mockResolvedValueOnce({ generatedAt: 'later', items: [] })
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(apiMocks.fetchPlannerWorkspaceMonitor).toHaveBeenCalledTimes(3))
+  })
+
+  it('does not let a slower stale refresh replace the latest monitor state', async () => {
+    let rejectFirst: (reason: Error) => void = () => undefined
+    const first = new Promise<{ generatedAt: string; items: [] }>((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    apiMocks.fetchPlannerWorkspaceMonitor
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ generatedAt: 'latest', items: [] })
+
+    const view = render(
+      <I18nProvider>
+        <WorkspaceMonitor refreshTick={0} onOpenItem={vi.fn()} onOpenAllSessions={vi.fn()} />
+      </I18nProvider>,
+    )
+    view.rerender(
+      <I18nProvider>
+        <WorkspaceMonitor refreshTick={1} onOpenItem={vi.fn()} onOpenAllSessions={vi.fn()} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(apiMocks.fetchPlannerWorkspaceMonitor).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('No items')).toBeInTheDocument()
+    rejectFirst(new Error('stale request failed'))
+    await first.catch(() => undefined)
+    expect(screen.getByText('No items')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

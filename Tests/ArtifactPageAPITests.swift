@@ -13,7 +13,6 @@ final class ArtifactPageAPITests: XCTestCase {
         let source = ArtifactPageSource(canvas: makeCanvas(), artifacts: artifacts)
         let first = try ArtifactPageBuilder.build(
             sources: [source],
-            candidates: [],
             query: ArtifactPageQuery(limit: 50, status: "all")
         )
 
@@ -25,7 +24,6 @@ final class ArtifactPageAPITests: XCTestCase {
 
         let second = try ArtifactPageBuilder.build(
             sources: [source],
-            candidates: [],
             query: ArtifactPageQuery(cursor: cursor, limit: 50, status: "all")
         )
         XCTAssertEqual(second.items.count, 50)
@@ -34,7 +32,7 @@ final class ArtifactPageAPITests: XCTestCase {
             .isDisjoint(with: Set(second.items.flatMap(\.artifacts).map(\.id))))
     }
 
-    func testSlotAndCandidateTurnToolDeduplication() throws {
+    func testSlotVersionsAreDeduplicated() throws {
         let older = makeArtifact(
             id: "old",
             reference: "release.md",
@@ -45,28 +43,14 @@ final class ArtifactPageAPITests: XCTestCase {
             reference: " RELEASE.md ",
             createdAt: Date(timeIntervalSince1970: 2)
         )
-        let candidates = [
-            makeCandidate(id: "candidate-old", updatedAt: Date(timeIntervalSince1970: 3)),
-            makeCandidate(id: "candidate-new", updatedAt: Date(timeIntervalSince1970: 4))
-        ]
         let source = ArtifactPageSource(canvas: makeCanvas(), artifacts: [older, newer])
 
         let artifactsPage = try ArtifactPageBuilder.build(
             sources: [source],
-            candidates: candidates,
             query: ArtifactPageQuery(status: "all")
         )
         XCTAssertEqual(artifactsPage.total, 1)
         XCTAssertEqual(artifactsPage.items[0].artifacts.map(\.id), ["new", "old"])
-        XCTAssertEqual(artifactsPage.candidateTotal, 1)
-
-        let candidatePage = try ArtifactPageBuilder.build(
-            sources: [source],
-            candidates: candidates,
-            query: ArtifactPageQuery(status: "candidate")
-        )
-        XCTAssertEqual(candidatePage.total, 1)
-        XCTAssertEqual(candidatePage.items[0].candidate?.id, "candidate-new")
     }
 
     func testFiltersStatusCanvasQueryAndSessionBeforePagination() throws {
@@ -81,7 +65,6 @@ final class ArtifactPageAPITests: XCTestCase {
 
         let page = try ArtifactPageBuilder.build(
             sources: [source],
-            candidates: [],
             query: ArtifactPageQuery(
                 status: "needs-review",
                 canvasId: "release",
@@ -97,7 +80,6 @@ final class ArtifactPageAPITests: XCTestCase {
     func testInvalidCursorIsRejected() {
         XCTAssertThrowsError(try ArtifactPageBuilder.build(
             sources: [],
-            candidates: [],
             query: ArtifactPageQuery(cursor: "not-base64", status: "all")
         )) { error in
             guard let pageError = error as? ArtifactPageBuilderError,
@@ -121,28 +103,6 @@ final class ArtifactPageAPITests: XCTestCase {
             reference: reference,
             status: "done",
             createdAt: createdAt
-        )
-    }
-
-    private func makeCandidate(id: String, updatedAt: Date) -> SessionArtifactCandidate {
-        SessionArtifactCandidate(
-            id: id,
-            sessionId: "session-a",
-            provider: "codex",
-            cwd: "/repo/release",
-            title: "Patch",
-            kind: "diff",
-            status: .candidate,
-            createdAt: updatedAt,
-            updatedAt: updatedAt,
-            sourceEvent: "PostToolUse",
-            toolName: "apply_patch",
-            toolUseId: "turn-1",
-            references: [SessionArtifactReference(kind: "file", value: "Sources/App.swift", label: nil)],
-            summary: "Updated app",
-            promotedCanvasId: nil,
-            promotedNodeId: nil,
-            promotedArtifactId: nil
         )
     }
 

@@ -16,18 +16,18 @@ final class DragRegionWebView: WKWebView {
     /// Carve-out rects (window coords, top-left origin via `fromTop`/`fromLeft`)
     /// where clicks within the top drag region should still reach the
     /// webview instead of being swallowed for window-drag. Used to host
-    /// HTML buttons (sidebar toggle) inside the title-bar visual band
+    /// HTML buttons (workspace rail toggle) inside the title-bar visual band
     /// without sacrificing their clickability.
     ///
     /// Frame layout matches the CSS: x is "from left", y is "from top",
     /// both in points (= CSS px since we don't scale).
     var clickThroughRects: [CGRect] = [
-        // Sidebar toggle icon — sits to the right of macOS traffic lights
+        // Workspace rail toggle — sits to the right of macOS traffic lights
         // (which end around x≈64 after compact-rail positioning) so it visually shares the title-bar row
         // but does NOT trigger a window drag. The CSS positions the
-        // button at left:~72, top:4, 20×20; this rect adds ~4px slack on
+        // button at left:~70, top:1, 24×24; this rect adds slack on
         // each side so the user doesn't have to hit the exact pixel edge.
-        CGRect(x: 68, y: 0, width: 32, height: 28)
+        CGRect(x: 66, y: 0, width: 34, height: 28)
     ]
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -228,6 +228,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var embeddedTerminals: [String: NativeTerminalPaneControlling] = [:]
     private var embeddedTerminalLRU: [String] = []
     private var activeEmbeddedTerminalKey: String?
+    private var activeTerminalTheme = "dark"
     private var terminalScrollMonitor: Any?
     private var embeddedTerminal: NativeTerminalPaneControlling? {
         guard let activeEmbeddedTerminalKey else { return nil }
@@ -498,6 +499,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let mode = payload["mode"] as? String ?? "full"
         let terminalOnly = mode == "terminal"
         let theme = Self.terminalTheme(from: payload)
+        syncNativeTerminalPalette(theme: theme)
         let sessionId = (payload["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let surfaceId = (payload["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -587,6 +589,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     func handleNativeTerminalMessage(_ payload: [String: Any]) {
         let type = payload["type"] as? String ?? "attach"
         let theme = Self.terminalTheme(from: payload)
+        syncNativeTerminalPalette(theme: theme)
         logTerminalTrace(payload, phase: "native.received", extra: "type=\(type)")
         switch type {
         case "prewarm":
@@ -891,6 +894,30 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         """, completionHandler: nil)
     }
 
+    private func syncNativeTerminalPalette(theme: String) {
+        activeTerminalTheme = theme
+        window?.appearance = NSAppearance(named: theme == "light" ? .aqua : .darkAqua)
+        for buttonType in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window?.standardWindowButton(buttonType)?.needsDisplay = true
+        }
+        let colors = NativeTerminalTheme.colors(theme: theme)
+        let detail = [
+            "background": colors.background,
+            "foreground": colors.foreground
+        ]
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: detail),
+            let json = String(data: data, encoding: .utf8)
+        else { return }
+        webView.evaluateJavaScript("""
+        (function(palette) {
+          var root = document.documentElement;
+          root.style.setProperty('--native-terminal-bg', palette.background);
+          root.style.setProperty('--native-terminal-fg', palette.foreground);
+        })(\(json));
+        """, completionHandler: nil)
+    }
+
     private func dispatchNativeTerminalPrewarmAck(
         surfaceId: String,
         sessionId: String?,
@@ -1026,9 +1053,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             retryWorkItem = nil
         }
         // 页面加载完后立刻把 traffic light 的真实位置喂给 webui，让
-        // sidebar-collapsed-toggle 能精确对齐。窗口 resize / titlebar 模式
+        // workspace rail toggle 能精确对齐。窗口 resize / titlebar 模式
         // 切换时也要更新（NSWindow.didResize 通知触发）。
         injectTitlebarMetrics()
+        syncNativeTerminalPalette(theme: activeTerminalTheme)
         dispatchOpenSettingsIfPossible()
         dispatchOpenSessionsWorkspaceIfPossible()
         dispatchOpenSessionIfPossible()
@@ -1490,7 +1518,7 @@ extension BoardWebWindowController {
         webView.evaluateJavaScript("""
             (function() {
                 var btn = document.querySelector('button[title="Expand sidebar"]') ||
-                          document.querySelector('button[title="Collapse"]');
+                          document.querySelector('button[title="Collapse sidebar"]');
                 if (btn) btn.click();
             })()
             """)

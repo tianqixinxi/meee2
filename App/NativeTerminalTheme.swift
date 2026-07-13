@@ -26,14 +26,27 @@ enum NativeTerminalTheme {
     }
 
     static func backgroundColor(theme: String) -> NSColor {
+        return nsColor(hex: colors(theme: theme).background)
+            ?? (theme == "light" ? .white : NSColor(calibratedWhite: 0.07, alpha: 1))
+    }
+
+    /// Web sidecars beside the native Ghostty surface must use the exact same
+    /// palette source as the terminal itself. Returning CSS-ready values here
+    /// avoids duplicating terminal-profile/theme resolution in React.
+    static func colors(theme: String) -> (background: String, foreground: String) {
+        let normalizedTheme = theme == "light" ? "light" : "dark"
         let terminalProfile = WebBoardTerminalProfile.storedProfile()
         if !terminalProfile.useThemeColors {
-            return nsColor(hex: terminalProfile.backgroundColor)
-                ?? NSColor(calibratedWhite: 0.07, alpha: 1)
+            return (
+                sanitizedHex(terminalProfile.backgroundColor) ?? "#101214",
+                sanitizedHex(terminalProfile.foregroundColor) ?? "#F4F7FB"
+            )
         }
-        let branch = theme == "light" ? storedProfile().light : storedProfile().dark
-        return nsColor(hex: branch.backgroundColor)
-            ?? (theme == "light" ? .white : NSColor(calibratedWhite: 0.07, alpha: 1))
+        let branch = normalizedTheme == "light" ? storedProfile().light : storedProfile().dark
+        return (
+            sanitizedHex(branch.backgroundColor) ?? (normalizedTheme == "light" ? "#FFFFFF" : "#101214"),
+            sanitizedHex(branch.foregroundColor) ?? (normalizedTheme == "light" ? "#25211D" : "#F4F7FB")
+        )
     }
 
     private static func configuration(for branch: Branch, fallbackPalette: [String]) -> TerminalConfiguration {
@@ -103,8 +116,8 @@ enum NativeTerminalTheme {
 
     private static let defaultProfile = StoredProfile(
         schemaVersion: 1,
-        light: Branch(accentColor: "#B95F43", backgroundColor: "#F4F1EA", foregroundColor: "#25211D"),
-        dark: Branch(accentColor: "#CC785C", backgroundColor: "#262624", foregroundColor: "#F5F4EF")
+        light: Branch(accentColor: "#339CFF", backgroundColor: "#FFFFFF", foregroundColor: "#1A1C1F"),
+        dark: Branch(accentColor: "#4DA6FF", backgroundColor: "#101214", foregroundColor: "#F4F7FB")
     )
 
     private static let lightPalette = [

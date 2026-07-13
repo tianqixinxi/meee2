@@ -9827,3 +9827,194 @@
   color: var(--info, #2563eb);
   border-color: color-mix(in srgb, var(--info, #3b82f6) 36%, transparent);
 }
+
+/* Monitor — simplified feed surface. */
+.planner-monitor {
+  overflow: auto;
+  background: var(--bg);
+}
+
+.planner-monitor__body {
+  width: min(1120px, calc(100% - 56px));
+  min-height: 100%;
+  display: block;
+  overflow: visible;
+  padding: 46px 0 64px;
+}
+
+.planner-monitor__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 32px;
+  margin-bottom: 26px;
+}
+
+.planner-monitor__header h1 {
+  font-family: var(--sans);
+  font-size: 28px;
+  font-weight: 720;
+  letter-spacing: -0.025em;
+}
+
+.planner-monitor__header p {
+  margin-top: 7px;
+  font-size: 13px;
+}
+
+.planner-monitor__tools {
+  width: min(520px, 52%);
+  justify-content: flex-end;
+}
+
+.planner-monitor__search {
+  max-width: 360px;
+  border-color: var(--border);
+  border-radius: 9px;
+  background: var(--input-bg);
+}
+
+.planner-monitor__sessions-button {
+  padding: 0 12px;
+  border-color: var(--border);
+  border-radius: 9px;
+  background: transparent;
+}
+
+.planner-monitor__filters {
+  gap: 4px;
+  margin-bottom: 18px;
+  overflow: visible;
+  padding: 0;
+}
+
+.planner-monitor__filter-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 630;
+  cursor: pointer;
+}
+
+.planner-monitor__filter-button strong {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.planner-monitor__filter-button:hover,
+.planner-monitor__filter-button:focus-visible,
+.planner-monitor__filter-button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--text);
+  outline: none;
+}
+
+.planner-monitor__result-count {
+  align-self: center;
+}
+
+.planner-monitor__feed {
+  display: grid;
+  gap: 26px;
+}
+
+.planner-monitor-lane {
+  display: block;
+  min-width: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.planner-monitor-lane__header {
+  display: flex;
+  width: auto;
+  height: auto;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+
+.planner-monitor-lane__header strong {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 10px;
+}
+
+.planner-monitor-lane__items {
+  display: grid;
+  gap: 8px;
+  overflow: visible;
+  padding: 0;
+}
+
+.planner-monitor-card,
+.planner-monitor-card--comfortable {
+  gap: 7px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-left-width: 2px;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.planner-monitor-card:hover,
+.planner-monitor-card:focus-visible,
+.planner-monitor__sessions-button:hover,
+.planner-monitor__sessions-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.planner-monitor-card h3 {
+  font-size: 13px;
+}
+
+.planner-monitor-card__meta span {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.planner-monitor__empty {
+  padding: 56px 20px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+}
+
+@media (max-width: 820px) {
+  .planner-monitor__body {
+    width: min(100% - 28px, 720px);
+    padding-top: 32px;
+  }
+
+  .planner-monitor__header {
+    display: grid;
+    gap: 18px;
+  }
+
+  .planner-monitor__tools {
+    width: 100%;
+  }
+
+  .planner-monitor__filters {
+    overflow-x: auto;
+  }
+}

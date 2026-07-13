@@ -64,8 +64,6 @@ import type {
   SessionArtifactsEnvelope,
   SessionEnvironmentSnapshot,
   ArtifactPageEnvelope,
-  ArtifactCandidateListEnvelope,
-  ArtifactCandidateMutationEnvelope,
 } from './types'
 import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
@@ -1891,42 +1889,9 @@ export function fetchArtifactsPage(params: ArtifactPageParams = {}): Promise<Art
   return jsonRequest<ArtifactPageEnvelope>(`/api/artifacts${suffix}`)
 }
 
-/** @deprecated Use fetchArtifactsPage({ status: 'candidate' }). */
-export function fetchArtifactCandidates(sessionId?: string): Promise<ArtifactCandidateListEnvelope> {
-  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
-  return jsonRequest<ArtifactCandidateListEnvelope>(`/api/artifact-candidates${query}`)
-}
-
-export function promoteArtifactCandidate(
-  candidateId: string,
-  input?: {
-    canvasId?: string
-    nodeId?: string
-    kind?: PlannerArtifactKind
-    title?: string
-    reference?: string
-    status?: string
-  },
-): Promise<ArtifactCandidateMutationEnvelope> {
-  return jsonRequest<ArtifactCandidateMutationEnvelope>(
-    `/api/artifact-candidates/${encodeURIComponent(candidateId)}/promote`,
-    {
-      method: 'POST',
-      body: JSON.stringify(input ?? {}),
-    },
-  )
-}
-
-export function discardArtifactCandidate(candidateId: string): Promise<ArtifactCandidateMutationEnvelope> {
-  return jsonRequest<ArtifactCandidateMutationEnvelope>(
-    `/api/artifact-candidates/${encodeURIComponent(candidateId)}/discard`,
-    { method: 'POST', body: JSON.stringify({}) },
-  )
-}
-
-// UI-1 (ENG-3) — version chain read API. The dropdown calls listArtifactVersions
-// once per artifact slot; selecting a non-latest entry calls getArtifactVersion
-// to fetch its full payload + input snapshot.
+// UI-1 (ENG-3) — version chain read API. The local endpoint currently returns
+// complete version rows; blob-backed historical payloads use the content route
+// below so the preview can resolve the archived file, not just its metadata.
 export function listArtifactVersions(
   canvasId: string,
   nodeId: string,
@@ -1943,6 +1908,15 @@ export function getArtifactVersion(
 ): Promise<PlannerArtifactVersion> {
   return jsonRequest<PlannerArtifactVersion>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifact-versions/${encodeURIComponent(versionId)}`,
+  )
+}
+
+export function getArtifactVersionContent(
+  canvasId: string,
+  versionId: string,
+): Promise<PlannerArtifactContent> {
+  return jsonRequest<PlannerArtifactContent>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifact-versions/${encodeURIComponent(versionId)}/content`,
   )
 }
 
@@ -2581,20 +2555,20 @@ export function fetchAppSettings(): Promise<AppSettings> {
       theme: 'system',
       themeProfile: {
         schemaVersion: 1,
-        presetId: 'claude',
+        presetId: 'codex',
         light: {
-          accentColor: '#B95F43',
-          backgroundColor: '#F4F1EA',
-          sidebarColor: '#FBF8F1',
-          foregroundColor: '#25211D',
-          contrast: 55,
+          accentColor: '#339CFF',
+          backgroundColor: '#FFFFFF',
+          sidebarColor: '#FFFFFF',
+          foregroundColor: '#1A1C1F',
+          contrast: 45,
         },
         dark: {
-          accentColor: '#CC785C',
-          backgroundColor: '#262624',
-          sidebarColor: '#2C2B29',
-          foregroundColor: '#F5F4EF',
-          contrast: 58,
+          accentColor: '#4DA6FF',
+          backgroundColor: '#101214',
+          sidebarColor: '#171B20',
+          foregroundColor: '#F4F7FB',
+          contrast: 62,
         },
       },
       terminalProfile: DEFAULT_TERMINAL_PROFILE,

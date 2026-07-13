@@ -2524,6 +2524,7 @@ function SessionLauncherTerminal({
               key={session.id}
               sessionId={session.id}
               refreshKey={session.lastActivity}
+              refreshStatus={session.status}
             />
           </aside>
         ) : null}

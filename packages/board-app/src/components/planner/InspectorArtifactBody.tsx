@@ -1084,7 +1084,7 @@ function VersionChainList({
         {fallbackArtifacts.map((art, idx) => (
           <li key={art.id}>
             <Archive size={11} aria-hidden />
-            <strong>{positionTagLabel(art.positionTag ?? (idx === 0 ? 'latest' : 'candidate'))}</strong>
+            <strong>{positionTagLabel(art.positionTag ?? (idx === 0 ? 'latest' : 'historical'))}</strong>
             <span>{formatDateShort(art.createdAt)}</span>
           </li>
         ))}
@@ -1408,7 +1408,7 @@ function VersionTimeline({
     <div className="planner-node-modal__version-timeline">
       {artifacts.map((art, idx) => {
         const isActive = art.id === activeId
-        const tagLabel = positionTagLabel(art.positionTag ?? (idx === 0 ? 'latest' : 'candidate'))
+        const tagLabel = positionTagLabel(art.positionTag ?? (idx === 0 ? 'latest' : 'historical'))
         return (
           <button
             key={art.id}
@@ -1460,8 +1460,8 @@ function positionTagLabel(tag: string): string {
   switch (tag) {
     case 'latest':
       return '最新'
-    case 'candidate':
-      return '候选'
+    case 'historical':
+      return '历史版本'
     case 'discarded':
       return '已丢弃'
     case 'promoted':

@@ -162,6 +162,10 @@ function deriveDefaultViews(
   if (payload?.type === 'integration') {
     return [view('integration', 'Integration', 'integration'), view('raw', 'Raw', 'raw')]
   }
+  // Blob-backed text files carry a typed `file` metadata payload plus the
+  // resolved body. Prefer the body once it is available; otherwise every
+  // historical file preview collapses back to filename/size metadata.
+  if (payload?.type === 'file' && content?.content) return [view('raw', 'Raw', 'raw')]
   const table = parseTabular(rawData)
   if (table) {
     const hasMultipleColumns = table.columns.length > 1

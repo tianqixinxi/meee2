@@ -46,6 +46,7 @@ import { getWidgetComponent } from './widgets'
 import { resolveWidgetData } from './widgetDataResolver'
 import { IntegrationArtifactView } from '../../integrations/IntegrationArtifactView'
 import { ArtifactViewTabs } from '../artifacts/ArtifactViewTabs'
+import { Tooltip } from '../Tooltip'
 import { TabularArtifactPreview, parseArtifactJSON, parseTabular } from './TabularArtifactPreview'
 import {
   ARTIFACT_LABELS,
@@ -608,13 +609,14 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
       })()}
 
       {monitorBadge && (
-        <div
-          className={`planner-node__monitor-badge planner-node__monitor-badge--${monitorBadge.tone}`}
-          title={monitorBadge.title}
-        >
-          {monitorBadge.tone === 'reply' ? <MessageCircle size={11} aria-hidden /> : <AlertTriangle size={11} aria-hidden />}
-          <span>{monitorBadge.label}</span>
-        </div>
+        <Tooltip label={monitorBadge.title} placement="top" delay={120}>
+          <div
+            className={`planner-node__monitor-badge planner-node__monitor-badge--${monitorBadge.tone}`}
+          >
+            {monitorBadge.tone === 'reply' ? <MessageCircle size={11} aria-hidden /> : <AlertTriangle size={11} aria-hidden />}
+            <span>{monitorBadge.label}</span>
+          </div>
+        </Tooltip>
       )}
 
       {/* PR4 · artifact-card version chips — for non-virtual artifact nodes,
@@ -1602,8 +1604,8 @@ function artifactVersionMarker(artifact: PlannerArtifact | undefined): string {
   switch (tag) {
     case 'latest':
       return '最新'
-    case 'candidate':
-      return '候选'
+    case 'historical':
+      return '历史版本'
     case 'discarded':
       return '已丢弃'
     case 'promoted':

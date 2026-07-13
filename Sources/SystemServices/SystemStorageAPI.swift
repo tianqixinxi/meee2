@@ -88,7 +88,6 @@ enum SystemStorageAPI {
             meee2.appendingPathComponent("queues", isDirectory: true),
             meee2.appendingPathComponent("unread", isDirectory: true),
             meee2.appendingPathComponent("attachments", isDirectory: true),
-            meee2.appendingPathComponent("artifact-candidates", isDirectory: true),
             meee2.appendingPathComponent("assistant", isDirectory: true),
             meee2.appendingPathComponent("memory", isDirectory: true),
             meee2.appendingPathComponent("session-controls.json", isDirectory: false),
@@ -117,6 +116,8 @@ enum SystemStorageAPI {
             meee2.appendingPathComponent("connectors", isDirectory: true),
             meee2.appendingPathComponent("mcp-meee2", isDirectory: true),
             meee2.appendingPathComponent("audit.log", isDirectory: false),
+            // Legacy data from releases that inferred provisional artifacts from hooks.
+            meee2.appendingPathComponent("artifact-candidates", isDirectory: true),
             logs.appendingPathComponent("meee2.log", isDirectory: false),
             logs.appendingPathComponent("meee2.log.1", isDirectory: false),
             logs.appendingPathComponent("meee2.log.2", isDirectory: false),

@@ -49,6 +49,7 @@ struct WebBoardThemeBranchDTO: Codable, Equatable {
 
 enum WebBoardThemeProfile {
     static let defaultsKey = "meee2.themeProfile"
+    static let codexDefaultMigrationKey = "meee2.themeProfile.defaultCodexMigration.v2"
     static let schemaVersion = 1
     static let supportedPresetIds = Set(["claude", "codex", "custom"])
 
@@ -77,7 +78,7 @@ enum WebBoardThemeProfile {
         light: WebBoardThemeBranchDTO(
             accentColor: "#339CFF",
             backgroundColor: "#FFFFFF",
-            sidebarColor: "#F3F6FA",
+            sidebarColor: "#FFFFFF",
             foregroundColor: "#1A1C1F",
             contrast: 45
         ),
@@ -91,20 +92,28 @@ enum WebBoardThemeProfile {
     )
 
     static func defaultProfile() -> WebBoardThemeProfileDTO {
-        claude
+        codex
     }
 
     static func storedProfile(defaults: UserDefaults = .standard) -> WebBoardThemeProfileDTO {
         guard let data = defaults.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode(WebBoardThemeProfileDTO.self, from: data) else {
+              let decoded = try? JSONDecoder().decode(WebBoardThemeProfileDTO.self, from: data),
+              let profile = sanitized(decoded) else {
+            defaults.set(true, forKey: codexDefaultMigrationKey)
             return defaultProfile()
         }
-        return sanitized(decoded) ?? defaultProfile()
+        if !defaults.bool(forKey: codexDefaultMigrationKey), profile.presetId == "claude" {
+            store(codex, defaults: defaults)
+            return codex
+        }
+        defaults.set(true, forKey: codexDefaultMigrationKey)
+        return profile
     }
 
     static func store(_ profile: WebBoardThemeProfileDTO, defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(profile) else { return }
         defaults.set(data, forKey: defaultsKey)
+        defaults.set(true, forKey: codexDefaultMigrationKey)
     }
 
     static func parse(_ value: Any?) -> WebBoardThemeProfileDTO? {

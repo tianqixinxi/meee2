@@ -103,7 +103,7 @@ describe('artifactForReference', () => {
 
 describe('artifactPositionLabel', () => {
   it('maps each known tag to its Chinese label', () => {
-    expect(artifactPositionLabel('candidate')).toBe('候选')
+    expect(artifactPositionLabel('historical')).toBe('历史版本')
     expect(artifactPositionLabel('discarded')).toBe('已丢弃')
     expect(artifactPositionLabel('promoted')).toBe('已提升')
     expect(artifactPositionLabel('proposed')).toBe('提议中')

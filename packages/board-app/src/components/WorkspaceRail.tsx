@@ -4,11 +4,13 @@ import {
   Archive,
   LayoutTemplate,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings,
   Terminal,
   UsersRound,
 } from 'lucide-react'
-import { type ReactNode, useEffect, useLayoutEffect } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useState } from 'react'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
 import { Tooltip } from './Tooltip'
@@ -25,6 +27,12 @@ interface WorkspaceRailProps {
 
 const EXPANDED_RAIL_WIDTH = 288
 const COMPACT_RAIL_WIDTH = 72
+const RAIL_COLLAPSED_KEY = 'meee2.workspaceRail.collapsed'
+
+function readStoredRailCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'
+}
 
 export function WorkspaceRail({
   mode,
@@ -33,19 +41,27 @@ export function WorkspaceRail({
   detailRef,
 }: WorkspaceRailProps) {
   const { t } = useI18n()
+  const [collapsed, setCollapsed] = useState(readStoredRailCollapsed)
   const compact = mode !== 'session'
-  const railWidth = compact ? COMPACT_RAIL_WIDTH : EXPANDED_RAIL_WIDTH
+  const sessionCollapsed = mode === 'session' && collapsed
+  const railWidth = sessionCollapsed ? 0 : compact ? COMPACT_RAIL_WIDTH : EXPANDED_RAIL_WIDTH
 
   useLayoutEffect(() => {
     document.documentElement.style.setProperty('--sidebar-width', `${railWidth}px`)
     document.documentElement.classList.add('board-sidebar-rail')
     document.documentElement.classList.toggle('board-sidebar-rail--compact', compact)
+    document.documentElement.classList.toggle('board-sidebar-rail--collapsed', sessionCollapsed)
     return () => {
       document.documentElement.style.removeProperty('--sidebar-width')
       document.documentElement.classList.remove('board-sidebar-rail')
       document.documentElement.classList.remove('board-sidebar-rail--compact')
+      document.documentElement.classList.remove('board-sidebar-rail--collapsed')
     }
-  }, [compact, railWidth])
+  }, [compact, railWidth, sessionCollapsed])
+
+  useEffect(() => {
+    window.localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')
+  }, [collapsed])
 
   const showTeam = Boolean(userProfile?.connected)
   const showAvatarShortcut = Boolean(userProfile?.connected)
@@ -66,7 +82,24 @@ export function WorkspaceRail({
   const showFallbackUserIcon = !avatarUrl && !avatarInitials
 
   return (
-    <nav className={`workspace-rail${compact ? ' workspace-rail--compact' : ''}`} aria-label={t('rail.workspace')}>
+    <>
+      {mode === 'session' && (
+        <button
+          type="button"
+          className="workspace-rail__toggle"
+          aria-label={collapsed ? t('rail.expand') : t('rail.collapse')}
+          title={collapsed ? t('rail.expand') : t('rail.collapse')}
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed((current) => !current)}
+        >
+          {collapsed ? <PanelLeftOpen size={14} aria-hidden /> : <PanelLeftClose size={14} aria-hidden />}
+        </button>
+      )}
+      <nav
+        className={`workspace-rail${compact ? ' workspace-rail--compact' : ''}`}
+        aria-label={t('rail.workspace')}
+        hidden={sessionCollapsed}
+      >
       <div className="workspace-rail__top">
         <div className="workspace-rail__brand" data-testid="workspace-rail-brand" aria-label="Meee2">
           {compact
@@ -146,7 +179,8 @@ export function WorkspaceRail({
       <RailButton label={t('rail.settings')} active={mode === 'settings'} onClick={() => onModeChange('settings')}>
         <Settings size={20} />
       </RailButton>
-    </nav>
+      </nav>
+    </>
   )
 }
 

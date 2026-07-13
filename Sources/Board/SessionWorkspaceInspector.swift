@@ -21,6 +21,17 @@ struct SessionWorkspaceSnapshot: Encodable, Equatable {
 }
 
 enum SessionWorkspaceInspector {
+    private struct CacheEntry {
+        let snapshot: SessionWorkspaceSnapshot
+        let capturedAt: Date
+    }
+
+    private static let cacheCondition = NSCondition()
+    private static let cacheTTL: TimeInterval = 2
+    private static let cacheLimit = 32
+    private static var cache: [String: CacheEntry] = [:]
+    private static var inFlightKeys = Set<String>()
+
     static func output(
         in snapshot: SessionWorkspaceSnapshot,
         matching rawPath: String
@@ -33,8 +44,7 @@ enum SessionWorkspaceInspector {
 
     static func inspect(
         sessionId: String,
-        cwd: String,
-        candidateFilePaths: [String] = []
+        cwd: String
     ) -> SessionWorkspaceSnapshot {
         let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.path
         guard let root = runGit(cwd: normalizedCwd, arguments: ["rev-parse", "--show-toplevel"])?
@@ -46,7 +56,7 @@ enum SessionWorkspaceInspector {
                 isGit: false,
                 changes: nil,
                 branch: nil,
-                outputs: candidateOutputs(paths: candidateFilePaths, cwd: normalizedCwd)
+                outputs: []
             )
         }
 
@@ -81,6 +91,55 @@ enum SessionWorkspaceInspector {
             branch: branch,
             outputs: outputs
         )
+    }
+
+    /// Environment polling can arrive from focus changes and timers at nearly
+    /// the same moment. Cache by workspace and make a cache
+    /// miss single-flight so those requests share one set of Git processes.
+    static func inspectCached(
+        sessionId: String,
+        cwd: String,
+        now: Date = Date()
+    ) -> SessionWorkspaceSnapshot {
+        let key = cacheKey(cwd: cwd)
+
+        cacheCondition.lock()
+        while true {
+            if let entry = cache[key], now.timeIntervalSince(entry.capturedAt) < cacheTTL {
+                cacheCondition.unlock()
+                return replacingSessionId(in: entry.snapshot, with: sessionId)
+            }
+            if !inFlightKeys.contains(key) {
+                inFlightKeys.insert(key)
+                cacheCondition.unlock()
+                break
+            }
+            cacheCondition.wait()
+        }
+
+        let snapshot = inspect(
+            sessionId: sessionId,
+            cwd: cwd
+        )
+
+        cacheCondition.lock()
+        cache[key] = CacheEntry(snapshot: snapshot, capturedAt: now)
+        if cache.count > cacheLimit,
+           let oldest = cache.min(by: { $0.value.capturedAt < $1.value.capturedAt })?.key {
+            cache.removeValue(forKey: oldest)
+        }
+        inFlightKeys.remove(key)
+        cacheCondition.broadcast()
+        cacheCondition.unlock()
+        return snapshot
+    }
+
+    static func resetCacheForTests() {
+        cacheCondition.lock()
+        cache.removeAll()
+        inFlightKeys.removeAll()
+        cacheCondition.broadcast()
+        cacheCondition.unlock()
     }
 
     static func parseNumstat(_ output: String) -> (additions: Int, deletions: Int) {
@@ -127,17 +186,22 @@ enum SessionWorkspaceInspector {
         return "@\(commit)"
     }
 
-    private static func candidateOutputs(paths: [String], cwd: String) -> [SessionWorkspaceOutputFile] {
-        let root = URL(fileURLWithPath: cwd).standardizedFileURL
-        return Array(Set(paths)).compactMap { rawPath in
-            let absolute = rawPath.hasPrefix("/")
-                ? URL(fileURLWithPath: rawPath).standardizedFileURL
-                : root.appendingPathComponent(rawPath).standardizedFileURL
-            guard FileManager.default.fileExists(atPath: absolute.path) else { return nil }
-            guard absolute.path.hasPrefix(root.path + "/") else { return nil }
-            let relative = String(absolute.path.dropFirst(root.path.count + 1))
-            return workspaceOutput(url: absolute, relativePath: relative, root: root)
-        }.sorted { $0.relativePath < $1.relativePath }
+    private static func cacheKey(cwd: String) -> String {
+        URL(fileURLWithPath: cwd).standardizedFileURL.path
+    }
+
+    private static func replacingSessionId(
+        in snapshot: SessionWorkspaceSnapshot,
+        with sessionId: String
+    ) -> SessionWorkspaceSnapshot {
+        SessionWorkspaceSnapshot(
+            sessionId: sessionId,
+            cwd: snapshot.cwd,
+            isGit: snapshot.isGit,
+            changes: snapshot.changes,
+            branch: snapshot.branch,
+            outputs: snapshot.outputs
+        )
     }
 
     private static func workspaceOutput(

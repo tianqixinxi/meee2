@@ -440,6 +440,24 @@ describe('SessionLauncherView', () => {
     expect(screen.getByRole('button', { name: '权限模式' })).toHaveTextContent('完全访问')
   })
 
+  it('keeps Full Access persistence and Plan mode available together', async () => {
+    renderWithI18n(<SessionLauncherView state={makeState()} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(screen.getByRole('button', { name: '权限模式' }))
+    fireEvent.click(screen.getByRole('option', { name: /完全访问/ }))
+
+    const rememberFullAccess = screen.getByRole('checkbox', { name: '为此工作区记住完全访问' })
+    const planMode = screen.getByRole('switch', { name: 'Plan 模式' })
+    expect(rememberFullAccess).toBeVisible()
+    expect(planMode).toBeVisible()
+
+    fireEvent.click(rememberFullAccess)
+    fireEvent.click(planMode)
+    expect(rememberFullAccess).toBeChecked()
+    expect(planMode).toHaveAttribute('aria-checked', 'true')
+  })
+
   it('shows compact nested project sessions and selects the native terminal target', async () => {
     renderWithI18n(<SessionLauncherView state={makeState()} />)
 

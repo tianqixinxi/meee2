@@ -336,7 +336,12 @@ class CodexPlugin: SessionPlugin {
         // 按更新时间排序
         sessions.sort { $0.startedAt > $1.startedAt }
 
-        NSLog("[CodexPlugin] Found \(sessions.count) active threads from \(dbPath.lastPathComponent)")
+        // Active Codex sessions refresh every 10 seconds. Logging every scan
+        // turns an unchanged background poll into thousands of disk writes per
+        // day; keep the trace behind the existing opt-in performance flag.
+        if perfLoggingEnabled {
+            NSLog("[CodexPlugin] Found \(sessions.count) active threads from \(dbPath.lastPathComponent)")
+        }
         return sessions
     }
 
