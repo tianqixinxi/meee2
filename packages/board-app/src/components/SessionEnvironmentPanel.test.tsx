@@ -86,6 +86,73 @@ describe('SessionEnvironmentPanel', () => {
     view.unmount()
   })
 
+  it('loads the selected session once even when the window is not focused', async () => {
+    vi.mocked(document.hasFocus).mockReturnValue(false)
+
+    render(
+      <I18nProvider>
+        <SessionEnvironmentPanel
+          sessionId="background-session"
+          refreshKey="activity-background"
+          refreshStatus="running"
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(api.fetchSessionEnvironment).toHaveBeenCalledWith('background-session'))
+    expect(api.fetchSessionEnvironment).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let an older refresh overwrite a newer activity snapshot', async () => {
+    type Snapshot = Awaited<ReturnType<typeof api.fetchSessionEnvironment>>
+    let resolveFirst: (value: Snapshot) => void = () => undefined
+    let resolveSecond: (value: Snapshot) => void = () => undefined
+    const first = new Promise<Snapshot>((resolve) => { resolveFirst = resolve })
+    const second = new Promise<Snapshot>((resolve) => { resolveSecond = resolve })
+    api.fetchSessionEnvironment
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+
+    const view = render(
+      <I18nProvider>
+        <SessionEnvironmentPanel sessionId="racing-session" refreshKey="activity-old" />
+      </I18nProvider>,
+    )
+    view.rerender(
+      <I18nProvider>
+        <SessionEnvironmentPanel sessionId="racing-session" refreshKey="activity-new" />
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(api.fetchSessionEnvironment).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      resolveSecond({
+        sessionId: 'racing-session',
+        cwd: '/tmp/project',
+        isGit: true,
+        changes: { files: 1, additions: 2, deletions: 0 },
+        branch: 'latest-branch',
+        outputs: [],
+      })
+      await second
+    })
+    expect(await screen.findByText('latest-branch')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveFirst({
+        sessionId: 'racing-session',
+        cwd: '/tmp/project',
+        isGit: true,
+        changes: { files: 9, additions: 99, deletions: 99 },
+        branch: 'stale-branch',
+        outputs: [],
+      })
+      await first
+    })
+    expect(screen.getByText('latest-branch')).toBeInTheDocument()
+    expect(screen.queryByText('stale-branch')).not.toBeInTheDocument()
+  })
+
   it('renders git changes, branch, and created output files', async () => {
     render(
       <I18nProvider>

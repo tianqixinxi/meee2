@@ -44,8 +44,7 @@ enum SessionWorkspaceInspector {
 
     static func inspect(
         sessionId: String,
-        cwd: String,
-        candidateFilePaths: [String] = []
+        cwd: String
     ) -> SessionWorkspaceSnapshot {
         let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.path
         guard let root = runGit(cwd: normalizedCwd, arguments: ["rev-parse", "--show-toplevel"])?
@@ -57,7 +56,7 @@ enum SessionWorkspaceInspector {
                 isGit: false,
                 changes: nil,
                 branch: nil,
-                outputs: candidateOutputs(paths: candidateFilePaths, cwd: normalizedCwd)
+                outputs: []
             )
         }
 
@@ -95,15 +94,14 @@ enum SessionWorkspaceInspector {
     }
 
     /// Environment polling can arrive from focus changes and timers at nearly
-    /// the same moment. Cache by workspace + candidate set and make a cache
+    /// the same moment. Cache by workspace and make a cache
     /// miss single-flight so those requests share one set of Git processes.
     static func inspectCached(
         sessionId: String,
         cwd: String,
-        candidateFilePaths: [String] = [],
         now: Date = Date()
     ) -> SessionWorkspaceSnapshot {
-        let key = cacheKey(cwd: cwd, candidateFilePaths: candidateFilePaths)
+        let key = cacheKey(cwd: cwd)
 
         cacheCondition.lock()
         while true {
@@ -121,8 +119,7 @@ enum SessionWorkspaceInspector {
 
         let snapshot = inspect(
             sessionId: sessionId,
-            cwd: cwd,
-            candidateFilePaths: candidateFilePaths
+            cwd: cwd
         )
 
         cacheCondition.lock()
@@ -189,22 +186,8 @@ enum SessionWorkspaceInspector {
         return "@\(commit)"
     }
 
-    private static func candidateOutputs(paths: [String], cwd: String) -> [SessionWorkspaceOutputFile] {
-        let root = URL(fileURLWithPath: cwd).standardizedFileURL
-        return Array(Set(paths)).compactMap { rawPath in
-            let absolute = rawPath.hasPrefix("/")
-                ? URL(fileURLWithPath: rawPath).standardizedFileURL
-                : root.appendingPathComponent(rawPath).standardizedFileURL
-            guard FileManager.default.fileExists(atPath: absolute.path) else { return nil }
-            guard absolute.path.hasPrefix(root.path + "/") else { return nil }
-            let relative = String(absolute.path.dropFirst(root.path.count + 1))
-            return workspaceOutput(url: absolute, relativePath: relative, root: root)
-        }.sorted { $0.relativePath < $1.relativePath }
-    }
-
-    private static func cacheKey(cwd: String, candidateFilePaths: [String]) -> String {
-        let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.path
-        return ([normalizedCwd] + candidateFilePaths.sorted()).joined(separator: "\0")
+    private static func cacheKey(cwd: String) -> String {
+        URL(fileURLWithPath: cwd).standardizedFileURL.path
     }
 
     private static func replacingSessionId(

@@ -1,8 +1,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   Clock3,
   GitPullRequestArrow,
   List,
@@ -12,7 +10,7 @@ import {
   ShieldAlert,
   Signpost,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
 import { monitorItemOpenLabel, monitorItemSourceKind } from '../../lib/workspaceNavigation'
@@ -28,8 +26,6 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
 }
 
 type MonitorLaneKey = 'blocked' | 'approval' | 'running' | 'ready' | 'done'
-type MonitorSourceFilter = 'all' | 'live' | 'node' | 'canvas' | 'approval' | 'artifact'
-type MonitorSort = 'severity' | 'updated'
 type Translator = ReturnType<typeof useI18n>['t']
 
 interface MonitorLane {
@@ -55,27 +51,33 @@ export function WorkspaceMonitor({
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [laneFilter, setLaneFilter] = useState<MonitorLaneKey | 'all'>('all')
-  const [sourceFilter, setSourceFilter] = useState<MonitorSourceFilter>('all')
-  const [sortMode, setSortMode] = useState<MonitorSort>('severity')
-  const [collapsedLanes, setCollapsedLanes] = useState<MonitorLaneKey[]>([])
+  const requestSequenceRef = useRef(0)
   const loadMonitor = useCallback(() => {
+    const sequence = ++requestSequenceRef.current
     setError(null)
     fetchPlannerWorkspaceMonitor()
-      .then(setMonitor)
-      .catch((err) => setError((err as Error).message || t('monitor.loadFailed')))
+      .then((next) => {
+        if (requestSequenceRef.current === sequence) setMonitor(next)
+      })
+      .catch((err) => {
+        if (requestSequenceRef.current === sequence) {
+          setError((err as Error).message || t('monitor.loadFailed'))
+        }
+      })
   }, [t])
 
   useEffect(() => {
     loadMonitor()
+    return () => {
+      requestSequenceRef.current += 1
+    }
   }, [loadMonitor, refreshTick])
 
   const lanes = useMemo<MonitorLane[]>(() => {
     const term = query.trim().toLowerCase()
     const filteredItems = (monitor?.items ?? [])
       .filter((item) => matchesSearch(item, term))
-      .filter((item) => laneFilter === 'all' || laneForItem(item) === laneFilter)
-      .filter((item) => sourceMatches(item, sourceFilter))
-      .sort((a, b) => sortMonitorItems(a, b, sortMode))
+      .sort(sortMonitorItems)
 
     const itemLanes: MonitorLane[] = [
       { key: 'blocked', label: t('monitor.laneBlocked'), icon: ShieldAlert, items: [] },
@@ -89,74 +91,56 @@ export function WorkspaceMonitor({
       byKey.get(laneForItem(item))?.items.push(item)
     }
     return itemLanes
-  }, [laneFilter, monitor, query, sortMode, sourceFilter, t])
+  }, [monitor, query, t])
 
-  const totalItems = lanes.reduce((count, lane) => count + lane.items.length, 0)
-
-  const toggleLane = (lane: MonitorLaneKey) => {
-    setCollapsedLanes((current) => (
-      current.includes(lane) ? current.filter((key) => key !== lane) : [...current, lane]
-    ))
-  }
+  const visibleLanes = laneFilter === 'all' ? lanes : lanes.filter((lane) => lane.key === laneFilter)
+  const totalItems = visibleLanes.reduce((count, lane) => count + lane.items.length, 0)
 
   return (
     <section className="planner-monitor" aria-label={t('monitor.title')}>
       <div className="planner-monitor__body">
         <header className="planner-monitor__header">
-          <h1>{t('monitor.title')}</h1>
-          <p>{t('monitor.subtitle')}</p>
-        </header>
-        <div className="planner-monitor__tools">
-          <div className="planner-monitor__search">
-            <Search size={13} aria-hidden />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('monitor.searchPlaceholder')}
-              aria-label={t('monitor.searchLabel')}
-            />
+          <div>
+            <h1>{t('monitor.title')}</h1>
+            <p>{t('monitor.subtitle')}</p>
           </div>
-          <button
-            type="button"
-            className="planner-monitor__sessions-button"
-            onClick={onOpenAllSessions}
-            title={t('monitor.openSessions')}
-          >
-            <List size={13} aria-hidden />
-            <span>{t('monitor.openSessions')}</span>
-          </button>
-        </div>
+          <div className="planner-monitor__tools">
+            <div className="planner-monitor__search">
+              <Search size={13} aria-hidden />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('monitor.searchPlaceholder')}
+                aria-label={t('monitor.searchLabel')}
+              />
+            </div>
+            <button
+              type="button"
+              className="planner-monitor__sessions-button"
+              onClick={onOpenAllSessions}
+              title={t('monitor.openSessions')}
+            >
+              <List size={13} aria-hidden />
+              <span>{t('monitor.openSessions')}</span>
+            </button>
+          </div>
+        </header>
 
         <div className="planner-monitor__filters" aria-label={t('monitor.filters')}>
-          <label>
-            <span>{t('monitor.status')}</span>
-            <select value={laneFilter} onChange={(event) => setLaneFilter(event.target.value as MonitorLaneKey | 'all')}>
-              <option value="all">{t('monitor.allStatus')}</option>
-              <option value="blocked">{t('monitor.laneBlocked')}</option>
-              <option value="approval">{t('monitor.laneApproval')}</option>
-              <option value="running">{t('monitor.laneRunning')}</option>
-              <option value="ready">{t('monitor.laneReady')}</option>
-              <option value="done">{t('monitor.laneDone')}</option>
-            </select>
-          </label>
-          <label>
-            <span>{t('monitor.source')}</span>
-            <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as MonitorSourceFilter)}>
-              <option value="all">{t('monitor.sourceAll')}</option>
-              <option value="live">{t('monitor.sourceLive')}</option>
-              <option value="node">{t('monitor.sourceNode')}</option>
-              <option value="canvas">{t('monitor.sourceCanvas')}</option>
-              <option value="approval">{t('monitor.sourceApproval')}</option>
-              <option value="artifact">{t('monitor.sourceArtifact')}</option>
-            </select>
-          </label>
-          <label>
-            <span>{t('monitor.sort')}</span>
-            <select value={sortMode} onChange={(event) => setSortMode(event.target.value as MonitorSort)}>
-              <option value="severity">{t('monitor.sortSeverity')}</option>
-              <option value="updated">{t('monitor.sortUpdated')}</option>
-            </select>
-          </label>
+          <MonitorFilterButton active={laneFilter === 'all'} onClick={() => setLaneFilter('all')}>
+            {t('monitor.allStatus')}
+            <strong>{lanes.reduce((count, lane) => count + lane.items.length, 0)}</strong>
+          </MonitorFilterButton>
+          {lanes.filter((lane) => lane.items.length > 0 || laneFilter === lane.key).map((lane) => (
+            <MonitorFilterButton
+              key={lane.key}
+              active={laneFilter === lane.key}
+              onClick={() => setLaneFilter(lane.key)}
+            >
+              {lane.label}
+              <strong>{lane.items.length}</strong>
+            </MonitorFilterButton>
+          ))}
           <span className="planner-monitor__result-count">{t('monitor.resultCount', { count: String(totalItems) })}</span>
         </div>
 
@@ -174,47 +158,56 @@ export function WorkspaceMonitor({
             <span>{t('monitor.loading')}</span>
           </div>
         ) : (
-          <div className="planner-monitor__kanban" data-density="comfortable">
-            {lanes.map((lane) => {
-              const collapsed = collapsedLanes.includes(lane.key)
+          <div className="planner-monitor__feed">
+            {visibleLanes.filter((lane) => lane.items.length > 0).map((lane) => {
               const Icon = lane.icon
               return (
                 <section key={lane.key} className={`planner-monitor-lane planner-monitor-lane--${lane.key}`}>
-                  <button
-                    type="button"
-                    className="planner-monitor-lane__header"
-                    onClick={() => toggleLane(lane.key)}
-                    aria-expanded={!collapsed}
-                    title={collapsed ? t('monitor.expandLane') : t('monitor.collapseLane')}
-                  >
+                  <div className="planner-monitor-lane__header">
                     <Icon size={14} aria-hidden />
                     <span>{lane.label}</span>
                     <strong>{lane.items.length}</strong>
-                    {collapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
-                  </button>
-                  {!collapsed && (
-                    <div className="planner-monitor-lane__items">
-                      {lane.items.map((item) => (
-                        <MonitorCard
-                          key={item.id}
-                          item={item}
-                          generatedAt={monitor?.generatedAt}
-                          onOpenItem={onOpenItem}
-                          t={t}
-                        />
-                      ))}
-                      {lane.items.length === 0 && (
-                        <div className="planner-monitor__empty">{t('monitor.empty')}</div>
-                      )}
-                    </div>
-                  )}
+                  </div>
+                  <div className="planner-monitor-lane__items">
+                    {lane.items.map((item) => (
+                      <MonitorCard
+                        key={item.id}
+                        item={item}
+                        generatedAt={monitor?.generatedAt}
+                        onOpenItem={onOpenItem}
+                        t={t}
+                      />
+                    ))}
+                  </div>
                 </section>
               )
             })}
+            {totalItems === 0 && <div className="planner-monitor__empty">{t('monitor.empty')}</div>}
           </div>
         )}
       </div>
     </section>
+  )
+}
+
+function MonitorFilterButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      className={`planner-monitor__filter-button${active ? ' is-active' : ''}`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -335,24 +328,6 @@ function isPlaceholderBlocker(value: string): boolean {
   return value.trim().toLowerCase() === 'blocked: no reason was provided by the session.'
 }
 
-function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): boolean {
-  const sourceKind = monitorItemSourceKind(item)
-  switch (source) {
-    case 'all':
-      return true
-    case 'live':
-      return sourceKind === 'live'
-    case 'node':
-      return sourceKind === 'node'
-    case 'canvas':
-      return sourceKind === 'canvas'
-    case 'approval':
-      return sourceKind === 'approval' || item.needsOwnerReview
-    case 'artifact':
-      return evidenceCount(item) > 0
-  }
-}
-
 function laneForItem(item: PlannerMonitorItem): MonitorLaneKey {
   if (item.runState === 'blocked' || item.riskRank <= 0 || item.blockers.length > 0) return 'blocked'
   if (item.needsOwnerReview || item.proposalStatus === 'pending') return 'approval'
@@ -375,17 +350,13 @@ function awaitingBoost(item: PlannerMonitorItem, now: number): number {
   return 0
 }
 
-function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode: MonitorSort): number {
-  if (sortMode === 'severity') {
-    const now = Date.now()
-    const leftRank = a.riskRank - awaitingBoost(a, now)
-    const rightRank = b.riskRank - awaitingBoost(b, now)
-    if (leftRank !== rightRank) return leftRank - rightRank
-  }
-  if (sortMode === 'updated') {
-    const delta = timestampForItem(b) - timestampForItem(a)
-    if (delta !== 0) return delta
-  }
+function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem): number {
+  const now = Date.now()
+  const leftRank = a.riskRank - awaitingBoost(a, now)
+  const rightRank = b.riskRank - awaitingBoost(b, now)
+  if (leftRank !== rightRank) return leftRank - rightRank
+  const delta = timestampForItem(b) - timestampForItem(a)
+  if (delta !== 0) return delta
   if (a.canvasTitle !== b.canvasTitle) return a.canvasTitle.localeCompare(b.canvasTitle)
   return a.summary.localeCompare(b.summary)
 }

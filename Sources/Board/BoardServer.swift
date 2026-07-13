@@ -707,10 +707,6 @@ public final class BoardServer {
         server.GET["/api/sessions/:id/artifacts"] = BoardServer.cors(BoardAPI.getSessionArtifacts)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
         server.GET["/api/artifacts"] = BoardServer.cors(BoardAPI.listArtifacts)
-        server.GET["/api/artifact-candidates"] = BoardServer.cors(BoardAPI.listArtifactCandidates)
-        server.POST["/api/artifact-candidates/hook"] = BoardServer.cors(BoardAPI.ingestArtifactCandidateHook)
-        server.POST["/api/artifact-candidates/:id/promote"] = BoardServer.cors(BoardAPI.promoteArtifactCandidate)
-        server.POST["/api/artifact-candidates/:id/discard"] = BoardServer.cors(BoardAPI.discardArtifactCandidate)
         server.GET["/api/memory"] = BoardServer.cors(BoardAPI.listMemoryRecords)
         server.POST["/api/memory"] = BoardServer.cors(BoardAPI.createMemoryRecord)
         server.PATCH["/api/memory/:id"] = BoardServer.cors(BoardAPI.updateMemoryRecord)
@@ -806,6 +802,7 @@ public final class BoardServer {
         // UI-1 (ENG-3) — artifact version chain read API.
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/artifact-versions"] = BoardServer.cors(BoardAPI.listPlannerArtifactVersions)
         server.GET["/api/planner/canvases/:id/artifact-versions/:versionId"] = BoardServer.cors(BoardAPI.getPlannerArtifactVersion)
+        server.GET["/api/planner/canvases/:id/artifact-versions/:versionId/content"] = BoardServer.cors(BoardAPI.getPlannerArtifactVersionContent)
         // UI-1 (ENG-3) — re-run a gate node by re-submitting its latest version
         // with force_new_version: true. Body: { reference?: string } (optional;
         // defaults to the node's latest version slot).

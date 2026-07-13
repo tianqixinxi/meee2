@@ -32,37 +32,20 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
         XCTAssertEqual(result.createdPaths, ["Sources/New.swift", "output/report.md"])
     }
 
-    func testNonGitWorkspaceUsesExistingSessionFileOutputs() throws {
+    func testNonGitWorkspaceHasNoInferredOutputs() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("meee2-environment-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let output = root.appendingPathComponent("result.md")
-        try Data("done".utf8).write(to: output)
-        let outside = FileManager.default.temporaryDirectory
-            .appendingPathComponent("meee2-external-output-\(UUID().uuidString).md")
-        try Data("outside".utf8).write(to: outside)
-        defer { try? FileManager.default.removeItem(at: outside) }
-        let escapingLink = root.appendingPathComponent("external-link.md")
-        try FileManager.default.createSymbolicLink(at: escapingLink, withDestinationURL: outside)
-
         let snapshot = SessionWorkspaceInspector.inspect(
             sessionId: "session-a",
-            cwd: root.path,
-            candidateFilePaths: [
-                output.path,
-                outside.path,
-                escapingLink.path,
-                root.appendingPathComponent("missing.md").path
-            ]
+            cwd: root.path
         )
 
         XCTAssertFalse(snapshot.isGit)
         XCTAssertNil(snapshot.branch)
         XCTAssertNil(snapshot.changes)
-        XCTAssertEqual(snapshot.outputs, [
-            SessionWorkspaceOutputFile(path: output.path, relativePath: "result.md")
-        ])
+        XCTAssertEqual(snapshot.outputs, [])
     }
 
     func testGitWorkspaceReportsBranchChangesAndCreatedFiles() throws {

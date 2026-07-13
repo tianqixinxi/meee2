@@ -878,7 +878,7 @@ export interface PlannerNodeDispatch {
  */
 export type ArtifactPositionTag =
   | 'latest'      // 默认引用的那份(主推)
-  | 'candidate'   // 同节点的其他版本
+  | 'historical'  // 同节点的历史版本
   | 'discarded'   // 不再考虑但留档
   | 'promoted'    // 已被提升为独立画板节点(原 kanban item 等)
   | 'proposed'    // agent 提议要提升,等 owner 批
@@ -969,47 +969,10 @@ export interface PlannerArtifact {
   views?: PlannerArtifactView[] | null
 }
 
-export type SessionArtifactCandidateStatus = 'candidate' | 'promoted' | 'discarded'
-
-export interface SessionArtifactReference {
-  kind: string
-  value: string
-  label?: string | null
-}
-
-export interface SessionArtifactCandidate {
-  id: string
-  sessionId: string
-  provider: string
-  cwd?: string | null
-  title: string
-  kind: string
-  status: SessionArtifactCandidateStatus
-  createdAt: string
-  updatedAt: string
-  sourceEvent: string
-  toolName?: string | null
-  toolUseId?: string | null
-  references: SessionArtifactReference[]
-  summary: string
-  promotedCanvasId?: string | null
-  promotedNodeId?: string | null
-  promotedArtifactId?: string | null
-}
-
-export interface SessionArtifactAttachTarget {
-  canvasId: string
-  canvasName: string
-  nodeId: string
-  nodeTitle: string
-}
-
 export interface SessionArtifactsEnvelope {
   sessionId: string
-  candidates: SessionArtifactCandidate[]
   artifacts: PlannerArtifact[]
   totalCount: number
-  attachTargets: SessionArtifactAttachTarget[]
 }
 
 export interface SessionEnvironmentSnapshot {
@@ -1028,17 +991,11 @@ export interface SessionEnvironmentSnapshot {
   }>
 }
 
-export interface ArtifactCandidateListEnvelope {
-  candidates: SessionArtifactCandidate[]
-}
-
 export interface ArtifactPageItem {
-  sourceKind: 'artifact' | 'candidate'
   canvas: CanvasInfo
   node?: PlanningNode | null
   sessionId?: string | null
   artifacts: PlannerArtifact[]
-  candidate?: SessionArtifactCandidate | null
 }
 
 export interface ArtifactPageEnvelope {
@@ -1046,15 +1003,8 @@ export interface ArtifactPageEnvelope {
   cursor?: string | null
   total: number
   hasMore: boolean
-  candidateTotal: number
   canvasCount: number
   groupCounts: Record<string, number>
-}
-
-export interface ArtifactCandidateMutationEnvelope {
-  candidate: SessionArtifactCandidate
-  artifact?: PlannerArtifact | null
-  attachTargets: SessionArtifactAttachTarget[]
 }
 
 /** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /

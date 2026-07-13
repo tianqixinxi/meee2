@@ -20,7 +20,8 @@ const CACHE_LIMIT = 24
 const ACTIVE_REFRESH_MS = 5_000
 const RESTING_REFRESH_MS = 15_000
 const cache = new Map<string, CacheEntry>()
-const pending = new Map<string, Promise<SessionEnvironmentSnapshot>>()
+const pending = new Map<string, { refreshKey: string; promise: Promise<SessionEnvironmentSnapshot> }>()
+const requestSequence = new Map<string, number>()
 
 function requestEnvironment(
   sessionId: string,
@@ -30,20 +31,26 @@ function requestEnvironment(
   const cached = cache.get(sessionId)
   if (!force && cached?.refreshKey === refreshKey) return Promise.resolve(cached.data)
   const existing = pending.get(sessionId)
-  if (existing) return existing
+  if (existing?.refreshKey === refreshKey) return existing.promise
+  const sequence = (requestSequence.get(sessionId) ?? 0) + 1
+  requestSequence.set(sessionId, sequence)
   const request = fetchSessionEnvironment(sessionId)
     .then((data) => {
-      cache.delete(sessionId)
-      cache.set(sessionId, { data, refreshKey })
-      while (cache.size > CACHE_LIMIT) {
-        const oldest = cache.keys().next().value
-        if (!oldest) break
-        cache.delete(oldest)
+      if (requestSequence.get(sessionId) === sequence) {
+        cache.delete(sessionId)
+        cache.set(sessionId, { data, refreshKey })
+        while (cache.size > CACHE_LIMIT) {
+          const oldest = cache.keys().next().value
+          if (!oldest) break
+          cache.delete(oldest)
+        }
       }
       return data
     })
-    .finally(() => pending.delete(sessionId))
-  pending.set(sessionId, request)
+    .finally(() => {
+      if (pending.get(sessionId)?.promise === request) pending.delete(sessionId)
+    })
+  pending.set(sessionId, { refreshKey, promise: request })
   return request
 }
 
@@ -77,7 +84,9 @@ export function SessionEnvironmentPanel({
   const [openError, setOpenError] = useState(false)
   const mountedRef = useRef(true)
   const activeSessionIdRef = useRef(sessionId)
+  const activeRefreshKeyRef = useRef(normalizedRefreshKey)
   activeSessionIdRef.current = sessionId
+  activeRefreshKeyRef.current = normalizedRefreshKey
 
   useEffect(() => {
     mountedRef.current = true
@@ -94,16 +103,27 @@ export function SessionEnvironmentPanel({
     }
     return requestEnvironment(sessionId, normalizedRefreshKey, force)
       .then((next) => {
-        if (mountedRef.current && activeSessionIdRef.current === sessionId) setData(next)
+        if (
+          mountedRef.current
+          && activeSessionIdRef.current === sessionId
+          && activeRefreshKeyRef.current === normalizedRefreshKey
+        ) setData(next)
       })
       .catch(() => undefined)
       .finally(() => {
-        if (mountedRef.current && activeSessionIdRef.current === sessionId) setLoading(false)
+        if (
+          mountedRef.current
+          && activeSessionIdRef.current === sessionId
+          && activeRefreshKeyRef.current === normalizedRefreshKey
+        ) setLoading(false)
       })
   }, [normalizedRefreshKey, sessionId])
 
   useEffect(() => {
-    if (canRefreshEnvironment()) void refresh()
+    // The selected session must always paint one snapshot. Focus only gates
+    // background polling; tying the initial request to document.hasFocus()
+    // leaves the sidecar blank when the window opens in the background.
+    void refresh()
   }, [refresh])
 
   useEffect(() => {
@@ -132,7 +152,6 @@ export function SessionEnvironmentPanel({
 
     window.addEventListener('focus', refreshOnFocus)
     document.addEventListener('visibilitychange', refreshOnVisibility)
-    if (canRefreshEnvironment()) void refresh(true)
     schedule()
     return () => {
       stopped = true

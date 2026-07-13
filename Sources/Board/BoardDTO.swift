@@ -505,17 +505,13 @@ struct CanvasListEnvelope: Encodable {
     let memberships: [CanvasSessionMembershipDTO]
 }
 
-/// One deduplicated row in the global Artifacts index. Formal artifacts keep
-/// their complete slot head list so existing detail/version behavior remains
-/// available; raw candidates use the same envelope without pretending to be a
-/// promoted artifact.
+/// One deduplicated row in the global Artifacts index. Each row keeps its
+/// complete slot history so the detail view can render formal artifact versions.
 struct ArtifactPageItemDTO: Encodable {
-    let sourceKind: String
     let canvas: CanvasInfoDTO
     let node: PlanningNode?
     let sessionId: String?
     let artifacts: [PlannerArtifact]
-    let candidate: SessionArtifactCandidate?
 }
 
 /// Cursor page returned by `GET /api/artifacts`.
@@ -524,7 +520,6 @@ struct ArtifactPageEnvelope: Encodable {
     let cursor: String?
     let total: Int
     let hasMore: Bool
-    let candidateTotal: Int
     let canvasCount: Int
     let groupCounts: [String: Int]
 }

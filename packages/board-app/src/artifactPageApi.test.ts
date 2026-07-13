@@ -10,7 +10,6 @@ describe('fetchArtifactsPage', () => {
       cursor: null,
       total: 0,
       hasMore: false,
-      candidateTotal: 0,
       canvasCount: 0,
       groupCounts: {},
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))

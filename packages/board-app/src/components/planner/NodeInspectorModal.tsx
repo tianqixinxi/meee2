@@ -893,8 +893,8 @@ function formatVersionLabel(v: PlannerArtifactVersion): string {
 
 export function artifactPositionLabel(tag: PlannerArtifact['positionTag']): string {
   switch (tag) {
-    case 'candidate':
-      return '候选'
+    case 'historical':
+      return '历史版本'
     case 'discarded':
       return '已丢弃'
     case 'promoted':

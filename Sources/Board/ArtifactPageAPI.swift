@@ -100,6 +100,18 @@ enum ArtifactPageBuilderError: LocalizedError {
 }
 
 enum ArtifactPageBuilder {
+    private final class Bucket {
+        let source: ArtifactPageSource
+        let node: PlanningNode?
+        var artifacts: [PlannerArtifact]
+
+        init(source: ArtifactPageSource, node: PlanningNode?, artifact: PlannerArtifact) {
+            self.source = source
+            self.node = node
+            self.artifacts = [artifact]
+        }
+    }
+
     private struct Record {
         let key: String
         let item: ArtifactPageItemDTO
@@ -111,23 +123,14 @@ enum ArtifactPageBuilder {
 
     static func build(
         sources: [ArtifactPageSource],
-        candidates: [SessionArtifactCandidate],
         query: ArtifactPageQuery
     ) throws -> ArtifactPageEnvelope {
-        let records = deduplicatedRecords(sources: sources, candidates: candidates)
+        let records = deduplicatedRecords(sources: sources)
+        let requestedProjectTokens = projectTokens(query.project)
         let baseFiltered = records.filter { record in
-            matchesBaseFilters(record, query: query)
+            matchesBaseFilters(record, query: query, requestedProjectTokens: requestedProjectTokens)
         }
-        let candidateTotal = baseFiltered.filter { record in
-            guard record.item.sourceKind == "candidate" else { return false }
-            guard let group = query.group, group != "all" else { return true }
-            return record.group == group
-        }.count
         let statusFiltered = baseFiltered.filter { record in
-            if query.status == "candidate" {
-                return record.item.sourceKind == "candidate"
-            }
-            guard record.item.sourceKind == "artifact" else { return false }
             if query.status.isEmpty || query.status == "all" { return true }
             if query.status == "promoted" {
                 return record.item.artifacts.first?.status.lowercased() == "promoted"
@@ -153,41 +156,41 @@ enum ArtifactPageBuilder {
             cursor: hasMore ? encodedOffset(end) : nil,
             total: filtered.count,
             hasMore: hasMore,
-            candidateTotal: candidateTotal,
             canvasCount: Set(filtered.map { $0.item.canvas.id }).count,
             groupCounts: groupCounts
         )
     }
 
-    private static func deduplicatedRecords(
-        sources: [ArtifactPageSource],
-        candidates: [SessionArtifactCandidate]
-    ) -> [Record] {
-        var artifactsBySlot: [String: (ArtifactPageSource, PlanningNode?, [PlannerArtifact])] = [:]
+    private static func deduplicatedRecords(sources: [ArtifactPageSource]) -> [Record] {
+        // Reference buckets avoid repeatedly copying a growing versions array.
+        // A value-tuple `[PlannerArtifact]` here turns a long version chain into
+        // quadratic copy-on-write work while building the index.
+        var artifactsBySlot: [String: Bucket] = [:]
         for source in sources {
             let nodesById = Dictionary(uniqueKeysWithValues: source.nodes.map { ($0.id, $0) })
             for artifact in source.artifacts {
                 let key = artifactSlotKey(artifact)
-                if var current = artifactsBySlot[key] {
-                    current.2.append(artifact)
-                    artifactsBySlot[key] = current
+                if let current = artifactsBySlot[key] {
+                    current.artifacts.append(artifact)
                 } else {
-                    artifactsBySlot[key] = (source, nodesById[artifact.nodeId], [artifact])
+                    artifactsBySlot[key] = Bucket(
+                        source: source,
+                        node: nodesById[artifact.nodeId],
+                        artifact: artifact
+                    )
                 }
             }
         }
 
-        var records = artifactsBySlot.map { key, value -> Record in
-            let sortedArtifacts = value.2.sorted { $0.createdAt > $1.createdAt }
+        let records = artifactsBySlot.map { key, value -> Record in
+            let sortedArtifacts = value.artifacts.sorted { $0.createdAt > $1.createdAt }
             let latest = sortedArtifacts[0]
-            let sessionId = value.0.sessionIdOverride ?? value.1?.sessionId
+            let sessionId = value.source.sessionIdOverride ?? value.node?.sessionId
             let item = ArtifactPageItemDTO(
-                sourceKind: "artifact",
-                canvas: value.0.canvas,
-                node: value.1,
+                canvas: value.source.canvas,
+                node: value.node,
                 sessionId: sessionId,
-                artifacts: sortedArtifacts,
-                candidate: nil
+                artifacts: sortedArtifacts
             )
             return Record(
                 key: key,
@@ -199,43 +202,17 @@ enum ArtifactPageBuilder {
             )
         }
 
-        var candidatesByTurnTool: [String: SessionArtifactCandidate] = [:]
-        for candidate in candidates where candidate.status == .candidate {
-            let key = candidateDedupeKey(candidate)
-            guard let current = candidatesByTurnTool[key] else {
-                candidatesByTurnTool[key] = candidate
-                continue
-            }
-            if candidate.updatedAt > current.updatedAt {
-                candidatesByTurnTool[key] = candidate
-            }
-        }
-        records.append(contentsOf: candidatesByTurnTool.map { key, candidate in
-            let canvas = candidateCanvas(candidate)
-            let item = ArtifactPageItemDTO(
-                sourceKind: "candidate",
-                canvas: canvas,
-                node: nil,
-                sessionId: candidate.sessionId,
-                artifacts: [],
-                candidate: candidate
-            )
-            return Record(
-                key: "candidate:\(key)",
-                item: item,
-                createdAt: candidate.updatedAt,
-                displayStatus: "candidate",
-                group: artifactGroup(kind: candidate.kind),
-                haystack: candidateHaystack(candidate, canvas: canvas)
-            )
-        })
         return records.sorted {
             if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
             return $0.key < $1.key
         }
     }
 
-    private static func matchesBaseFilters(_ record: Record, query: ArtifactPageQuery) -> Bool {
+    private static func matchesBaseFilters(
+        _ record: Record,
+        query: ArtifactPageQuery,
+        requestedProjectTokens: Set<String>
+    ) -> Bool {
         if let canvasId = query.canvasId, canvasId != "all", record.item.canvas.id != canvasId {
             return false
         }
@@ -246,7 +223,7 @@ enum ArtifactPageBuilder {
             let sessionId = record.item.sessionId?.lowercased() ?? ""
             let matchesSession = query.sessionIds.contains(sessionId)
             let matchesProject = projectTokens(record.item.canvas.workspacePath, record.item.canvas.name, record.item.canvas.id)
-                .contains { projectTokens(query.project).contains($0) }
+                .contains { requestedProjectTokens.contains($0) }
             if !matchesSession && !matchesProject { return false }
         }
         if let text = query.query?.lowercased(), !record.haystack.contains(text) {
@@ -258,20 +235,6 @@ enum ArtifactPageBuilder {
     private static func artifactSlotKey(_ artifact: PlannerArtifact) -> String {
         let reference = artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return "\(artifact.canvasId):\(artifact.nodeId):\(reference)"
-    }
-
-    private static func candidateDedupeKey(_ candidate: SessionArtifactCandidate) -> String {
-        let tool = nonEmpty(candidate.toolName)
-            ?? candidate.kind
-        if let toolUseId = nonEmpty(candidate.toolUseId) {
-            return [candidate.sessionId, toolUseId, tool]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .joined(separator: ":")
-        }
-        let fallbackReference = candidate.references.first?.value ?? candidate.title
-        return [candidate.sessionId, candidate.sourceEvent, tool, fallbackReference]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .joined(separator: ":")
     }
 
     private static func artifactDisplayStatus(_ artifact: PlannerArtifact) -> String {
@@ -315,52 +278,6 @@ enum ArtifactPageBuilder {
             item.node?.title,
             item.sessionId
         ].compactMap { $0 }.joined(separator: " ").lowercased()
-    }
-
-    private static func candidateHaystack(
-        _ candidate: SessionArtifactCandidate,
-        canvas: CanvasInfoDTO
-    ) -> String {
-        var values = [
-            candidate.id,
-            candidate.sessionId,
-            candidate.provider,
-            candidate.cwd,
-            candidate.title,
-            candidate.kind,
-            candidate.sourceEvent,
-            candidate.toolName,
-            candidate.summary,
-            canvas.id,
-            canvas.name
-        ].compactMap { $0 }
-        values.append(contentsOf: candidate.references.flatMap { [$0.kind, $0.label, $0.value].compactMap { $0 } })
-        return values.joined(separator: " ").lowercased()
-    }
-
-    private static func candidateCanvas(_ candidate: SessionArtifactCandidate) -> CanvasInfoDTO {
-        CanvasInfoDTO(
-            id: "session:\(candidate.sessionId)",
-            name: "Session",
-            scope: "personal",
-            visibility: "private",
-            kind: "monitor",
-            isDefault: false,
-            workspacePath: candidate.cwd ?? "",
-            parentCanvasId: nil,
-            parentNodeId: nil,
-            teamId: nil,
-            ownerUserId: nil,
-            remoteId: nil,
-            remoteVersion: nil,
-            syncStatus: nil,
-            dirtySince: nil,
-            lastSyncedAt: nil,
-            lastRemoteUpdatedAt: nil,
-            conflictRemoteVersion: nil,
-            conflictRemoteDeleted: nil,
-            draftOfTemplateId: nil
-        )
     }
 
     private static func projectTokens(_ values: String?...) -> Set<String> {
@@ -417,14 +334,7 @@ extension BoardAPI {
         let snapshot = BoardLayoutStore.shared.snapshot()
         let workspacePaths = BoardLayoutStore.shared.loadAllWorkspacePaths()
         let parentRefs = PlannerBoardBridge.store.canvasParentRefs()
-        let candidateStore = SessionArtifactCandidateStore.shared
-        let candidates: [SessionArtifactCandidate]
-        if query.sessionIds.isEmpty {
-            candidates = candidateStore.list(includeDiscarded: false)
-        } else {
-            candidates = candidateStore.list(sessionIds: Array(query.sessionIds), includeDiscarded: false)
-        }
-
+        let actor = PlannerPermission.currentActorId()
         var sources: [ArtifactPageSource] = []
         for canvas in snapshot.canvases {
             if let canvasId = query.canvasId, canvasId != "all", canvas.id != canvasId { continue }
@@ -432,6 +342,8 @@ extension BoardAPI {
             guard let record = try? PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvas.id) else {
                 continue
             }
+            let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actor)
+            guard PlannerBoardBridge.canViewCanvas(record.canvas, access: access) else { continue }
             let artifacts = PlannerBoardBridge.store.artifactsWithVersionInfo(
                 record.artifacts,
                 versions: record.artifactVersions
@@ -449,21 +361,9 @@ extension BoardAPI {
             ))
         }
 
-        // Promoted candidates without a Canvas attachment are formal,
-        // session-scoped artifacts and belong in the default Ready view.
-        for candidate in candidates where candidate.status == .promoted && candidate.promotedCanvasId == nil {
-            let artifact = candidateStore.sessionScopedArtifact(for: candidate)
-            sources.append(ArtifactPageSource(
-                canvas: sessionCanvasDTO(candidate),
-                artifacts: [artifact],
-                sessionIdOverride: candidate.sessionId
-            ))
-        }
-
         do {
             return jsonResponse(try ArtifactPageBuilder.build(
                 sources: sources,
-                candidates: candidates,
                 query: query
             ))
         } catch let error as ArtifactPageBuilderError {
@@ -503,28 +403,4 @@ extension BoardAPI {
         )
     }
 
-    private static func sessionCanvasDTO(_ candidate: SessionArtifactCandidate) -> CanvasInfoDTO {
-        CanvasInfoDTO(
-            id: "session:\(candidate.sessionId)",
-            name: "Session",
-            scope: "personal",
-            visibility: "private",
-            kind: "monitor",
-            isDefault: false,
-            workspacePath: candidate.cwd ?? "",
-            parentCanvasId: nil,
-            parentNodeId: nil,
-            teamId: nil,
-            ownerUserId: nil,
-            remoteId: nil,
-            remoteVersion: nil,
-            syncStatus: nil,
-            dirtySince: nil,
-            lastSyncedAt: nil,
-            lastRemoteUpdatedAt: nil,
-            conflictRemoteVersion: nil,
-            conflictRemoteDeleted: nil,
-            draftOfTemplateId: nil
-        )
-    }
 }

@@ -11,16 +11,14 @@ import type {
   PlannerArtifact,
   PlannerArtifactVersion,
   PlanningNode,
-  SessionArtifactCandidate,
 } from '../types'
 
 const apiMocks = vi.hoisted(() => ({
   fetchArtifactsPage: vi.fn(),
   fetchPlannerGraphState: vi.fn(),
-  fetchArtifactCandidates: vi.fn(),
   getPlannerArtifactContent: vi.fn(),
+  getArtifactVersionContent: vi.fn(),
   listArtifactVersions: vi.fn(),
-  getArtifactVersion: vi.fn(),
   proposePlannerGraphChange: vi.fn(),
 }))
 
@@ -30,10 +28,9 @@ vi.mock('../api', async () => {
     ...actual,
     fetchArtifactsPage: apiMocks.fetchArtifactsPage,
     fetchPlannerGraphState: apiMocks.fetchPlannerGraphState,
-    fetchArtifactCandidates: apiMocks.fetchArtifactCandidates,
     getPlannerArtifactContent: apiMocks.getPlannerArtifactContent,
+    getArtifactVersionContent: apiMocks.getArtifactVersionContent,
     listArtifactVersions: apiMocks.listArtifactVersions,
-    getArtifactVersion: apiMocks.getArtifactVersion,
     proposePlannerGraphChange: apiMocks.proposePlannerGraphChange,
   }
 })
@@ -116,35 +113,15 @@ function pageItem(
   itemNode: PlanningNode | null,
 ): ArtifactPageItem {
   return {
-    sourceKind: 'artifact',
     canvas,
     node: itemNode,
     sessionId: itemNode?.sessionId ?? null,
     artifacts,
-    candidate: null,
-  }
-}
-
-function candidatePageItem(candidate: SessionArtifactCandidate): ArtifactPageItem {
-  return {
-    sourceKind: 'candidate',
-    canvas: {
-      id: `session:${candidate.sessionId}`,
-      name: 'Session',
-      scope: 'personal',
-      kind: 'monitor',
-      isDefault: false,
-      workspacePath: candidate.cwd ?? '',
-    },
-    node: null,
-    sessionId: candidate.sessionId,
-    artifacts: [],
-    candidate,
   }
 }
 
 function artifactGroup(item: ArtifactPageItem): string {
-  const kind = item.artifacts[0]?.kind ?? item.candidate?.kind
+  const kind = item.artifacts[0]?.kind
   if (kind === 'prd' || kind === 'lark-doc') return 'docs'
   if (kind === 'kanban' || kind === 'idea-draft') return 'boards'
   if (kind === 'impl-pr' || kind === 'main-merge') return 'implementation'
@@ -155,7 +132,7 @@ function artifactGroup(item: ArtifactPageItem): string {
 function artifactPage(
   items: ArtifactPageItem[],
   params: ArtifactPageParams,
-  candidates: SessionArtifactCandidate[],
+  _legacyItems: unknown[] = [],
 ): ArtifactPageEnvelope {
   const sessionIds = new Set(params.sessionId?.split(',').map((value) => value.toLowerCase()) ?? [])
   const project = params.project?.toLowerCase()
@@ -177,19 +154,12 @@ function artifactPage(
         item.node?.title,
         item.artifacts[0]?.title,
         item.artifacts[0]?.reference,
-        item.candidate?.title,
       ].filter(Boolean).join(' ').toLowerCase()
       if (!haystack.includes(params.query.toLowerCase())) return false
     }
     return true
   })
-  if (params.status === 'candidate') {
-    filtered = candidates.map(candidatePageItem).filter((item) => {
-      if (!sessionIds.size && !project) return true
-      return (item.sessionId ? sessionIds.has(item.sessionId.toLowerCase()) : false)
-        || Boolean(project && item.canvas.workspacePath.toLowerCase().includes(project))
-    })
-  } else if (params.status === 'needs-review') {
+  if (params.status === 'needs-review') {
     const prd = filtered.find((item) => item.artifacts[0]?.reference === 'release.md')
     filtered = prd ? [{
       ...prd,
@@ -214,7 +184,6 @@ function artifactPage(
     cursor: end < filtered.length ? String(end) : null,
     total: filtered.length,
     hasMore: end < filtered.length,
-    candidateTotal: candidates.length,
     canvasCount: new Set(filtered.map((item) => item.canvas.id)).size,
     groupCounts,
   }
@@ -331,6 +300,7 @@ const versions: PlannerArtifactVersion[] = [
     artifact_id: 'prd-v1',
     artifact_slot_key: 'release-prd',
     payload_ref: 'payload://release-v1',
+    payload_inline: { type: 'markdown', preview: 'Historical release plan' },
     display_strategy: 'latest',
     force_new_version: false,
     submitted_by: 'kai',
@@ -349,16 +319,12 @@ function renderView(props: Partial<ComponentProps<typeof ArtifactsView>> = {}) {
   return { onOpenCanvas }
 }
 
-const candidateFixtures: SessionArtifactCandidate[] = []
-
 describe('ArtifactsView global index', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    candidateFixtures.splice(0)
     apiMocks.fetchArtifactsPage.mockImplementation((params: ArtifactPageParams) => Promise.resolve(
-      artifactPage(formalPageItems(), params, candidateFixtures),
+      artifactPage(formalPageItems(), params),
     ))
-    apiMocks.fetchArtifactCandidates.mockResolvedValue({ candidates: [] })
     apiMocks.fetchPlannerGraphState.mockImplementation((canvasId: string) => Promise.resolve({
       canvas: { id: canvasId, ownerId: 'kai', title: canvasId, plannerContext: '' },
       nodes: canvasId === 'monitor'
@@ -502,7 +468,12 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
         },
     ))
     apiMocks.listArtifactVersions.mockResolvedValue({ versions })
-    apiMocks.getArtifactVersion.mockResolvedValue(versions[0])
+    apiMocks.getArtifactVersionContent.mockResolvedValue({
+      artifactId: 'prd-v1',
+      type: 'text',
+      mimeType: 'text/plain',
+      content: 'Historical file body',
+    })
     apiMocks.proposePlannerGraphChange.mockResolvedValue({
       id: 'proposal-review',
       canvasId: 'monitor',
@@ -516,7 +487,8 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     renderView()
 
     expect(await screen.findByRole('button', { name: /Docs 2/ })).toBeInTheDocument()
-    expect(await screen.findByText('Internal release plan and ownership')).toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: 'Artifact detail' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Artifact content preview' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Implementation 1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Validation 1/ })).toBeInTheDocument()
 
@@ -558,45 +530,17 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     expect(apiMocks.fetchArtifactsPage.mock.calls.every(([params]) => params.limit <= 50)).toBe(true)
   })
 
-  it('keeps raw session candidates behind an explicit toggle', async () => {
-    candidateFixtures.push({
-        id: 'candidate-raw',
-        sessionId: 'session-a',
-        provider: 'codex',
-        cwd: '/repo',
-        title: 'Raw terminal candidate',
-        kind: 'file',
-        status: 'candidate',
-        createdAt: '2026-06-18T00:00:00Z',
-        updatedAt: '2026-06-18T00:00:00Z',
-        sourceEvent: 'PostToolUse',
-        toolName: 'apply_patch',
-        toolUseId: 'tool-a',
-        references: [],
-        summary: 'Generated candidate artifact.',
-    })
-
-    renderView()
-
-    const toggle = await screen.findByRole('button', { name: 'Raw candidates (1)' })
-    expect(screen.queryByText('Raw terminal candidate')).not.toBeInTheDocument()
-    fireEvent.click(toggle)
-    expect(await screen.findAllByText('Raw terminal candidate')).not.toHaveLength(0)
-  })
-
-  it('shows selected artifact detail and dispatches open-in-canvas target', async () => {
+  it('opens a focused artifact preview and dispatches the source target', async () => {
     const opened: unknown[] = []
     const handler = (event: Event) => opened.push((event as CustomEvent).detail)
     window.addEventListener('meee2:open-board-target', handler)
     try {
       renderView()
 
-      await screen.findAllByText('Release PRD')
-      expect(await screen.findByText('Internal release plan and ownership')).toBeInTheDocument()
-      expect((await screen.findAllByText('payload://release-v2')).length).toBeGreaterThan(0)
-
-      const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
-      fireEvent.click(within(detail).getByRole('button', { name: /Reveal source/ }))
+      fireEvent.click(await screen.findByRole('button', { name: /Release PRD/ }))
+      const preview = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+      expect(within(preview).getByText('Internal release plan and ownership')).toBeInTheDocument()
+      fireEvent.click(within(preview).getByRole('button', { name: /Reveal source/ }))
 
       expect(opened).toEqual([
         expect.objectContaining({
@@ -623,6 +567,20 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     await waitFor(() => {
       expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
     })
+  })
+
+  it('debounces search requests instead of fetching on every keystroke', async () => {
+    renderView()
+    await screen.findAllByText('Release PRD')
+    apiMocks.fetchArtifactsPage.mockClear()
+
+    const search = screen.getByPlaceholderText(/Search title/)
+    fireEvent.change(search, { target: { value: 'g' } })
+    fireEvent.change(search, { target: { value: 'gi' } })
+    fireEvent.change(search, { target: { value: 'github' } })
+
+    await waitFor(() => expect(apiMocks.fetchArtifactsPage).toHaveBeenCalledTimes(1))
+    expect(apiMocks.fetchArtifactsPage).toHaveBeenCalledWith(expect.objectContaining({ query: 'github' }))
   })
 
   it('filters the artifact index to one session when launched from a session', async () => {
@@ -671,14 +629,14 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
   })
 
-  it('creates a review proposal from the artifact detail actions', async () => {
+  it('creates a review proposal from the artifact preview actions', async () => {
     renderView()
 
     await screen.findAllByText('Release PRD')
     fireEvent.change(screen.getByLabelText(/State/), { target: { value: 'needs-review' } })
-    const detail = await screen.findByRole('complementary', { name: 'Artifact detail' })
-    await within(detail).findByRole('button', { name: /Approve/ })
-    fireEvent.click(within(detail).getByRole('button', { name: /Approve/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Release PRD/ }))
+    const preview = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    fireEvent.click(within(preview).getByRole('button', { name: /Approve/ }))
 
     await waitFor(() => {
       expect(apiMocks.proposePlannerGraphChange).toHaveBeenCalledWith('monitor', expect.objectContaining({
@@ -716,17 +674,46 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     })
   })
 
-  it('opens typed artifact content in a rendered modal with support notes', async () => {
+  it('opens typed artifact content directly in the unified preview', async () => {
     renderView()
 
-    await screen.findAllByText('Release PRD')
-    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
-    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Release PRD/ }))
 
     const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
     expect(within(modal).getByText('Internal release plan and ownership')).toBeInTheDocument()
-    expect(within(modal).getByText('Preview support')).toBeInTheDocument()
-    expect(within(modal).getByText(/prd, kanban, impl-pr/)).toBeInTheDocument()
+    expect(within(modal).queryByText('Preview support')).not.toBeInTheDocument()
+  })
+
+  it('switches historical versions inside the same preview surface', async () => {
+    renderView()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Release PRD/ }))
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    fireEvent.change(within(modal).getByLabelText('Version'), { target: { value: 'v1' } })
+
+    expect(await within(modal).findByText('Historical release plan')).toBeInTheDocument()
+    expect(apiMocks.getArtifactVersionContent).not.toHaveBeenCalled()
+  })
+
+  it('loads historical file content instead of rendering only blob metadata', async () => {
+    const historicalFile: PlannerArtifactVersion = {
+      ...versions[1],
+      version_id: 'v-file',
+      payload_inline: {
+        type: 'file',
+        blobRef: 'meee2-artifact://monitor/prd-v2/archive.md',
+        filename: 'archive.md',
+      },
+    }
+    apiMocks.listArtifactVersions.mockResolvedValueOnce({ versions: [versions[0], historicalFile] })
+    renderView()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Release PRD/ }))
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    fireEvent.change(within(modal).getByLabelText('Version'), { target: { value: 'v-file' } })
+
+    expect(await within(modal).findByText('Historical file body')).toBeInTheDocument()
+    expect(apiMocks.getArtifactVersionContent).toHaveBeenCalledWith('monitor', 'v-file')
   })
 
   it('renders legacy JSON payloads with semantic type as structured previews', async () => {
@@ -736,30 +723,44 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
     fireEvent.click(await screen.findByRole('button', { name: /Boards 1/ }))
 
-    expect((await screen.findAllByText('Legacy Kanban Payload')).length).toBeGreaterThan(0)
-    expect(await screen.findByText('待处理')).toBeInTheDocument()
-    expect(screen.queryByText('Scope fallback')).not.toBeInTheDocument()
-
-    const detail = screen.getByRole('complementary', { name: 'Artifact detail' })
-    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Legacy Kanban Payload/ }))
 
     const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
-    expect(within(modal).getByText('已生成')).toBeInTheDocument()
-    expect(within(modal).getByText('Render typed preview')).toBeInTheDocument()
+    expect(await within(modal).findByText('已生成')).toBeInTheDocument()
+    expect(await within(modal).findByText('Render typed preview')).toBeInTheDocument()
     expect(within(modal).queryByText(/"columns"/)).not.toBeInTheDocument()
   })
 
-  it('keeps the detail preview summarized while the content modal renders the full payload', async () => {
+  it('shows a recoverable preview error when remote content loading fails', async () => {
+    apiMocks.getPlannerArtifactContent
+      .mockRejectedValueOnce(new Error('preview service unavailable'))
+      .mockResolvedValueOnce({
+        artifactId: 'legacy-kanban',
+        type: 'text',
+        mimeType: 'text/plain',
+        content: 'Recovered preview content',
+      })
+    renderView()
+
+    await screen.findAllByText('Release PRD')
+    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+    fireEvent.click(await screen.findByRole('button', { name: /Boards 1/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Legacy Kanban Payload/ }))
+
+    const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
+    expect(await within(modal).findByText('Could not load this preview')).toBeInTheDocument()
+    fireEvent.click(within(modal).getByRole('button', { name: 'Retry' }))
+    expect(await within(modal).findByText('Recovered preview content')).toBeInTheDocument()
+  })
+
+  it('does not render payload content until the unified preview is opened', async () => {
     renderView()
 
     await screen.findAllByText('Release PRD')
     fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
 
-    const detail = await screen.findByRole('complementary', { name: 'Artifact detail' })
-    expect(await within(detail).findByRole('heading', { name: 'Team Review Notes' })).toBeInTheDocument()
-    expect(within(detail).queryByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).not.toBeInTheDocument()
-
-    fireEvent.click(within(detail).getByRole('button', { name: /Load content/ }))
+    expect(screen.queryByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: /Team Review Notes/ }))
 
     const modal = await screen.findByRole('dialog', { name: 'Artifact content preview' })
     expect(within(modal).getByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).toBeInTheDocument()

@@ -1,17 +1,8 @@
-import { Archive, CheckCircle2, ExternalLink, FileText, Loader2, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Archive, ExternalLink, FileText, Loader2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import {
-  discardArtifactCandidate,
-  fetchSessionArtifacts,
-  promoteArtifactCandidate,
-  syncNativeSessionsWorkspace,
-} from '../api'
-import type {
-  PlannerArtifact,
-  SessionArtifactCandidate,
-  SessionArtifactsEnvelope,
-} from '../types'
+import { fetchSessionArtifacts, syncNativeSessionsWorkspace } from '../api'
+import type { PlannerArtifact, SessionArtifactsEnvelope } from '../types'
 import { useI18n } from '../lib/i18n'
 
 export interface SessionArtifactsModalTarget {
@@ -85,13 +76,12 @@ export function invalidateSessionArtifactsCache(sessionId?: string): void {
   else sessionArtifactsCache.clear()
 }
 
-export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, className }: SessionArtifactsPanelProps) {
+export function SessionArtifactsPanel({ target, onOpenDetails, className }: SessionArtifactsPanelProps) {
   const { t } = useI18n()
   const initialData = sessionArtifactsCache.get(target.sessionId)?.data ?? null
   const [data, setData] = useState<SessionArtifactsEnvelope | null>(initialData)
   const [loading, setLoading] = useState(initialData === null)
   const [error, setError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -113,57 +103,6 @@ export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, classN
       cancelled = true
     }
   }, [target.sessionId, t])
-
-  const handlePromote = useCallback((candidate: SessionArtifactCandidate) => {
-    if (busyId) return
-    setBusyId(candidate.id)
-    promoteArtifactCandidate(candidate.id)
-      .then((result) => {
-        setData((current) => {
-          if (!current) return current
-          const candidates = current.candidates.filter((item) => item.id !== candidate.id)
-          const artifacts = result.artifact
-            ? [result.artifact, ...current.artifacts.filter((item) => item.id !== result.artifact?.id)]
-            : current.artifacts
-          return cacheSessionArtifactsData(target.sessionId, {
-            ...current,
-            candidates,
-            artifacts,
-            totalCount: candidates.length + artifacts.length,
-            attachTargets: result.attachTargets.length > 0 ? result.attachTargets : current.attachTargets,
-          })
-        })
-        window.dispatchEvent(new CustomEvent('meee2:session-artifacts-changed', {
-          detail: { sessionId: target.sessionId, candidateId: candidate.id, action: 'promote' },
-        }))
-        onChanged?.()
-      })
-      .catch((err) => setError((err as Error).message || t('artifacts.promoteFailed')))
-      .finally(() => setBusyId(null))
-  }, [busyId, onChanged, t, target.sessionId])
-
-  const handleDiscard = useCallback((candidate: SessionArtifactCandidate) => {
-    if (busyId) return
-    setBusyId(candidate.id)
-    discardArtifactCandidate(candidate.id)
-      .then(() => {
-        setData((current) => {
-          if (!current) return current
-          const candidates = current.candidates.filter((item) => item.id !== candidate.id)
-          return cacheSessionArtifactsData(target.sessionId, {
-            ...current,
-            candidates,
-            totalCount: candidates.length + current.artifacts.length,
-          })
-        })
-        window.dispatchEvent(new CustomEvent('meee2:session-artifacts-changed', {
-          detail: { sessionId: target.sessionId, candidateId: candidate.id, action: 'discard' },
-        }))
-        onChanged?.()
-      })
-      .catch((err) => setError((err as Error).message || t('artifacts.discardFailed')))
-      .finally(() => setBusyId(null))
-  }, [busyId, onChanged, t, target.sessionId])
 
   return (
     <div className={['session-artifacts-panel', className].filter(Boolean).join(' ')}>
@@ -195,25 +134,6 @@ export function SessionArtifactsPanel({ target, onChanged, onOpenDetails, classN
         </div>
       ) : (
         <div className="session-artifacts-modal__body">
-          <section>
-            <h3>{t('artifacts.candidates')}</h3>
-            {data.candidates.length === 0 ? (
-              <div className="session-artifacts-modal__empty compact">{t('artifacts.noCandidates')}</div>
-            ) : (
-              <div className="session-artifacts-list">
-                {data.candidates.map((candidate) => (
-                    <CandidateRow
-                      key={candidate.id}
-                      candidate={candidate}
-                      busy={busyId === candidate.id}
-                      onPromote={() => handlePromote(candidate)}
-                      onDiscard={() => handleDiscard(candidate)}
-                    />
-                ))}
-              </div>
-            )}
-          </section>
-
           <section>
             <h3>{t('artifacts.attachedArtifacts')}</h3>
             {data.artifacts.length === 0 ? (
@@ -276,60 +196,6 @@ export function SessionArtifactsModal({ target, onClose, onChanged, onOpenDetail
   )
 }
 
-function CandidateRow({
-  candidate,
-  busy,
-  onPromote,
-  onDiscard,
-}: {
-  candidate: SessionArtifactCandidate
-  busy: boolean
-  onPromote: () => void
-  onDiscard: () => void
-}) {
-  const { t } = useI18n()
-  const source = [candidate.toolName, candidate.sourceEvent, candidate.kind].filter(Boolean).join(' · ')
-  return (
-    <article className="session-artifact-row">
-      <div className="session-artifact-row__main">
-        <div className="session-artifact-row__title">
-          <span className="session-artifact-row__badge">{t('artifacts.candidate')}</span>
-          <strong>{candidate.title}</strong>
-        </div>
-        <div className="session-artifact-row__meta inline">
-          <span>{source}</span>
-          <time>{formatDate(candidate.createdAt)}</time>
-        </div>
-        <p>{candidate.summary}</p>
-        <ReferenceList references={candidate.references} />
-      </div>
-      <div className="session-artifact-row__actions">
-        <button
-          type="button"
-          aria-label={t('artifacts.promote')}
-          title={t('artifacts.promote')}
-          onClick={onPromote}
-          disabled={busy}
-        >
-          {busy ? <Loader2 size={14} className="spin" aria-hidden /> : <CheckCircle2 size={14} aria-hidden />}
-          <span>{t('artifacts.promote')}</span>
-        </button>
-        <button
-          type="button"
-          className="danger"
-          aria-label={t('artifacts.discard')}
-          title={t('artifacts.discard')}
-          onClick={onDiscard}
-          disabled={busy}
-        >
-          <Trash2 size={14} aria-hidden />
-          <span>{t('artifacts.discard')}</span>
-        </button>
-      </div>
-    </article>
-  )
-}
-
 function AttachedArtifactRow({ artifact }: { artifact: PlannerArtifact }) {
   const { t } = useI18n()
   return (
@@ -357,25 +223,6 @@ function AttachedArtifactRow({ artifact }: { artifact: PlannerArtifact }) {
         </button>
       </div>
     </article>
-  )
-}
-
-function ReferenceList({ references }: { references: SessionArtifactCandidate['references'] }) {
-  if (references.length === 0) return null
-  return (
-    <div className="session-artifact-row__refs">
-      {references.map((reference, index) => (
-        <button
-          type="button"
-          key={`${reference.kind}:${reference.value}:${index}`}
-          title={reference.value}
-          onClick={() => openReference(reference.value)}
-        >
-          <ExternalLink size={12} aria-hidden />
-          <span>{reference.label ?? reference.value}</span>
-        </button>
-      ))}
-    </div>
   )
 }
 
