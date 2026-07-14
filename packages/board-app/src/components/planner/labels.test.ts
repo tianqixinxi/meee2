@@ -55,6 +55,23 @@ describe('deriveDisplayStatus', () => {
     })
   })
 
+  // workflow-bridge 镜像节点(external 非工作节点): done → 「完成」(不是「未启动」),
+  // running → 「运行中」—— 外部 workflow 的 agent 节点没有可重开的会话语义。
+  it('maps external mirror nodes by workflowRunState', () => {
+    expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'external' }))).toEqual({
+      label: '完成',
+      tone: 'done',
+    })
+    expect(deriveDisplayStatus(node({ workflowRunState: 'running', nodeKind: 'external' }))).toEqual({
+      label: '运行中',
+      tone: 'running',
+    })
+    expect(deriveDisplayStatus(node({ workflowRunState: null, status: 'done', nodeKind: 'external' }))).toEqual({
+      label: '完成',
+      tone: 'done',
+    })
+  })
+
   // 状态跟会话走: 只要绑定会话还活着,done / 未启动 的节点都显示「在线待命」
   // —— 消除"显示已结束却能打开活会话"的矛盾。
   it('maps a node with a live bound session to 在线待命', () => {

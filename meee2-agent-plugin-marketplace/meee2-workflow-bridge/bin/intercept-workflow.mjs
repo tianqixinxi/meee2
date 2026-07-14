@@ -41,17 +41,113 @@ function expandHome(p) {
   return p.startsWith('~') ? path.join(HOME, p.slice(1)) : p
 }
 
-function apiBase() {
-  if (process.env.MEEE2_API_URL) return process.env.MEEE2_API_URL.replace(/\/+$/, '')
-  try {
-    const cfg = JSON.parse(fs.readFileSync(
-      path.join(HOME, 'Library/Application Support/meee2/board-server.json'), 'utf8'))
-    if (typeof cfg.url === 'string' && cfg.url) return cfg.url.replace(/\/+$/, '')
-    if (cfg.port) return `http://127.0.0.1:${cfg.port}`
-  } catch {
-    // board-server.json 不存在/损坏 → 用默认端口
+const RUNTIME_FILE = path.join(HOME, 'Library/Application Support/meee2/board-server.json')
+
+// BoardServer 对所有 mutating /api/* 请求要求 X-Meee2-Control-Token（同用户
+// 0600 运行时文件里下发）。base 和 token 必须一起读：token 每次 meee2 重启
+// 轮换，缓存旧值必 401。
+function apiRuntime() {
+  if (process.env.MEEE2_API_URL) {
+    return {
+      base: process.env.MEEE2_API_URL.replace(/\/+$/, ''),
+      token: process.env.MEEE2_CONTROL_TOKEN || null,
+    }
   }
-  return 'http://127.0.0.1:9876'
+  try {
+    const cfg = JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8'))
+    const token = typeof cfg.controlToken === 'string' && cfg.controlToken ? cfg.controlToken : null
+    if (typeof cfg.url === 'string' && cfg.url) return { base: cfg.url.replace(/\/+$/, ''), token }
+    if (cfg.port) return { base: `http://127.0.0.1:${cfg.port}`, token }
+  } catch {
+    // board-server.json 不存在/损坏 → 用默认端口（token 缺失时请求会被新版
+    // meee2 拒掉，走 fail-open；旧版 meee2 无 token 门，照常工作）
+  }
+  return { base: 'http://127.0.0.1:9876', token: null }
+}
+
+function controlHeaders(token) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['X-Meee2-Control-Token'] = token
+  return headers
+}
+
+// 静态解析 workflow 脚本首部的 `export const meta = {...}`（Claude Code 强制
+// 纯字面量），给 meee2 建 canvas 骨架用。花括号平衡截取对象字面量后 eval ——
+// 脚本本身就是即将被 relay 执行的代码，这里没有新增信任面。解析失败返回 null
+// （meee2 侧退化为只有 exec 根节点，无 phase 骨架）。
+function parseWorkflowMeta(script) {
+  try {
+    const anchor = script.indexOf('export const meta')
+    if (anchor < 0) return null
+    const braceStart = script.indexOf('{', anchor)
+    if (braceStart < 0) return null
+    let depth = 0
+    let end = -1
+    let inString = null
+    for (let i = braceStart; i < script.length; i++) {
+      const ch = script[i]
+      if (inString) {
+        if (ch === '\\') { i++; continue }
+        if (ch === inString) inString = null
+        continue
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { inString = ch; continue }
+      if (ch === '{') depth++
+      if (ch === '}') {
+        depth--
+        if (depth === 0) { end = i; break }
+      }
+    }
+    if (end < 0) return null
+    const literal = script.slice(braceStart, end + 1)
+    // eslint-disable-next-line no-new-func
+    const meta = new Function(`"use strict"; return (${literal})`)()
+    if (!meta || typeof meta !== 'object') return null
+    const phases = Array.isArray(meta.phases)
+      ? meta.phases
+          .filter((p) => p && typeof p.title === 'string' && p.title.trim())
+          .slice(0, 20)
+          .map((p) => ({
+            title: String(p.title).slice(0, 120),
+            detail: typeof p.detail === 'string' ? p.detail.slice(0, 500) : null,
+          }))
+      : []
+    return {
+      name: typeof meta.name === 'string' ? meta.name.slice(0, 120) : null,
+      description: typeof meta.description === 'string' ? meta.description.slice(0, 500) : null,
+      phases,
+    }
+  } catch {
+    return null
+  }
+}
+
+// 顺手 GC：runs/ 下超过 7 天且已到终态（status.json state=done/failed，或压根
+// 没有 status.json 的老 run）的目录。任何失败都不影响主流程。
+function gcOldRuns() {
+  try {
+    const runsRoot = path.join(BRIDGE_ROOT, 'runs')
+    const cutoff = Date.now() - 7 * 24 * 3600 * 1000
+    for (const name of fs.readdirSync(runsRoot)) {
+      const dir = path.join(runsRoot, name)
+      try {
+        const stat = fs.statSync(dir)
+        if (!stat.isDirectory() || stat.mtimeMs > cutoff) continue
+        let terminal = true
+        try {
+          const status = JSON.parse(fs.readFileSync(path.join(dir, 'status.json'), 'utf8'))
+          terminal = status.state === 'done' || status.state === 'failed'
+        } catch {
+          // 无 status.json（0.1.x 时代的 run）→ 过期即清
+        }
+        if (terminal) fs.rmSync(dir, { recursive: true, force: true })
+      } catch {
+        // 单个目录失败跳过
+      }
+    }
+  } catch {
+    // runs/ 不存在等 → 忽略
+  }
 }
 
 async function main() {
@@ -102,6 +198,8 @@ async function main() {
     : null
   if (!script && !namedWorkflow) allow('nothing relayable in tool_input')
 
+  gcOldRuns()
+
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').toLowerCase()
   const runId = `wfbridge-${stamp}-${crypto.randomBytes(3).toString('hex')}`
   const runDir = path.join(BRIDGE_ROOT, 'runs', runId)
@@ -134,7 +232,7 @@ return await workflow({ scriptPath: ${JSON.stringify(payloadFile)} }, ${JSON.str
     }
   }
 
-  const base = apiBase()
+  const { base, token } = apiRuntime()
   const originSessionId = input.session_id || ''
 
   fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({
@@ -172,34 +270,86 @@ ${workflowParams}
    - 必须用上面的 ${script ? 'scriptPath' : 'name'} 形式，禁止把脚本内容以 "script" 参数内联传入（内联会被 bridge 再次拦截，造成死循环）。
 2. 等待 workflow 完成。如果脚本本身报语法/逻辑错误，可以直接编辑 ${argsBakedIn ? path.join(runDir, 'payload.mjs') + '（业务脚本；workflow.mjs 是 args 注入 wrapper，别动）' : (scriptFile ?? '（named workflow，不可编辑）')} 修复后用同一 scriptPath 重新调用。
 3. 把执行结果写成 markdown 总结到 ${path.join(runDir, 'result.md')}（包含 workflow 返回值、关键发现、如失败则失败原因）。
-4. 通知来源会话（尽力而为，curl 失败直接忽略）：
-   curl -s -X POST '${base}/api/sessions/${originSessionId}/inject' -H 'Content-Type: application/json' --data '{"content":"[meee2-workflow-bridge] workflow run ${runId} 已执行完成，结果在 ${path.join(runDir, 'result.md')}，请读取后继续之前的工作。"}'
+4. 通知来源会话（尽力而为，失败直接忽略）。meee2 的写接口需要当前 control token（存在 ${RUNTIME_FILE}，每次 meee2 重启会轮换，所以要现读）。用 Bash 执行：
+   TOKEN=$(node -pe 'JSON.parse(require("fs").readFileSync(${JSON.stringify(RUNTIME_FILE)},"utf8")).controlToken' 2>/dev/null)
+   curl -s -X POST '${base}/api/sessions/${originSessionId}/inject' -H 'Content-Type: application/json' -H "X-Meee2-Control-Token: $TOKEN" --data '{"content":"[meee2-workflow-bridge] workflow run ${runId} 已执行完成，结果在 ${path.join(runDir, 'result.md')}，请读取后继续之前的工作。"}'
 5. 结束会话，不要开始其他工作。
 `
   const instructionsFile = path.join(runDir, 'instructions.md')
   fs.writeFileSync(instructionsFile, instructions)
 
-  // ---- 让 meee2 拉起 relay 会话 ----
+  // ---- 让 meee2 接管 relay 会话 ----
   // env 前缀让 relay 会话里的本 hook 直接放行；instructions 里再用 scriptPath 形式兜底。
   const command = `MEEE2_WORKFLOW_RELAY=1 claude --dangerously-skip-permissions '读取文件 ${instructionsFile} 并严格按其中步骤执行。'`
 
-  let spawned
+  // 首选（meee2 ≥ 带 workflow-bridge 消费端）：注册 run —— meee2 建 canvas
+  // 可视化骨架、spawn relay、tail journal、维护 runDir/status.json。
+  let registered = null
   try {
-    const resp = await fetch(`${base}/api/sessions/spawn`, {
+    const resp = await fetch(`${base}/api/workflow-bridge/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, command }),
-      signal: AbortSignal.timeout(10_000),
+      headers: controlHeaders(token),
+      body: JSON.stringify({
+        runId,
+        runDir,
+        originSessionId,
+        cwd,
+        command,
+        workflowName: namedWorkflow,
+        meta: script ? parseWorkflowMeta(script) : null,
+      }),
+      signal: AbortSignal.timeout(15_000),
     })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
-    spawned = await resp.json()
+    if (resp.ok) {
+      registered = await resp.json()
+    } else {
+      log(`run ${runId}: register returned HTTP ${resp.status} — falling back to bare spawn`)
+    }
   } catch (e) {
-    log(`run ${runId}: meee2 spawn failed (${e.message}) — falling back to local execution`)
-    // meee2 不可达/出错 → 不拦截，workflow 照常本地执行
-    allow(`meee2 unreachable: ${e.message}`)
+    log(`run ${runId}: register failed (${e.message}) — falling back to bare spawn`)
   }
 
-  log(`run ${runId}: relayed to meee2 session ${spawned.sessionId} (origin ${originSessionId.slice(0, 8)})`)
+  let spawned
+  if (registered) {
+    spawned = registered
+    // canvas 归属 merge 回 meta.json（排查/溯源用）
+    try {
+      const metaPath = path.join(runDir, 'meta.json')
+      const cur = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+      fs.writeFileSync(metaPath, JSON.stringify({
+        ...cur,
+        canvasId: registered.canvasId,
+        canvasName: registered.canvasName,
+        statusPath: registered.statusPath,
+      }, null, 2))
+    } catch {
+      // 非致命
+    }
+    log(`run ${runId}: registered — canvas ${registered.canvasId} relay ${registered.sessionId} (origin ${originSessionId.slice(0, 8)})`)
+  } else {
+    // 降级（旧 meee2：无注册端点）：0.1.x 行为原样 —— 裸 spawn relay 会话。
+    try {
+      const resp = await fetch(`${base}/api/sessions/spawn`, {
+        method: 'POST',
+        headers: controlHeaders(token),
+        body: JSON.stringify({ cwd, command }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
+      spawned = await resp.json()
+    } catch (e) {
+      log(`run ${runId}: meee2 spawn failed (${e.message}) — falling back to local execution`)
+      // meee2 不可达/出错 → 不拦截，workflow 照常本地执行
+      allow(`meee2 unreachable: ${e.message}`)
+    }
+    log(`run ${runId}: relayed to meee2 session ${spawned.sessionId} (origin ${originSessionId.slice(0, 8)})`)
+  }
+
+  const canvasHint = registered
+    ? `meee2 已创建 canvas「${registered.canvasName}」实时可视化本次执行（meee2 Board 已自动打开，phase/agent 会随执行逐个出现）。` +
+      `你可以随时用 Read 工具查看 ${registered.statusPath} 获取结构化进度` +
+      `（state/agentsTotal/agentsDone/lastEvent；state 变为 done/failed 即终态）。`
+    : `可在 meee2 board 中查看 relay 会话进度。`
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -208,9 +358,10 @@ ${workflowParams}
       permissionDecisionReason:
         `[meee2-workflow-bridge] 这次 Workflow 调用已被拦截并复制到 meee2 执行：` +
         `relay 会话 ${spawned.sessionId}，run id ${runId}，脚本已落盘 ${scriptFile ?? `(named workflow: ${namedWorkflow})`}。` +
-        `不要在本地重试或改写后重试这次 Workflow 调用。直接告诉用户：workflow 已转交 meee2 执行，` +
-        `可在 meee2 board 中查看 relay 会话进度；执行结果会写到 ${path.join(runDir, 'result.md')}，` +
-        `完成时本会话会收到 inject 通知。然后继续做不依赖该 workflow 结果的其他工作，或结束本轮等待通知。`,
+        `不要在本地重试或改写后重试这次 Workflow 调用。直接告诉用户：workflow 已转交 meee2 执行。` +
+        canvasHint +
+        `执行结果会写到 ${path.join(runDir, 'result.md')}，完成时本会话会收到 inject 通知。` +
+        `然后继续做不依赖该 workflow 结果的其他工作，或结束本轮等待通知。`,
     },
   }))
   process.exit(0)

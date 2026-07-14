@@ -6471,6 +6471,99 @@ final class PlannerStore {
         return artifacts.filter { normalizeArtifactReference($0.reference) == normalized }
     }
 
+    /// workflow-bridge · 往已有画布追加节点。外部 workflow 的 agent 镜像节点在
+    /// journal `started` 事件到达时才存在（agent 数量运行时才可知），而
+    /// `seedNodesIfEmpty` 只管空画布，所以需要这条追加通道。
+    ///
+    /// 幂等：已存在的 id 直接跳过（relay 修脚本重跑会产生重复 started）。
+    /// 直连路径（不走 proposal review）——只供镜像外部执行的服务调用，
+    /// 人工加节点仍走 proposal 流程。
+    @discardableResult
+    func appendNodes(canvasId: String, nodes: [PlanningNode]) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            let existing = Set(record.nodes.map(\.id))
+            let fresh = nodes.filter { !existing.contains($0.id) }
+            guard !fresh.isEmpty else { return record }
+            for node in fresh where node.canvasId != canvasId {
+                throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: node.canvasId)
+            }
+            record.nodes.append(contentsOf: fresh)
+            reconcileEdgesAndDependencies(&record)
+            for node in fresh {
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .nodeCreated,
+                    nodeId: node.id,
+                    summary: node.title
+                ))
+            }
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    /// workflow-bridge · 直写镜像节点的运行态/生命周期状态。
+    /// `updateNodeStatus` 有 `.step`-only 守卫（人工状态机），而镜像节点是
+    /// `.external` 且没有绑定会话（`applyRunStateForSession` 按 sessionId 找节点，
+    /// 用不上），所以要这条专用通道。`latch: true` 盖 `outputSubmittedAt`，
+    /// 复用 `reconcileRunStateAgainstLiveSessions` 的闩锁语义：终态不再被
+    /// "会话消失" 的 reconcile 降级。
+    @discardableResult
+    func applyWorkflowNodeState(
+        canvasId: String,
+        nodeId: String,
+        runState: PlannerWorkflowRunState?,
+        status: PlanningNodeStatus? = nil,
+        blockedReason: String? = nil,
+        title: String? = nil,
+        latch: Bool = false
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let idx = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            var node = record.nodes[idx]
+            var changed = false
+            if let title, !title.isEmpty, node.title != title {
+                node.title = title
+                changed = true
+            }
+            if let runState, node.workflowRunState != runState {
+                node.workflowRunState = runState
+                changed = true
+            }
+            if let status, node.status != status {
+                node.status = status
+                changed = true
+            }
+            if let blockedReason, node.blockedReason != blockedReason {
+                node.blockedReason = blockedReason
+                changed = true
+            } else if blockedReason == nil, let status, status != .blocked, node.blockedReason != nil {
+                node.blockedReason = nil
+                changed = true
+            }
+            if latch, node.outputSubmittedAt == nil {
+                node.outputSubmittedAt = Date()
+                changed = true
+            }
+            guard changed else { return record }
+            record.nodes[idx] = node
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "\(node.title) -> \(runState?.rawValue ?? status?.rawValue ?? "updated")"
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
     func updateNodeStatus(
         canvasId: String,
         nodeId: String,

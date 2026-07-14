@@ -1,8 +1,8 @@
 {
   "name": "meee2-workflow-bridge",
   "displayName": "Meee2 Workflow Bridge",
-  "version": "0.1.2",
-  "description": "Intercepts Claude Code native Workflow tool invocations and relays them to a meee2 session for execution, with automatic result write-back to the origin session.",
+  "version": "0.2.0",
+  "description": "Intercepts Claude Code native Workflow tool invocations and relays them to meee2 for execution — visualized as a live canvas (phase/agent fan-out) with structured progress written to the run dir for the origin session, falling back to a bare relay session on older meee2 builds.",
   "author": {
     "name": "Meee2"
   },

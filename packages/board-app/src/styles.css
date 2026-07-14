@@ -4995,6 +4995,33 @@ html.board-sidebar-rail--collapsed .app {
   white-space: nowrap;
 }
 
+/* 「后台 workflow 运行中」chip：主 status 可以是 idle 而后台 workflow 还在跑，
+   正交维度单独标出来，避免把 relay/代理执行的会话误读成死会话。 */
+.sessions-row__bg-workflow,
+.sessions-row__bg-count {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.sessions-row__bg-workflow {
+  border: 1px solid rgba(150, 130, 210, 0.32);
+  background: rgba(150, 130, 210, 0.16);
+  color: #b7a6e3;
+}
+
+.sessions-row__bg-count {
+  border: 1px solid rgba(139, 169, 194, 0.24);
+  background: rgba(139, 169, 194, 0.10);
+  color: var(--text-dim);
+}
+
 .sessions-row__signal {
   min-width: 0;
   color: var(--text-dim);
