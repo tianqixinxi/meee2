@@ -41,17 +41,34 @@ function expandHome(p) {
   return p.startsWith('~') ? path.join(HOME, p.slice(1)) : p
 }
 
-function apiBase() {
-  if (process.env.MEEE2_API_URL) return process.env.MEEE2_API_URL.replace(/\/+$/, '')
-  try {
-    const cfg = JSON.parse(fs.readFileSync(
-      path.join(HOME, 'Library/Application Support/meee2/board-server.json'), 'utf8'))
-    if (typeof cfg.url === 'string' && cfg.url) return cfg.url.replace(/\/+$/, '')
-    if (cfg.port) return `http://127.0.0.1:${cfg.port}`
-  } catch {
-    // board-server.json 不存在/损坏 → 用默认端口
+const RUNTIME_FILE = path.join(HOME, 'Library/Application Support/meee2/board-server.json')
+
+// BoardServer 对所有 mutating /api/* 请求要求 X-Meee2-Control-Token（同用户
+// 0600 运行时文件里下发）。base 和 token 必须一起读：token 每次 meee2 重启
+// 轮换，缓存旧值必 401。
+function apiRuntime() {
+  if (process.env.MEEE2_API_URL) {
+    return {
+      base: process.env.MEEE2_API_URL.replace(/\/+$/, ''),
+      token: process.env.MEEE2_CONTROL_TOKEN || null,
+    }
   }
-  return 'http://127.0.0.1:9876'
+  try {
+    const cfg = JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8'))
+    const token = typeof cfg.controlToken === 'string' && cfg.controlToken ? cfg.controlToken : null
+    if (typeof cfg.url === 'string' && cfg.url) return { base: cfg.url.replace(/\/+$/, ''), token }
+    if (cfg.port) return { base: `http://127.0.0.1:${cfg.port}`, token }
+  } catch {
+    // board-server.json 不存在/损坏 → 用默认端口（token 缺失时请求会被新版
+    // meee2 拒掉，走 fail-open；旧版 meee2 无 token 门，照常工作）
+  }
+  return { base: 'http://127.0.0.1:9876', token: null }
+}
+
+function controlHeaders(token) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['X-Meee2-Control-Token'] = token
+  return headers
 }
 
 // 静态解析 workflow 脚本首部的 `export const meta = {...}`（Claude Code 强制
@@ -215,7 +232,7 @@ return await workflow({ scriptPath: ${JSON.stringify(payloadFile)} }, ${JSON.str
     }
   }
 
-  const base = apiBase()
+  const { base, token } = apiRuntime()
   const originSessionId = input.session_id || ''
 
   fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify({
@@ -253,8 +270,9 @@ ${workflowParams}
    - 必须用上面的 ${script ? 'scriptPath' : 'name'} 形式，禁止把脚本内容以 "script" 参数内联传入（内联会被 bridge 再次拦截，造成死循环）。
 2. 等待 workflow 完成。如果脚本本身报语法/逻辑错误，可以直接编辑 ${argsBakedIn ? path.join(runDir, 'payload.mjs') + '（业务脚本；workflow.mjs 是 args 注入 wrapper，别动）' : (scriptFile ?? '（named workflow，不可编辑）')} 修复后用同一 scriptPath 重新调用。
 3. 把执行结果写成 markdown 总结到 ${path.join(runDir, 'result.md')}（包含 workflow 返回值、关键发现、如失败则失败原因）。
-4. 通知来源会话（尽力而为，curl 失败直接忽略）：
-   curl -s -X POST '${base}/api/sessions/${originSessionId}/inject' -H 'Content-Type: application/json' --data '{"content":"[meee2-workflow-bridge] workflow run ${runId} 已执行完成，结果在 ${path.join(runDir, 'result.md')}，请读取后继续之前的工作。"}'
+4. 通知来源会话（尽力而为，失败直接忽略）。meee2 的写接口需要当前 control token（存在 ${RUNTIME_FILE}，每次 meee2 重启会轮换，所以要现读）。用 Bash 执行：
+   TOKEN=$(node -pe 'JSON.parse(require("fs").readFileSync(${JSON.stringify(RUNTIME_FILE)},"utf8")).controlToken' 2>/dev/null)
+   curl -s -X POST '${base}/api/sessions/${originSessionId}/inject' -H 'Content-Type: application/json' -H "X-Meee2-Control-Token: $TOKEN" --data '{"content":"[meee2-workflow-bridge] workflow run ${runId} 已执行完成，结果在 ${path.join(runDir, 'result.md')}，请读取后继续之前的工作。"}'
 5. 结束会话，不要开始其他工作。
 `
   const instructionsFile = path.join(runDir, 'instructions.md')
@@ -270,7 +288,7 @@ ${workflowParams}
   try {
     const resp = await fetch(`${base}/api/workflow-bridge/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: controlHeaders(token),
       body: JSON.stringify({
         runId,
         runDir,
@@ -313,7 +331,7 @@ ${workflowParams}
     try {
       const resp = await fetch(`${base}/api/sessions/spawn`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: controlHeaders(token),
         body: JSON.stringify({ cwd, command }),
         signal: AbortSignal.timeout(10_000),
       })
