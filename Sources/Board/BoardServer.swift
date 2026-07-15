@@ -127,6 +127,7 @@ public final class BoardServer {
                     self?.broadcastStateChanged()
                 }
                 PlannerScheduleRunner.shared.start()
+                WorkflowBridgeRunService.shared.start()
                 return
             } catch {
                 lastError = error
@@ -145,6 +146,7 @@ public final class BoardServer {
         busSubscription?.cancel()
         busSubscription = nil
         PlannerScheduleRunner.shared.stop()
+        WorkflowBridgeRunService.shared.stop()
 
         wsLock.lock()
         let sockets = wsSessions + Array(wsPendingAuthentication.keys)
@@ -760,6 +762,7 @@ public final class BoardServer {
         server.GET["/api/claude/workflows"] = BoardServer.cors(BoardAPI.listClaudeWorkflows)
         server.POST["/api/claude/workflows/import-upload"] = BoardServer.cors(BoardAPI.importUploadedClaudeWorkflow)
         server.POST["/api/claude/workflows/:id/import"] = BoardServer.cors(BoardAPI.importClaudeWorkflow)
+        server.POST["/api/workflow-bridge/runs"] = BoardServer.cors(BoardAPI.registerWorkflowBridgeRun)
         server.GET["/api/planner/monitor"] = BoardServer.cors(BoardAPI.getPlannerWorkspaceMonitor)
         server.POST["/api/planner/activity"] = BoardServer.cors(BoardAPI.updatePlannerActivity)
         server.GET["/api/planner/canvases/:id/state"] = BoardServer.cors(BoardAPI.getPlannerCanvasState)

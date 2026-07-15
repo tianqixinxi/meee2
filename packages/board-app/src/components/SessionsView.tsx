@@ -526,6 +526,9 @@ const SessionRow = memo(function SessionRow({
   const needsChoice = sessionNeedsChoice(session)
   const done = session.status === 'completed' || session.status === 'done'
   const context = session.currentTask || sessionRecapProgressText(session) || session.recentMessages[0]?.text || ''
+  const bgAgents = session.backgroundAgents ?? []
+  const bgWorkflow = bgAgents.find((agent) => agent.kind === 'workflow')
+  const bgOtherCount = bgAgents.filter((agent) => agent.kind !== 'workflow').length
   return (
     <article
       className={[
@@ -568,6 +571,14 @@ const SessionRow = memo(function SessionRow({
       <div className="sessions-row__status">
         <strong>{session.surfaceStatus || session.status}</strong>
         {session.currentTool && <span>{session.currentTool}</span>}
+        {bgWorkflow && (
+          <span className="sessions-row__bg-workflow" title={bgWorkflow.description || undefined}>
+            {t('sessions.backgroundWorkflow')}
+          </span>
+        )}
+        {bgOtherCount > 0 && (
+          <span className="sessions-row__bg-count">{bgOtherCount} {t('sessions.backgroundTasks')}</span>
+        )}
       </div>
       <div className="sessions-row__context">
         <strong>{session.project || t('sessions.noProject')}</strong>

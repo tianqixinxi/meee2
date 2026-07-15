@@ -370,8 +370,10 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
 
   // PR1 (running-session-visual) — step / session 卡片统一走 deriveDisplayStatus,
   // 让运行态(running / awaiting / failed) 在 design 和 run mode 下都可见。
-  // 其他 nodeKind(artifact / subCanvas / external)保留旧逻辑。
-  const displayStatus = (nodeKind === 'step' || nodeKind === 'session')
+  // external 也走 (workflow-bridge 的镜像节点靠 workflowRunState 表达运行中/完成,
+  // deriveDisplayStatus 对非工作节点的 done 正确显示「完成」而非「未启动」)。
+  // 其他 nodeKind(artifact / subCanvas)保留旧逻辑。
+  const displayStatus = (nodeKind === 'step' || nodeKind === 'session' || nodeKind === 'external')
     ? deriveDisplayStatus(node, data.boundSessionLive)
     : null
   const statusLabel = displayStatus
