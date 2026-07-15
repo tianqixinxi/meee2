@@ -33,7 +33,14 @@ final class PlannerScheduleRunner {
         guard !due.isEmpty else { return }
         for item in due {
             do {
-                try send(item)
+                let session = try BoardAPI.materializeScheduledPlannerNodeSession(
+                    canvasId: item.canvasId,
+                    nodeId: item.nodeId,
+                    schedulePrompt: item.prompt
+                )
+                if !session.initialPromptIncludesSchedule {
+                    try send(item, sessionId: session.sessionId)
+                }
                 _ = try PlannerBoardBridge.store.markScheduledTickSent(
                     canvasId: item.canvasId,
                     nodeId: item.nodeId,
@@ -41,12 +48,13 @@ final class PlannerScheduleRunner {
                 )
                 BoardServer.shared.broadcastStateChanged()
             } catch {
-                MWarn("[PlannerScheduleRunner] schedule tick failed canvas=\(item.canvasId) node=\(item.nodeId) sid=\(item.sessionId.prefix(8)): \(error.localizedDescription)")
+                let session = item.sessionId.map { String($0.prefix(8)) } ?? "unbound"
+                MWarn("[PlannerScheduleRunner] schedule tick failed canvas=\(item.canvasId) node=\(item.nodeId) sid=\(session): \(error.localizedDescription)")
             }
         }
     }
 
-    private func send(_ item: PlannerStore.DueScheduledNode) throws {
+    private func send(_ item: PlannerStore.DueScheduledNode, sessionId: String) throws {
         let content = [
             item.prompt,
             "",
@@ -55,7 +63,7 @@ final class PlannerScheduleRunner {
             "- nodeId: \(item.nodeId)",
             "- intervalSeconds: \(item.intervalSeconds)"
         ].joined(separator: "\n")
-        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: item.sessionId)
+        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sessionId)
         _ = try MessageRouter.shared.send(
             channel: channelName,
             fromAlias: "operator",

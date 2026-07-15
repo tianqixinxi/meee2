@@ -696,6 +696,17 @@ public final class BoardServer {
         server.POST["/api/automations"] = BoardServer.cors(BoardAPI.createAutomation)
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
         server.DELETE["/api/automations/:id"] = BoardServer.cors(BoardAPI.deleteAutomation)
+
+        // Natural-language agent entrypoint: durable workflow blueprint →
+        // explicit approval → canvas provisioning → dry-run / enable / status.
+        server.POST["/api/workflow-proposals"] = BoardServer.cors(BoardAPI.createWorkflowProposal)
+        server.GET["/api/workflow-proposals/:id"] = BoardServer.cors(BoardAPI.getWorkflowProposal)
+        server.PATCH["/api/workflow-proposals/:id"] = BoardServer.cors(BoardAPI.reviseWorkflowProposal)
+        server.POST["/api/workflow-proposals/:id/apply"] = BoardServer.cors(BoardAPI.applyWorkflowProposal)
+        server.POST["/api/workflows/:id/dry-run"] = BoardServer.cors(BoardAPI.dryRunWorkflow)
+        server.POST["/api/workflows/:id/enable"] = BoardServer.cors(BoardAPI.enableWorkflow)
+        server.POST["/api/workflows/:id/pause"] = BoardServer.cors(BoardAPI.pauseWorkflow)
+        server.GET["/api/workflows/:id/status"] = BoardServer.cors(BoardAPI.getWorkflowStatus)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
         server.POST["/api/sessions/:id/open-workspace"] = BoardServer.cors(BoardAPI.openSessionWorkspace)
         server.POST["/api/sessions/:id/inject"] = BoardServer.cors(BoardAPI.injectToSession)

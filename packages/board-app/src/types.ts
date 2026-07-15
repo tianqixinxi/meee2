@@ -853,6 +853,11 @@ export interface PlannerNodeSchedule {
   prompt: string
   lastSentAt?: string | number | null
   nextRunAt?: string | number | null
+  cadence?: 'interval' | 'daily' | 'monthly' | null
+  timeZoneIdentifier?: string | null
+  hour?: number | null
+  minute?: number | null
+  dayOfMonth?: number | null
 }
 
 export interface PlannerNodeGate {

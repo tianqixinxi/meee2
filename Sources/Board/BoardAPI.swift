@@ -2640,6 +2640,99 @@ enum BoardAPI {
         }
     }
 
+    /// A newly provisioned workflow has schedules before it has live sessions.
+    /// On the first due tick, materialize the node's configured agent session;
+    /// later ticks reuse the resulting binding through MessageRouter.
+    static func materializeScheduledPlannerNodeSession(
+        canvasId: String,
+        nodeId: String,
+        schedulePrompt: String
+    ) throws -> (sessionId: String, initialPromptIncludesSchedule: Bool) {
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let actorUserId = PlannerPermission.currentActorId()
+        let state = try PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: actorUserId
+        )
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        if let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionId.isEmpty {
+            if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
+               !isReusableInternalSurface(surface) {
+                let revival = try reviveNodeSessionSurface(
+                    canvasId: canvasId,
+                    node: node,
+                    deadSessionId: sessionId,
+                    explicitCwd: nil,
+                    access: state.access
+                )
+                return (revival.surface.sessionId, false)
+            }
+            return (sessionId, false)
+        }
+        let runner: PlannerDispatchRunner
+        switch node.executorType {
+        case .claude:
+            runner = .claude
+        case .codex:
+            runner = .codex
+        default:
+            throw WorkflowProvisioningError.validation(
+                "scheduled node \(nodeId) must use the claude or codex runtime"
+            )
+        }
+        let result = try PlannerBoardBridge.dispatchNode(
+            nodeId: nodeId,
+            runner: runner,
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: actorUserId
+        )
+        do {
+            guard let spawnRequest = try recordPlannerDispatchIntent(
+                canvasId: canvasId,
+                node: result.dispatchedNode,
+                cwdOverride: nil,
+                initialPromptOverride: schedulePrompt,
+                includeInitialPromptInIntent: false
+            ) else {
+                throw WorkflowProvisioningError.validation(
+                    "scheduled node \(nodeId) does not have a spawnable runner"
+                )
+            }
+            let surface = try createInternalSessionSurface(
+                provider: spawnRequest.provider,
+                cwd: spawnRequest.cwd,
+                command: spawnRequest.command,
+                createIfMissing: true,
+                canvasId: canvasId,
+                nodeId: nodeId,
+                initialPrompt: spawnRequest.initialPrompt
+            )
+            guard PlannerSessionRunStateBridge.observe(
+                sessionId: surface.sessionId,
+                purpose: spawnRequest.purpose,
+                status: .active
+            ) != nil else {
+                throw WorkflowProvisioningError.validation(
+                    "scheduled session could not be bound to node \(nodeId)"
+                )
+            }
+            return (surface.sessionId, true)
+        } catch {
+            _ = try? PlannerBoardBridge.abandonNodeSession(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorUserId
+            )
+            throw error
+        }
+    }
+
     static func ensurePlannerNodeInternalSession(_ req: HttpRequest) -> HttpResponse {
         struct EnsureRequest: Decodable {
             let runner: PlannerDispatchRunner?
@@ -6300,6 +6393,165 @@ enum BoardAPI {
         } catch {
             return errorResponse("automation_store_error", error.localizedDescription, status: 500)
         }
+    }
+
+    // MARK: - Workflow provisioning
+
+    private struct WorkflowProposalCreateRequest: Decodable {
+        let requirement: String
+        let blueprint: WorkflowBlueprint
+        let idempotencyKey: String?
+        let targetCanvasId: String?
+    }
+
+    private struct WorkflowProposalReviseRequest: Decodable {
+        let requirement: String?
+        let blueprint: WorkflowBlueprint?
+        let expectedVersion: Int?
+    }
+
+    private struct WorkflowApprovalRequest: Decodable {
+        let explicitlyApproved: Bool?
+    }
+
+    static func createWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let body = decodeJSONBody(req, as: WorkflowProposalCreateRequest.self) else {
+            return errorResponse(
+                "invalid_json",
+                "body must include requirement and a structured workflow blueprint",
+                status: 400
+            )
+        }
+        do {
+            let proposal = try WorkflowProposalStore.shared.create(
+                requirement: body.requirement,
+                blueprint: body.blueprint,
+                idempotencyKey: body.idempotencyKey,
+                targetCanvasId: body.targetCanvasId
+            )
+            return jsonResponse(WorkflowProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func getWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow proposal id", status: 400)
+        }
+        guard let proposal = WorkflowProposalStore.shared.get(id: id) else {
+            return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+        }
+        return jsonResponse(WorkflowProposalEnvelope(proposal: proposal))
+    }
+
+    static func reviseWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow proposal id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: WorkflowProposalReviseRequest.self) else {
+            return errorResponse("invalid_json", "body must include requirement or blueprint", status: 400)
+        }
+        guard body.requirement != nil || body.blueprint != nil else {
+            return errorResponse("bad_request", "nothing to revise", status: 400)
+        }
+        do {
+            let proposal = try WorkflowProposalStore.shared.revise(
+                id: id,
+                requirement: body.requirement,
+                blueprint: body.blueprint,
+                expectedVersion: body.expectedVersion
+            )
+            return jsonResponse(WorkflowProposalEnvelope(proposal: proposal))
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func applyWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow proposal id", status: 400)
+        }
+        guard let proposal = WorkflowProposalStore.shared.get(id: id) else {
+            return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+        }
+        let body = decodeJSONBody(req, as: WorkflowApprovalRequest.self)
+        do {
+            return jsonResponse(try WorkflowProvisioner.apply(
+                proposal: proposal,
+                explicitlyApproved: body?.explicitlyApproved == true
+            ))
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func dryRunWorkflow(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            return jsonResponse(try WorkflowProvisioner.dryRun(canvasId: canvasId))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func enableWorkflow(_ req: HttpRequest) -> HttpResponse {
+        setWorkflowEnabled(req, enabled: true)
+    }
+
+    static func pauseWorkflow(_ req: HttpRequest) -> HttpResponse {
+        setWorkflowEnabled(req, enabled: false)
+    }
+
+    private static func setWorkflowEnabled(_ req: HttpRequest, enabled: Bool) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: WorkflowApprovalRequest.self)
+        do {
+            return jsonResponse(try WorkflowProvisioner.setEnabled(
+                canvasId: canvasId,
+                enabled: enabled,
+                explicitlyApproved: body?.explicitlyApproved == true
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func getWorkflowStatus(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            return jsonResponse(try WorkflowProvisioner.status(canvasId: canvasId))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    private static func mapWorkflowProvisioningError(_ error: Error) -> HttpResponse {
+        if let error = error as? WorkflowProvisioningError {
+            switch error {
+            case .notFound:
+                return errorResponse("not_found", error.localizedDescription, status: 404)
+            case .validation:
+                return errorResponse("validation_error", error.localizedDescription, status: 400)
+            case .immutableProposal:
+                return errorResponse("proposal_immutable", error.localizedDescription, status: 409)
+            case .approvalRequired:
+                return errorResponse("approval_required", error.localizedDescription, status: 409)
+            }
+        }
+        return errorResponse("workflow_provisioning_error", error.localizedDescription, status: 500)
     }
 
     // MARK: - Sessions

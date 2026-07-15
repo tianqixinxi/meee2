@@ -1,8 +1,8 @@
 ---
 name: meee2
-description: Use this skill when you are executing a Meee2 planner node, working on a Meee2 canvas, reading canvas orchestration/runtime context, submitting planner output, attaching artifacts, routing outputs, or keeping the Meee2 UI in sync through MCP.
+description: Use this skill when turning natural-language business processes into Meee2 workflow canvases, proposing or changing workflows, managing recurring jobs, executing planner nodes, or writing structured canvas artifacts through MCP.
 metadata:
-  short-description: Execute Meee2 planner nodes
+  short-description: Create and run Meee2 workflows
 ---
 
 # Meee2 Skill
@@ -10,6 +10,29 @@ metadata:
 Meee2 Runtime is the source of truth for planner canvases, nodes, runs, routes, orchestration profiles, and artifacts. Terminal text is not enough to update the product UI. Use the Meee2 MCP tools whenever a task says you are executing a Meee2 planner node, working on a canvas, or gives you a `canvasId` and `nodeId`.
 
 Canvas Orchestration Profile is the runtime model truth for a canvas: workflow, monitor, or rules engine kind plus semantic role slots, state slots, and action capabilities. It is owned by Meee2. Read it through `read_canvas_context`; do not read or edit `orchestration-profile.json` from the session cwd.
+
+## Workflow Creation Flow
+
+When the user describes a business process instead of an existing node:
+
+1. Translate it into one complete blueprint: business steps, dependencies, tracker tabs, per-field write policy, required integrations, and recurring schedules.
+2. Call `propose_workflow`. This stores a draft only; it must not create external resources or a Canvas.
+3. Explain the result in business language. Keep Canvas ids, node ids, routing, and runtime internals out of the primary explanation unless the user asks.
+4. Wait for explicit approval, then call `apply_workflow_proposal`. Applying creates or updates the Canvas but leaves all recurring jobs disabled.
+5. Call `dry_run_workflow` to validate the structure without dispatching agents or writing external systems.
+6. Ask separately before calling `enable_workflow`, because enabling creates future side effects. Use `pause_workflow` to stop every recurring job.
+
+For an existing Canvas, call `propose_workflow_change` with the full desired blueprint. Do not mutate the graph directly. Use `read_workflow_proposal` and `revise_workflow_proposal` while refining a draft, and `get_workflow_status` for a business-level status summary.
+
+Tracker field policies are safety boundaries:
+
+- `human_only`: AI may read but never overwrite the field.
+- `ai_suggest`: AI may propose a value; a human approves the update.
+- `ai_write`: AI may update the external object through its real connector.
+
+Every integration also has a policy: `read_only`, `draft_only`, or `write`. If the user asks to read email and draft outreach, use `read_only` for the mailbox integration and `draft_only` for the outreach path. Omitted integration policies default to `read_only`.
+
+Never treat `apply_workflow_proposal` as approval to create a Google Sheet, send outreach, modify email, or enable schedules. Those remain separate connector actions or approvals.
 
 ## Required Flow
 

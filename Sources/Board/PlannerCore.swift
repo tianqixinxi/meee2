@@ -495,6 +495,90 @@ struct PlannerNodeSchedule: Codable, Equatable {
     var prompt: String
     var lastSentAt: Date?
     var nextRunAt: Date?
+    /// Business cadence. nil keeps legacy interval behavior.
+    var cadence: PlannerScheduleCadence?
+    var timeZoneIdentifier: String?
+    var hour: Int?
+    var minute: Int?
+    var dayOfMonth: Int?
+
+    init(
+        enabled: Bool,
+        intervalSeconds: Int,
+        prompt: String,
+        lastSentAt: Date? = nil,
+        nextRunAt: Date? = nil,
+        cadence: PlannerScheduleCadence? = nil,
+        timeZoneIdentifier: String? = nil,
+        hour: Int? = nil,
+        minute: Int? = nil,
+        dayOfMonth: Int? = nil
+    ) {
+        self.enabled = enabled
+        self.intervalSeconds = intervalSeconds
+        self.prompt = prompt
+        self.lastSentAt = lastSentAt
+        self.nextRunAt = nextRunAt
+        self.cadence = cadence
+        self.timeZoneIdentifier = timeZoneIdentifier
+        self.hour = hour
+        self.minute = minute
+        self.dayOfMonth = dayOfMonth
+    }
+
+    func nextOccurrence(after date: Date) -> Date {
+        switch cadence ?? .interval {
+        case .interval:
+            return date.addingTimeInterval(TimeInterval(max(60, intervalSeconds)))
+        case .daily:
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = resolvedTimeZone
+            let components = DateComponents(
+                hour: min(23, max(0, hour ?? 9)),
+                minute: min(59, max(0, minute ?? 0))
+            )
+            return calendar.nextDate(
+                after: date,
+                matching: components,
+                matchingPolicy: .nextTime,
+                repeatedTimePolicy: .first,
+                direction: .forward
+            ) ?? date.addingTimeInterval(86_400)
+        case .monthly:
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = resolvedTimeZone
+            let targetDay = min(31, max(1, dayOfMonth ?? 1))
+            let targetHour = min(23, max(0, hour ?? 9))
+            let targetMinute = min(59, max(0, minute ?? 0))
+            var monthStart = calendar.date(
+                from: calendar.dateComponents([.year, .month], from: date)
+            ) ?? date
+            for _ in 0..<14 {
+                let range = calendar.range(of: .day, in: .month, for: monthStart)
+                let clampedDay = min(targetDay, range?.count ?? targetDay)
+                var components = calendar.dateComponents([.year, .month], from: monthStart)
+                components.day = clampedDay
+                components.hour = targetHour
+                components.minute = targetMinute
+                components.second = 0
+                if let candidate = calendar.date(from: components), candidate > date {
+                    return candidate
+                }
+                monthStart = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart.addingTimeInterval(2_678_400)
+            }
+            return date.addingTimeInterval(2_678_400)
+        }
+    }
+
+    private var resolvedTimeZone: TimeZone {
+        timeZoneIdentifier.flatMap(TimeZone.init(identifier:)) ?? .current
+    }
+}
+
+enum PlannerScheduleCadence: String, Codable, Equatable {
+    case interval
+    case daily
+    case monthly
 }
 
 struct PlannerNodeGate: Codable, Equatable {
@@ -4054,7 +4138,7 @@ final class PlannerStore {
         let canvasId: String
         let nodeId: String
         let title: String
-        let sessionId: String
+        let sessionId: String?
         let prompt: String
         let intervalSeconds: Int
     }
@@ -6740,7 +6824,7 @@ final class PlannerStore {
                     value.prompt = Self.defaultSchedulePrompt(for: record.nodes[nodeIndex])
                 }
                 if value.enabled {
-                    value.nextRunAt = value.nextRunAt ?? Date().addingTimeInterval(TimeInterval(value.intervalSeconds))
+                    value.nextRunAt = value.nextRunAt ?? value.nextOccurrence(after: Date())
                 } else {
                     value.nextRunAt = nil
                 }
@@ -6770,16 +6854,17 @@ final class PlannerStore {
                     guard let schedule = node.schedule,
                           schedule.enabled,
                           schedule.intervalSeconds >= 60,
-                          (node.nodeKind ?? .step) == .step,
-                          let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                          !sessionId.isEmpty else { continue }
-                    let nextRunAt = schedule.nextRunAt ?? schedule.lastSentAt?.addingTimeInterval(TimeInterval(schedule.intervalSeconds)) ?? now
+                          (node.nodeKind ?? .step) == .step else { continue }
+                    let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let nextRunAt = schedule.nextRunAt
+                        ?? schedule.lastSentAt.map { schedule.nextOccurrence(after: $0) }
+                        ?? now
                     guard nextRunAt <= now else { continue }
                     due.append(DueScheduledNode(
                         canvasId: canvasId,
                         nodeId: node.id,
                         title: node.title,
-                        sessionId: sessionId,
+                        sessionId: sessionId?.isEmpty == false ? sessionId : nil,
                         prompt: schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             ? Self.defaultSchedulePrompt(for: node)
                             : schedule.prompt,
@@ -6806,7 +6891,7 @@ final class PlannerStore {
             }
             schedule.intervalSeconds = max(60, schedule.intervalSeconds)
             schedule.lastSentAt = sentAt
-            schedule.nextRunAt = sentAt.addingTimeInterval(TimeInterval(schedule.intervalSeconds))
+            schedule.nextRunAt = schedule.nextOccurrence(after: sentAt)
             record.nodes[nodeIndex].schedule = schedule
             record.nodes[nodeIndex].workflowRunState = .readyToStart
             record.nodes[nodeIndex].status = .ready
