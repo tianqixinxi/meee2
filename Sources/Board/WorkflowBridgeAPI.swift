@@ -1,5 +1,6 @@
 import Foundation
 import Swifter
+import Meee2CommKit
 
 /// workflow-bridge 的 HTTP 面（仿 ArtifactPageAPI 的 extension BoardAPI 分文件模式）。
 extension BoardAPI {
@@ -27,6 +28,30 @@ extension BoardAPI {
         guard !registration.runId.isEmpty, !registration.runDir.isEmpty,
               !registration.cwd.isEmpty, !registration.command.isEmpty else {
             return errorResponse("bad_request", "runId/runDir/cwd/command must be non-empty", status: 400)
+        }
+        guard registration.runId.range(
+            of: #"^wfbridge-[a-z0-9-]{8,120}$"#,
+            options: .regularExpression
+        ) != nil else {
+            return errorResponse("bad_request", "runId has an invalid format", status: 400)
+        }
+        let allowedRoot = StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("workflow-bridge/runs", isDirectory: true)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let runURL = URL(fileURLWithPath: registration.runDir, isDirectory: true)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let allowedPrefix = allowedRoot.path.hasSuffix("/") ? allowedRoot.path : allowedRoot.path + "/"
+        guard runURL.path.hasPrefix(allowedPrefix),
+              runURL.deletingLastPathComponent().path == allowedRoot.path else {
+            return errorResponse("bad_request", "runDir must be a direct child of the workflow bridge runs directory", status: 400)
+        }
+        var cwdIsDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: registration.cwd, isDirectory: &cwdIsDirectory),
+              cwdIsDirectory.boolValue else {
+            return errorResponse("bad_request", "cwd must be an existing directory", status: 400)
+        }
+        guard registration.command.hasPrefix("MEEE2_WORKFLOW_RELAY=1 claude ") else {
+            return errorResponse("bad_request", "command must be a guarded workflow relay command", status: 400)
         }
         do {
             let result = try WorkflowBridgeRunService.shared.register(registration)

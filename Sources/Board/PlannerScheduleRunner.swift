@@ -32,12 +32,25 @@ final class PlannerScheduleRunner {
         let due = PlannerBoardBridge.store.dueScheduledNodes(now: now)
         guard !due.isEmpty else { return }
         for item in due {
+            var createdRunId: String?
             do {
                 let session = try BoardAPI.materializeScheduledPlannerNodeSession(
                     canvasId: item.canvasId,
                     nodeId: item.nodeId,
                     schedulePrompt: item.prompt
                 )
+                let existingRuns = try PlannerBoardBridge.store.runs(canvasId: item.canvasId)
+                if existingRuns.last?.status != .active {
+                    let run = try PlannerBoardBridge.store.startRun(
+                        canvasId: item.canvasId,
+                        trigger: "schedule:\(item.nodeId)",
+                        title: "Scheduled · \(item.title)",
+                        summary: "Recurring workflow tick",
+                        responsibleUserId: nil,
+                        linkedArtifactRefs: []
+                    )
+                    createdRunId = run.id
+                }
                 if !session.initialPromptIncludesSchedule {
                     try send(item, sessionId: session.sessionId)
                 }
@@ -48,6 +61,15 @@ final class PlannerScheduleRunner {
                 )
                 BoardServer.shared.broadcastStateChanged()
             } catch {
+                if let createdRunId {
+                    _ = try? PlannerBoardBridge.store.abortRun(runId: createdRunId)
+                }
+                _ = try? PlannerBoardBridge.store.markScheduledTickFailed(
+                    canvasId: item.canvasId,
+                    nodeId: item.nodeId,
+                    error: error.localizedDescription,
+                    attemptedAt: now
+                )
                 let session = item.sessionId.map { String($0.prefix(8)) } ?? "unbound"
                 MWarn("[PlannerScheduleRunner] schedule tick failed canvas=\(item.canvasId) node=\(item.nodeId) sid=\(session): \(error.localizedDescription)")
             }

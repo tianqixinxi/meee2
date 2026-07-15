@@ -80,6 +80,7 @@ final class WorkflowBridgeRunService {
         let execNodeId: String
         let phaseNodeIds: [String]
         let surfaceSessionId: String
+        var surfaceId: String?
         let workflowName: String?
         let workflowDescription: String?
         var relayCliSessionId: String?
@@ -95,6 +96,8 @@ final class WorkflowBridgeRunService {
     }
 
     private let lock = NSLock()
+    private let registrationCondition = NSCondition()
+    private var registrationsInFlight = Set<String>()
     private var runs: [String: RunHandle] = [:]
     private var timer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "meee2.workflow-bridge-run-service", qos: .utility)
@@ -113,6 +116,7 @@ final class WorkflowBridgeRunService {
     // MARK: - 生命周期
 
     func start() {
+        guard timer == nil else { return }
         restoreFromDisk()
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 2, repeating: 2.0)
@@ -130,6 +134,19 @@ final class WorkflowBridgeRunService {
     // MARK: - 注册（HTTP handler 调）
 
     func register(_ reg: Registration) throws -> RegisterResult {
+        registrationCondition.lock()
+        while registrationsInFlight.contains(reg.runId) {
+            registrationCondition.wait()
+        }
+        registrationsInFlight.insert(reg.runId)
+        registrationCondition.unlock()
+        defer {
+            registrationCondition.lock()
+            registrationsInFlight.remove(reg.runId)
+            registrationCondition.broadcast()
+            registrationCondition.unlock()
+        }
+
         // 幂等：同 runId 重复注册（bridge 重试）直接返回既有记录
         lock.lock()
         if let existing = runs[reg.runId] {
@@ -138,11 +155,29 @@ final class WorkflowBridgeRunService {
                 canvasId: existing.canvasId,
                 canvasName: existing.canvasName,
                 sessionId: existing.surfaceSessionId,
-                surfaceId: existing.surfaceSessionId,
+                surfaceId: existing.surfaceId
+                    ?? TerminalSessionBackendRegistry.shared.snapshot(id: existing.surfaceSessionId)?.surfaceId
+                    ?? existing.surfaceSessionId,
                 statusPath: statusPath(runDir: existing.runDir)
             )
         }
         lock.unlock()
+
+        // Restart-safe idempotency: terminal handles are not watched after a
+        // restart, but they still prove that this runId was already
+        // provisioned and must not create a second canvas/session.
+        let persistedHandlePath = (reg.runDir as NSString).appendingPathComponent("handle.json")
+        if let data = FileManager.default.contents(atPath: persistedHandlePath),
+           let existing = try? Self.handleDecoder.decode(RunHandle.self, from: data),
+           existing.runId == reg.runId {
+            return RegisterResult(
+                canvasId: existing.canvasId,
+                canvasName: existing.canvasName,
+                sessionId: existing.surfaceSessionId,
+                surfaceId: existing.surfaceId ?? existing.surfaceSessionId,
+                statusPath: statusPath(runDir: existing.runDir)
+            )
+        }
 
         let displayName = reg.meta?.name ?? reg.workflowName ?? reg.runId
         let stamp: String = {
@@ -159,6 +194,13 @@ final class WorkflowBridgeRunService {
             kind: .board
         )
         let canvasId = snapshot.activeCanvasId
+        var committed = false
+        defer {
+            if !committed {
+                try? PlannerBoardBridge.store.removeCanvasRecord(canvasId: canvasId)
+                _ = try? BoardLayoutStore.shared.deleteCanvas(id: canvasId)
+            }
+        }
         guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
             throw PlannerCoreError.canvasNotFound(canvasId)
         }
@@ -264,6 +306,7 @@ final class WorkflowBridgeRunService {
             execNodeId: execNodeId,
             phaseNodeIds: phaseNodeIds,
             surfaceSessionId: surface.sessionId,
+            surfaceId: surface.surfaceId,
             workflowName: displayName,
             workflowDescription: reg.meta?.description,
             state: .spawning,
@@ -277,15 +320,7 @@ final class WorkflowBridgeRunService {
         lock.lock()
         runs[reg.runId] = handle
         lock.unlock()
-
-        // 5. 前置 board 到新 canvas
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(
-                name: Notification.Name("meee2.openPlannerItem"),
-                object: nil,
-                userInfo: ["canvasId": canvasId]
-            )
-        }
+        committed = true
 
         MInfo("[WorkflowBridge] registered run=\(reg.runId) canvas=\(canvasId.prefix(8)) relay=\(surface.sessionId.prefix(8))")
         return RegisterResult(
@@ -320,7 +355,10 @@ final class WorkflowBridgeRunService {
     }
 
     private func snapshotForChangeDetection(_ h: RunHandle) -> String {
-        "\(h.state.rawValue)|\(h.relayCliSessionId ?? "")|\(h.wfDir ?? "")|\(h.journalOffset)|\(h.agents.count)|\(h.agents.values.filter { $0.state == "done" }.count)|\(h.lastEvent)"
+        let agentState = h.agents.values.sorted { $0.agentId < $1.agentId }
+            .map { "\($0.agentId):\($0.state):\($0.title):\($0.titleRefined)" }
+            .joined(separator: "|")
+        return "\(h.state.rawValue)|\(h.relayCliSessionId ?? "")|\(h.wfDir ?? "")|\(h.journalOffset)|\(agentState)|\(h.lastEvent)|\(h.error ?? "")"
     }
 
     private func step(_ h: inout RunHandle) {
@@ -390,13 +428,10 @@ final class WorkflowBridgeRunService {
         guard let entries = try? fm.contentsOfDirectory(atPath: wfRoot) else { return nil }
         let candidates = entries.filter { $0.hasPrefix("wf_") }
         guard !candidates.isEmpty else { return nil }
-        if candidates.count == 1 {
-            return (wfRoot as NSString).appendingPathComponent(candidates[0])
-        }
-
         let scriptPath = (runDir as NSString).appendingPathComponent("workflow.mjs")
         let script = try? String(contentsOfFile: scriptPath, encoding: .utf8)
         let metaRoot = (transcriptDir as NSString).appendingPathComponent("workflows")
+        var foundMetadataForCandidate = false
         if let script, let metaEntries = try? fm.contentsOfDirectory(atPath: metaRoot) {
             for metaName in metaEntries where metaName.hasPrefix("wf_") && metaName.hasSuffix(".json") {
                 let metaPath = (metaRoot as NSString).appendingPathComponent(metaName)
@@ -409,15 +444,23 @@ final class WorkflowBridgeRunService {
                         return (wfRoot as NSString).appendingPathComponent(dirName)
                     }
                 }
+                let dirName = (metaName as NSString).deletingPathExtension
+                if candidates.contains(dirName) {
+                    foundMetadataForCandidate = true
+                }
             }
         }
 
-        // fallback：mtime 最新
-        let newest = candidates.max { lhs, rhs in
-            mtime((wfRoot as NSString).appendingPathComponent(lhs)) ?? .distantPast
-                < mtime((wfRoot as NSString).appendingPathComponent(rhs)) ?? .distantPast
+        // A fresh relay normally has one candidate. Multiple unmatched
+        // candidates are ambiguous: waiting/failing is safer than mirroring a
+        // different workflow into this canvas.
+        if script != nil && foundMetadataForCandidate {
+            return nil
         }
-        return newest.map { (wfRoot as NSString).appendingPathComponent($0) }
+        if candidates.count == 1 {
+            return (wfRoot as NSString).appendingPathComponent(candidates[0])
+        }
+        return nil
     }
 
     // MARK: - journal tail
@@ -433,6 +476,11 @@ final class WorkflowBridgeRunService {
         defer { try? handle.close() }
 
         let size = (try? handle.seekToEnd()) ?? 0
+        if size < h.journalOffset {
+            h.journalOffset = 0
+            h.lastEvent = "workflow journal rotated; resumed from beginning"
+            h.lastEventAt = Date()
+        }
         guard size > h.journalOffset else { return }
         try? handle.seek(toOffset: h.journalOffset)
         guard let data = try? handle.readToEnd(), !data.isEmpty else { return }
@@ -713,7 +761,7 @@ final class WorkflowBridgeRunService {
             "state": h.state.rawValue,
             "canvasId": h.canvasId,
             "canvasName": h.canvasName,
-            "boardUrl": "http://127.0.0.1:9876",
+            "boardUrl": BoardServer.shared.url,
             "relaySessionId": h.surfaceSessionId,
             "relayCliSessionId": h.relayCliSessionId as Any,
             "workflow": [
@@ -741,7 +789,11 @@ final class WorkflowBridgeRunService {
               let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) else {
             return
         }
-        try? data.write(to: URL(fileURLWithPath: statusPath(runDir: h.runDir)), options: .atomic)
+        do {
+            try data.write(to: URL(fileURLWithPath: statusPath(runDir: h.runDir)), options: .atomic)
+        } catch {
+            MWarn("[WorkflowBridge] status write failed run=\(h.runId): \(error.localizedDescription)")
+        }
     }
 
     private func iso8601(_ date: Date) -> String {
@@ -766,8 +818,8 @@ final class WorkflowBridgeRunService {
     }()
 
     private func restoreFromDisk() {
-        let root = (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".meee2/workflow-bridge/runs")
+        let root = StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("workflow-bridge/runs", isDirectory: true).path
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root) else { return }
         for name in entries {
             let runDir = (root as NSString).appendingPathComponent(name)
@@ -788,7 +840,11 @@ final class WorkflowBridgeRunService {
     private func persistHandle(_ h: RunHandle) {
         let path = (h.runDir as NSString).appendingPathComponent("handle.json")
         if let data = try? Self.handleEncoder.encode(h) {
-            try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            do {
+                try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            } catch {
+                MWarn("[WorkflowBridge] handle write failed run=\(h.runId): \(error.localizedDescription)")
+            }
         }
     }
 }

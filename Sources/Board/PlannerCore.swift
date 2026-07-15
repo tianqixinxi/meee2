@@ -501,6 +501,10 @@ struct PlannerNodeSchedule: Codable, Equatable {
     var hour: Int?
     var minute: Int?
     var dayOfMonth: Int?
+    var lastAttemptAt: Date?
+    var lastError: String?
+    var consecutiveFailures: Int?
+    var retryAt: Date?
 
     init(
         enabled: Bool,
@@ -512,7 +516,11 @@ struct PlannerNodeSchedule: Codable, Equatable {
         timeZoneIdentifier: String? = nil,
         hour: Int? = nil,
         minute: Int? = nil,
-        dayOfMonth: Int? = nil
+        dayOfMonth: Int? = nil,
+        lastAttemptAt: Date? = nil,
+        lastError: String? = nil,
+        consecutiveFailures: Int? = nil,
+        retryAt: Date? = nil
     ) {
         self.enabled = enabled
         self.intervalSeconds = intervalSeconds
@@ -524,6 +532,10 @@ struct PlannerNodeSchedule: Codable, Equatable {
         self.hour = hour
         self.minute = minute
         self.dayOfMonth = dayOfMonth
+        self.lastAttemptAt = lastAttemptAt
+        self.lastError = lastError
+        self.consecutiveFailures = consecutiveFailures
+        self.retryAt = retryAt
     }
 
     func nextOccurrence(after date: Date) -> Date {
@@ -1118,6 +1130,42 @@ struct UpstreamFreshness: Codable, Equatable {
     var staleUpstreams: [StaleUpstream]
 }
 
+enum WorkflowExternalWriteMode: String, Codable, Equatable {
+    case directWrite = "direct_write"
+    case draftOnly = "draft_only"
+    case prohibited
+}
+
+struct WorkflowTrackerContract: Codable, Equatable {
+    var id: String
+    var connector: String
+    var reference: String
+    var tabColumns: [String: [String]]
+    var fieldPolicies: [String: String]
+    var canRead: Bool
+    var canWrite: Bool
+}
+
+struct WorkflowNodePolicy: Codable, Equatable {
+    var trackers: [WorkflowTrackerContract]
+    var integrationPolicies: [String: String]
+
+    var externalWriteMode: WorkflowExternalWriteMode {
+        let writers = trackers.filter(\.canWrite)
+        guard !writers.isEmpty else { return .prohibited }
+        if writers.contains(where: { integrationPolicies[$0.connector] != "write" }) {
+            return integrationPolicies.values.contains("draft_only") ? .draftOnly : .prohibited
+        }
+        if writers.contains(where: { $0.fieldPolicies.values.contains("human_only") }) {
+            return .prohibited
+        }
+        if writers.contains(where: { $0.fieldPolicies.values.contains("ai_suggest") }) {
+            return .draftOnly
+        }
+        return .directWrite
+    }
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -1192,6 +1240,9 @@ struct PlanningNode: Codable, Equatable {
     /// Teams — 多人增量贡献配置(2026-06-11)。nil = closed(不收贡献)。
     /// 随 team canvas state 同步;贡献账本在云端,见 `NodeContributionConfig`。
     var contribution: NodeContributionConfig?
+    /// Structured, enforceable workflow policy. Unlike the human-readable
+    /// goal/context text, this survives dispatch and is validated on output.
+    var workflowPolicy: WorkflowNodePolicy?
 
     /// Derived upstream-staleness signal — set ONLY by `canvasState`'s read
     /// projection (`injectUpstreamFreshness`). Optional ⇒ implicit nil default,
@@ -1250,7 +1301,8 @@ struct PlanningNode: Codable, Equatable {
         artifactDataSource: String? = nil,
         artifactSource: ArtifactSource? = nil,
         stateSchema: NodeStateSchema? = nil,
-        contribution: NodeContributionConfig? = nil
+        contribution: NodeContributionConfig? = nil,
+        workflowPolicy: WorkflowNodePolicy? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -1286,6 +1338,7 @@ struct PlanningNode: Codable, Equatable {
         self.artifactSource = artifactSource
         self.stateSchema = stateSchema
         self.contribution = contribution
+        self.workflowPolicy = workflowPolicy
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -1314,6 +1367,7 @@ struct PlanningNode: Codable, Equatable {
         case stateSchema
         // Teams — 多人增量贡献(2026-06-11). nil = closed.
         case contribution
+        case workflowPolicy
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -1360,6 +1414,7 @@ struct PlanningNode: Codable, Equatable {
         artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
         stateSchema = try container.decodeIfPresent(NodeStateSchema.self, forKey: .stateSchema)
         contribution = try container.decodeIfPresent(NodeContributionConfig.self, forKey: .contribution)
+        workflowPolicy = try container.decodeIfPresent(WorkflowNodePolicy.self, forKey: .workflowPolicy)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1398,6 +1453,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
         try container.encodeIfPresent(stateSchema, forKey: .stateSchema)
         try container.encodeIfPresent(contribution, forKey: .contribution)
+        try container.encodeIfPresent(workflowPolicy, forKey: .workflowPolicy)
         // Emit the unified source (resolved from legacy if unset) so the
         // board-app reads one canonical `artifactSource`. Legacy
         // `artifactDataSource` is still emitted above for one-release compat.
@@ -1590,6 +1646,7 @@ struct PlanChange: Codable, Equatable {
     /// shape `artifactConfig.dataSource` (board-app sends that on updateNode)
     /// so old clients keep working — see init(from:).
     var artifactSource: ArtifactSource?
+    var workflowPolicy: WorkflowNodePolicy?
 
     // MARK: Canvas runtime 5-atom payloads (PR6+7)
     //
@@ -1650,7 +1707,7 @@ struct PlanChange: Codable, Equatable {
         case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
         case reviewerIds, approverIds, handoffPolicy, widget
-        case artifactDataSource, artifactSource
+        case artifactDataSource, artifactSource, workflowPolicy
         // Legacy nested wire shape `artifactConfig: { dataSource: { mode } }`
         // (board-app sends this on updateNode). Decoded into artifactDataSource
         // for one-release compat.
@@ -1699,6 +1756,7 @@ struct PlanChange: Codable, Equatable {
         artifact: PlanArtifactDraft? = nil,
         artifactDataSource: String? = nil,
         artifactSource: ArtifactSource? = nil,
+        workflowPolicy: WorkflowNodePolicy? = nil,
         dataSourceRecord: DataSourceRecord? = nil,
         sourceId: String? = nil,
         dataSourcePatch: BoardJSONValue? = nil,
@@ -1778,6 +1836,7 @@ struct PlanChange: Codable, Equatable {
         self.artifact = artifact
         self.artifactDataSource = artifactDataSource
         self.artifactSource = artifactSource
+        self.workflowPolicy = workflowPolicy
     }
 
     init(from decoder: Decoder) throws {
@@ -1830,6 +1889,7 @@ struct PlanChange: Codable, Equatable {
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifact = try container.decodeIfPresent(PlanArtifactDraft.self, forKey: .artifact)
         artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
+        workflowPolicy = try container.decodeIfPresent(WorkflowNodePolicy.self, forKey: .workflowPolicy)
         // Legacy two-mode: prefer the flat `artifactDataSource` string; else
         // pull `mode` out of the nested `artifactConfig.dataSource` wire shape
         // the board-app still sends on updateNode (decode-compat, one release).
@@ -1907,6 +1967,7 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(artifact, forKey: .artifact)
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
         try container.encodeIfPresent(artifactSource, forKey: .artifactSource)
+        try container.encodeIfPresent(workflowPolicy, forKey: .workflowPolicy)
 
         // MARK: 5-atom governance payloads. `source` / `layout` / `patch` are
         // shared keys — encode the governance variant only when the node-lane
@@ -2407,11 +2468,33 @@ struct NodeContractOutput: Codable, Equatable {
     var cardinality: NodeContractCardinality
     var payloadKind: NodeContractPayloadKind
     var externalWriteTarget: NodeContractExternalWriteTarget?
+    var externalWriteMode: WorkflowExternalWriteMode?
+    var fieldPolicies: [String: String]?
+    var integrationPolicies: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case cardinality
         case payloadKind = "payload_kind"
         case externalWriteTarget = "external_write_target"
+        case externalWriteMode = "external_write_mode"
+        case fieldPolicies = "field_policies"
+        case integrationPolicies = "integration_policies"
+    }
+
+    init(
+        cardinality: NodeContractCardinality,
+        payloadKind: NodeContractPayloadKind,
+        externalWriteTarget: NodeContractExternalWriteTarget?,
+        externalWriteMode: WorkflowExternalWriteMode? = nil,
+        fieldPolicies: [String: String]? = nil,
+        integrationPolicies: [String: String]? = nil
+    ) {
+        self.cardinality = cardinality
+        self.payloadKind = payloadKind
+        self.externalWriteTarget = externalWriteTarget
+        self.externalWriteMode = externalWriteMode
+        self.fieldPolicies = fieldPolicies
+        self.integrationPolicies = integrationPolicies
     }
 }
 
@@ -2728,7 +2811,16 @@ extension NodeContractV2 {
         let output = NodeContractOutput(
             cardinality: cardinality,
             payloadKind: .artifactRef,
-            externalWriteTarget: externalWriteTarget
+            externalWriteTarget: (node.workflowPolicy == nil
+                || node.workflowPolicy?.externalWriteMode == .directWrite)
+                ? externalWriteTarget : nil,
+            externalWriteMode: node.workflowPolicy?.externalWriteMode,
+            fieldPolicies: node.workflowPolicy.map { policy in
+                policy.trackers.reduce(into: [String: String]()) { result, tracker in
+                    tracker.fieldPolicies.forEach { result[$0.key] = $0.value }
+                }
+            },
+            integrationPolicies: node.workflowPolicy?.integrationPolicies
         )
 
         let v2 = NodeContractV2(
@@ -3707,6 +3799,9 @@ final class PlannerCoreService {
                 // Node-widget (P2 / 2026-05-28) — view config update.
                 if let widget = change.widget {
                     updatedNodes[index].widget = widget
+                }
+                if let workflowPolicy = change.workflowPolicy {
+                    updatedNodes[index].workflowPolicy = workflowPolicy
                 }
                 // Artifact-node data-source mode (2026-05-28). Direct field
                 // takes precedence; nested artifact-draft.dataSource is the
@@ -6949,7 +7044,8 @@ final class PlannerStore {
                           schedule.intervalSeconds >= 60,
                           (node.nodeKind ?? .step) == .step else { continue }
                     let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let nextRunAt = schedule.nextRunAt
+                    let nextRunAt = schedule.retryAt
+                        ?? schedule.nextRunAt
                         ?? schedule.lastSentAt.map { schedule.nextOccurrence(after: $0) }
                         ?? now
                     guard nextRunAt <= now else { continue }
@@ -6984,9 +7080,16 @@ final class PlannerStore {
             }
             schedule.intervalSeconds = max(60, schedule.intervalSeconds)
             schedule.lastSentAt = sentAt
+            schedule.lastAttemptAt = sentAt
+            schedule.lastError = nil
+            schedule.consecutiveFailures = 0
+            schedule.retryAt = nil
             schedule.nextRunAt = schedule.nextOccurrence(after: sentAt)
             record.nodes[nodeIndex].schedule = schedule
-            record.nodes[nodeIndex].workflowRunState = .readyToStart
+            // The message has been delivered to a verified live session. Keep
+            // the node visibly running until the session bridge or an explicit
+            // submit_node_output moves it forward.
+            record.nodes[nodeIndex].workflowRunState = .running
             record.nodes[nodeIndex].status = .ready
             record.nodes[nodeIndex].blockedReason = nil
             record.events.append(event(
@@ -6996,11 +7099,45 @@ final class PlannerStore {
                 summary: "Scheduled tick queued for \(record.nodes[nodeIndex].title)"
             ))
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
-                state.runState = .readyToStart
+                state.runState = .running
                 state.startedAt = sentAt
                 state.finishedAt = nil
             }
             recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    func markScheduledTickFailed(
+        canvasId: String,
+        nodeId: String,
+        error: String,
+        attemptedAt: Date = Date()
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }),
+                  var schedule = record.nodes[nodeIndex].schedule,
+                  schedule.enabled else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let failures = min(10, (schedule.consecutiveFailures ?? 0) + 1)
+            let retrySeconds = min(15 * Int(pow(2.0, Double(failures - 1))), 15 * 60)
+            schedule.lastAttemptAt = attemptedAt
+            schedule.lastError = String(error.prefix(1_000))
+            schedule.consecutiveFailures = failures
+            schedule.retryAt = attemptedAt.addingTimeInterval(TimeInterval(retrySeconds))
+            record.nodes[nodeIndex].schedule = schedule
+            record.nodes[nodeIndex].workflowRunState = .failed
+            record.nodes[nodeIndex].blockedReason = schedule.lastError
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Scheduled tick failed; retry in \(retrySeconds)s"
+            ))
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -7054,6 +7191,33 @@ final class PlannerStore {
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
+        }
+    }
+
+    /// Provisioning transaction support. Workflow creation spans the layout
+    /// and planner stores, so callers need an exact compensating operation if
+    /// a later durable write fails.
+    func removeCanvasRecord(canvasId: String) throws {
+        try withLock {
+            document.canvases.removeValue(forKey: canvasId)
+            eventLogSignatures.removeValue(forKey: canvasId)
+            let directory = canvasDirectory(canvasId: canvasId)
+            if fileManager.fileExists(atPath: directory.path) {
+                try fileManager.removeItem(at: directory)
+            }
+            try saveIndex()
+            SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+        }
+    }
+
+    func snapshotRecord(canvasId: String) -> CanvasRecord? {
+        withLock { document.canvases[canvasId] }
+    }
+
+    func restoreCanvasRecord(_ record: CanvasRecord) throws {
+        try withLock {
+            document.canvases[record.canvas.id] = record
+            try save(canvasId: record.canvas.id)
         }
     }
 
@@ -7221,6 +7385,30 @@ final class PlannerStore {
             }
 
             var current = record.nodes[sourceIndex]
+            if let policy = current.workflowPolicy,
+               policy.externalWriteMode != .directWrite {
+                let protectedRefs = Set(policy.trackers.filter(\.canWrite).map(\.reference))
+                if let writtenRef = output.artifacts
+                    .map({ $0.reference.trimmingCharacters(in: .whitespacesAndNewlines) })
+                    .first(where: { protectedRefs.contains($0) }) {
+                    throw PlannerCoreError.invalidNodeOutput(
+                        "External write to \(writtenRef) is not authorized by this node contract (mode: \(policy.externalWriteMode.rawValue)). Submit a workflow-draft artifact for human review instead."
+                    )
+                }
+                let humanOnlyFields = Set(policy.trackers.flatMap { tracker in
+                    tracker.fieldPolicies.compactMap { $0.value == "human_only" ? $0.key : nil }
+                })
+                for artifact in output.artifacts {
+                    let submittedFields = Set(
+                        artifact.payload?.objectValue?["fields"]?.objectValue.map { Array($0.keys) } ?? []
+                    )
+                    if let forbidden = submittedFields.intersection(humanOnlyFields).sorted().first {
+                        throw PlannerCoreError.invalidNodeOutput(
+                            "Field '\(forbidden)' is human_only and cannot be submitted by an agent."
+                        )
+                    }
+                }
+            }
             switch output.status {
             case .done:
                 current.blockedReason = nil

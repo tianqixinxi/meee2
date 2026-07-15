@@ -2660,8 +2660,8 @@ enum BoardAPI {
         }
         if let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !sessionId.isEmpty {
-            if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
-               !isReusableInternalSurface(surface) {
+            if TerminalSessionBackendRegistry.shared.snapshot(id: sessionId)
+                .map({ !isReusableInternalSurface($0) }) ?? true {
                 let revival = try reviveNodeSessionSurface(
                     canvasId: canvasId,
                     node: node,
@@ -5627,6 +5627,18 @@ enum BoardAPI {
                 lines.append("- \(output)")
             }
         }
+        if let policy = node.workflowPolicy {
+            lines.append("")
+            lines.append("Enforced integration policy:")
+            lines.append("- external_write_mode: \(policy.externalWriteMode.rawValue)")
+            for (connector, mode) in policy.integrationPolicies.sorted(by: { $0.key < $1.key }) {
+                lines.append("- \(connector): \(mode)")
+            }
+            lines.append("- read_only forbids mutations; draft_only forbids send/apply actions; human_only fields must not appear in agent output.")
+            if policy.externalWriteMode != .directWrite {
+                lines.append("- Submit only workflow-draft:// artifacts for owner review; never write the protected external tracker directly.")
+            }
+        }
         let inputBindings = node.contextSources.filter { source in
             node.schema.inputs.contains { $0.caseInsensitiveCompare(source.title) == .orderedSame }
         }
@@ -6410,8 +6422,8 @@ enum BoardAPI {
         let expectedVersion: Int?
     }
 
-    private struct WorkflowApprovalRequest: Decodable {
-        let explicitlyApproved: Bool?
+    private struct WorkflowApprovalResolveRequest: Decodable {
+        let approved: Bool
     }
 
     static func createWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
@@ -6439,10 +6451,14 @@ enum BoardAPI {
         guard let id = req.params[":id"], !id.isEmpty else {
             return errorResponse("bad_request", "missing workflow proposal id", status: 400)
         }
-        guard let proposal = WorkflowProposalStore.shared.get(id: id) else {
-            return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+        do {
+            guard let proposal = try WorkflowProposalStore.shared.get(id: id) else {
+                return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+            }
+            return jsonResponse(WorkflowProposalEnvelope(proposal: proposal))
+        } catch {
+            return mapWorkflowProvisioningError(error)
         }
-        return jsonResponse(WorkflowProposalEnvelope(proposal: proposal))
     }
 
     static func reviseWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
@@ -6472,15 +6488,100 @@ enum BoardAPI {
         guard let id = req.params[":id"], !id.isEmpty else {
             return errorResponse("bad_request", "missing workflow proposal id", status: 400)
         }
-        guard let proposal = WorkflowProposalStore.shared.get(id: id) else {
-            return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
-        }
-        let body = decodeJSONBody(req, as: WorkflowApprovalRequest.self)
         do {
-            return jsonResponse(try WorkflowProvisioner.apply(
+            guard let proposal = try WorkflowProposalStore.shared.get(id: id) else {
+                return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+            }
+            let actorId = PlannerPermission.currentActorId() ?? "local-owner"
+            let approval = try WorkflowApprovalStore.shared.request(
+                action: .apply,
                 proposal: proposal,
-                explicitlyApproved: body?.explicitlyApproved == true
+                canvasId: proposal.targetCanvasId,
+                actorId: actorId
+            )
+            return jsonResponse(WorkflowApprovalEnvelope(approval: approval), status: 202, reason: "Accepted")
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func listWorkflowApprovals(_ req: HttpRequest) -> HttpResponse {
+        do {
+            return jsonResponse(WorkflowApprovalListEnvelope(
+                approvals: try WorkflowApprovalStore.shared.list(
+                    includeResolved: false,
+                    actorId: PlannerPermission.currentActorId() ?? "local-owner"
+                )
             ))
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func resolveWorkflowApproval(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow approval id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: WorkflowApprovalResolveRequest.self) else {
+            return errorResponse("invalid_json", "body must include approved", status: 400)
+        }
+        let humanApproval = req.headers.first {
+            $0.key.caseInsensitiveCompare(BoardServer.humanApprovalHeader) == .orderedSame
+        }?.value
+        guard humanApproval == "board-ui" else {
+            return errorResponse(
+                "human_approval_required",
+                "workflow approvals must be resolved from the meee2 Board UI",
+                status: 403
+            )
+        }
+        let actorId = PlannerPermission.currentActorId() ?? "local-owner"
+        do {
+            let pending = try WorkflowApprovalStore.shared.beginResolution(
+                id: id, approved: body.approved, actorId: actorId
+            )
+            guard body.approved else {
+                return jsonResponse(WorkflowApprovalResolutionEnvelope(
+                    approval: pending, applyResult: nil, workflowStatus: nil
+                ))
+            }
+            do {
+                let applyResult: WorkflowApplyEnvelope?
+                let workflowStatus: WorkflowStatusEnvelope?
+                switch pending.action {
+                case .apply:
+                    guard let proposalId = pending.proposalId,
+                          let proposal = try WorkflowProposalStore.shared.get(id: proposalId),
+                          proposal.version == pending.proposalVersion else {
+                        throw WorkflowProvisioningError.approvalInvalid(
+                            "workflow proposal changed after approval was requested"
+                        )
+                    }
+                    applyResult = try WorkflowProvisioner.applyApproved(
+                        proposal: proposal, actorId: actorId
+                    )
+                    workflowStatus = nil
+                case .enable, .pause:
+                    guard let canvasId = pending.canvasId else {
+                        throw WorkflowProvisioningError.approvalInvalid("workflow approval has no canvas")
+                    }
+                    applyResult = nil
+                    workflowStatus = try WorkflowProvisioner.setEnabledApproved(
+                        canvasId: canvasId,
+                        enabled: pending.action == .enable,
+                        actorId: actorId
+                    )
+                }
+                let finished = try WorkflowApprovalStore.shared.finish(id: id)
+                return jsonResponse(WorkflowApprovalResolutionEnvelope(
+                    approval: finished,
+                    applyResult: applyResult,
+                    workflowStatus: workflowStatus
+                ))
+            } catch {
+                _ = try? WorkflowApprovalStore.shared.finish(id: id, error: error)
+                throw error
+            }
         } catch {
             return mapWorkflowProvisioningError(error)
         }
@@ -6511,13 +6612,26 @@ enum BoardAPI {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
-        let body = decodeJSONBody(req, as: WorkflowApprovalRequest.self)
         do {
-            return jsonResponse(try WorkflowProvisioner.setEnabled(
+            let actorId = PlannerPermission.currentActorId() ?? "local-owner"
+            let plannerActorId = PlannerPermission.currentActorId()
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: plannerActorId
+            )
+            guard state.access.role == .owner else {
+                throw PlannerCoreError.permissionDenied(
+                    action: enabled ? "request workflow enable" : "request workflow pause",
+                    role: state.access.role
+                )
+            }
+            let approval = try WorkflowApprovalStore.shared.request(
+                action: enabled ? .enable : .pause,
                 canvasId: canvasId,
-                enabled: enabled,
-                explicitlyApproved: body?.explicitlyApproved == true
-            ))
+                actorId: actorId
+            )
+            return jsonResponse(WorkflowApprovalEnvelope(approval: approval), status: 202, reason: "Accepted")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -6549,6 +6663,10 @@ enum BoardAPI {
                 return errorResponse("proposal_immutable", error.localizedDescription, status: 409)
             case .approvalRequired:
                 return errorResponse("approval_required", error.localizedDescription, status: 409)
+            case .approvalInvalid:
+                return errorResponse("approval_invalid", error.localizedDescription, status: 409)
+            case .storeCorrupted:
+                return errorResponse("workflow_store_corrupted", error.localizedDescription, status: 500)
             }
         }
         return errorResponse("workflow_provisioning_error", error.localizedDescription, status: 500)

@@ -5392,9 +5392,9 @@ final class PlannerCoreTests: XCTestCase {
         )
         let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
         let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
-        // markScheduledTickSent queues a tick but does not dispatch — the
-        // separate dispatch path is what flips to .dispatched/.working.
-        XCTAssertEqual(node.workflowRunState, .readyToStart)
+        // The scheduler has already dispatched the tick to a live session, so
+        // the run must stay active until output or failure is recorded.
+        XCTAssertEqual(node.workflowRunState, .running)
         XCTAssertEqual(node.status, .ready)
         XCTAssertEqual(node.schedule?.lastSentAt, now)
         XCTAssertEqual(node.schedule?.nextRunAt, now.addingTimeInterval(60))

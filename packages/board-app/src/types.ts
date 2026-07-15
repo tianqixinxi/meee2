@@ -803,6 +803,22 @@ export interface ContextSource {
   reference: string
 }
 
+export type WorkflowApprovalAction = 'apply' | 'enable' | 'pause'
+export type WorkflowApprovalStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'failed'
+
+export interface WorkflowApprovalRecord {
+  id: string
+  action: WorkflowApprovalAction
+  proposalId?: string | null
+  proposalVersion?: number | null
+  canvasId?: string | null
+  actorId: string
+  status: WorkflowApprovalStatus
+  error?: string | null
+  createdAt: string
+  resolvedAt?: string | null
+}
+
 export type ExecutionMode = 'auto' | 'human'
 export type ExecutorType =
   | 'claude'
@@ -858,6 +874,10 @@ export interface PlannerNodeSchedule {
   hour?: number | null
   minute?: number | null
   dayOfMonth?: number | null
+  lastAttemptAt?: string | number | null
+  lastError?: string | null
+  consecutiveFailures?: number | null
+  retryAt?: string | number | null
 }
 
 export interface PlannerNodeGate {
@@ -1240,6 +1260,9 @@ export interface NodeContractOutput {
   cardinality: NodeContractCardinality
   payload_kind: NodeContractPayloadKind
   external_write_target?: NodeContractExternalWriteTarget | null
+  external_write_mode?: 'direct_write' | 'draft_only' | 'prohibited' | null
+  field_policies?: Record<string, 'human_only' | 'ai_suggest' | 'ai_write'> | null
+  integration_policies?: Record<string, 'read_only' | 'draft_only' | 'write'> | null
 }
 
 export interface NodeContractV2 {
@@ -1447,6 +1470,18 @@ export interface PlanningNode {
   subCanvasId?: string | null
   nodeKind?: PlanningNodeKind | null
   layout?: PlannerNodeLayout | null
+  workflowPolicy?: {
+    trackers: Array<{
+      id: string
+      connector: string
+      reference: string
+      tabColumns: Record<string, string[]>
+      fieldPolicies: Record<string, string>
+      canRead: boolean
+      canWrite: boolean
+    }>
+    integrationPolicies: Record<string, string>
+  } | null
   trigger?: PlannerNodeTrigger | null
   schedule?: PlannerNodeSchedule | null
   gate?: PlannerNodeGate | null

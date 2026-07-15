@@ -20,6 +20,7 @@ import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
 import { GuideOverlay } from './components/GuideOverlay'
 import { UpdateBanner } from './components/UpdateBanner'
+import { WorkflowApprovalBanner } from './components/WorkflowApprovalBanner'
 import { Notice } from './components/feedback/Notice'
 import { ToastViewport, type ToastMessage } from './components/feedback/ToastViewport'
 import { useI18n } from './lib/i18n'
@@ -1500,6 +1501,7 @@ export default function App() {
           onOpenSession={handlePaletteOpenSession}
         />
         <GuideOverlay />
+        <WorkflowApprovalBanner />
         <UpdateBanner />
         <ToastViewport toasts={toasts} />
       </div>

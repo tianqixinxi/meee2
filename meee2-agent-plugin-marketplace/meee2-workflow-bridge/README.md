@@ -15,9 +15,11 @@ bin/intercept-workflow.mjs
         │      workflow({scriptPath: payload.mjs}, args) 把 args 以真实
         │      JSON 值注入，不依赖 relay 在工具调用里传 args——实测那条
         │      路径会把 args 降级成字符串）
-        │  2. POST {meee2}/api/sessions/spawn 在原 cwd 拉起 relay 会话
+        │  2. POST {meee2}/api/workflow-bridge/runs 注册可恢复的 Canvas run，
+        │     由 meee2 在原 cwd 拉起 relay 会话；旧版 meee2 自动降级为
+        │     /api/sessions/spawn
         │     （MEEE2_WORKFLOW_RELAY=1 claude --dangerously-skip-permissions '<bootstrap>'）
-        │  3. deny 本地执行，把 relay 会话 id / runDir 回告调用方模型
+        │  3. deny 本地执行，把 Canvas / relay 会话 / runDir 回告调用方模型
         ▼
 meee2 relay 会话（meee2 board 可见）
         │  按 runs/<runId>/instructions.md 执行：
@@ -27,6 +29,8 @@ meee2 relay 会话（meee2 board 可见）
         ▼
 来源会话收到完成通知，读 result.md 继续工作
 ```
+
+同一 `runId` 的注册是幂等的；meee2 重启后会从 `handle.json` 恢复，避免创建重复 Canvas 或 relay 会话。只有明确进入 `done`/`failed` 的 7 天旧 run 才会被清理。
 
 ## 防循环
 

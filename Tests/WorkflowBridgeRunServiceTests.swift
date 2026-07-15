@@ -207,4 +207,53 @@ final class WorkflowBridgeRunServiceTests: XCTestCase {
         )
         XCTAssertEqual(found, wfRoot.appendingPathComponent("wf_only").path)
     }
+
+    func testDiscoverWorkflowDirRejectsSingleCandidateWithDifferentScript() throws {
+        let transcriptDir = tempDir.appendingPathComponent("session-single-mismatch")
+        let wfRoot = transcriptDir.appendingPathComponent("subagents/workflows")
+        let metaRoot = transcriptDir.appendingPathComponent("workflows")
+        try FileManager.default.createDirectory(
+            at: wfRoot.appendingPathComponent("wf_other"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: metaRoot, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["script": "return 'other'"])
+            .write(to: metaRoot.appendingPathComponent("wf_other.json"))
+        let runDir = tempDir.appendingPathComponent("runs/single-mismatch")
+        try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try "return 'mine'".write(
+            to: runDir.appendingPathComponent("workflow.mjs"), atomically: true, encoding: .utf8)
+
+        XCTAssertNil(WorkflowBridgeRunService.shared.discoverWorkflowDir(
+            transcriptDir: transcriptDir.path, runDir: runDir.path
+        ))
+    }
+
+    func testDiscoverWorkflowDirDoesNotGuessBetweenAmbiguousCandidates() throws {
+        let transcriptDir = tempDir.appendingPathComponent("session-ambiguous")
+        let wfRoot = transcriptDir.appendingPathComponent("subagents/workflows")
+        try FileManager.default.createDirectory(
+            at: wfRoot.appendingPathComponent("wf_first"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: wfRoot.appendingPathComponent("wf_second"), withIntermediateDirectories: true)
+
+        let found = WorkflowBridgeRunService.shared.discoverWorkflowDir(
+            transcriptDir: transcriptDir.path,
+            runDir: tempDir.appendingPathComponent("missing-run").path
+        )
+        XCTAssertNil(found)
+    }
+
+    func testJournalTruncationResetsOffsetAndConsumesReplacement() throws {
+        let runId = "run-rotated"
+        let (canvasId, execNodeId) = try seedCanvas(runId: runId)
+        let wfDir = tempDir.appendingPathComponent("wf_rotated")
+        try FileManager.default.createDirectory(at: wfDir, withIntermediateDirectories: true)
+        var handle = makeHandle(runId: runId, canvasId: canvasId, execNodeId: execNodeId, wfDir: wfDir.path)
+        handle.journalOffset = 5_000
+        try appendJournal(wfDir, [#"{"type":"started","key":"v2:k1","agentId":"rotated"}"#])
+
+        WorkflowBridgeRunService.shared.tailJournal(&handle)
+
+        XCTAssertEqual(handle.agents["rotated"]?.state, "running")
+        XCTAssertLessThan(handle.journalOffset, 5_000)
+    }
 }

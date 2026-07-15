@@ -79,6 +79,47 @@ struct WorkflowProposalEnvelope: Encodable {
     let proposal: WorkflowProposal
 }
 
+enum WorkflowApprovalAction: String, Codable, Equatable {
+    case apply
+    case enable
+    case pause
+}
+
+enum WorkflowApprovalStatus: String, Codable, Equatable {
+    case pending
+    case processing
+    case approved
+    case rejected
+    case failed
+}
+
+struct WorkflowApprovalRecord: Codable, Equatable {
+    var id: String
+    var action: WorkflowApprovalAction
+    var proposalId: String?
+    var proposalVersion: Int?
+    var canvasId: String?
+    var actorId: String
+    var status: WorkflowApprovalStatus
+    var error: String?
+    var createdAt: Date
+    var resolvedAt: Date?
+}
+
+struct WorkflowApprovalEnvelope: Encodable {
+    let approval: WorkflowApprovalRecord
+}
+
+struct WorkflowApprovalListEnvelope: Encodable {
+    let approvals: [WorkflowApprovalRecord]
+}
+
+struct WorkflowApprovalResolutionEnvelope: Encodable {
+    let approval: WorkflowApprovalRecord
+    let applyResult: WorkflowApplyEnvelope?
+    let workflowStatus: WorkflowStatusEnvelope?
+}
+
 struct WorkflowApplyEnvelope: Encodable {
     let proposal: WorkflowProposal
     let canvasId: String
@@ -89,8 +130,11 @@ struct WorkflowStatusEnvelope: Encodable {
     let canvasId: String
     let title: String
     let enabled: Bool
+    let scheduleState: String
     let nodeCounts: [String: Int]
     let scheduledNodeCount: Int
+    let scheduleFailureCount: Int
+    let scheduleErrors: [String: String]
     let nextRunAt: Date?
     let pendingApprovalCount: Int
     let missingIntegrations: [String]
@@ -104,6 +148,8 @@ struct WorkflowDryRunEnvelope: Encodable, Equatable {
     let topologicalNodeIds: [String]
     let scheduledNodeCount: Int
     let allSchedulesDisabled: Bool
+    let ready: Bool
+    let errors: [String]
     let warnings: [String]
 }
 
@@ -112,6 +158,8 @@ enum WorkflowProvisioningError: LocalizedError, Equatable {
     case validation(String)
     case immutableProposal
     case approvalRequired
+    case approvalInvalid(String)
+    case storeCorrupted(String)
 
     var errorDescription: String? {
         switch self {
@@ -122,7 +170,11 @@ enum WorkflowProvisioningError: LocalizedError, Equatable {
         case .immutableProposal:
             return "applied workflow proposals are immutable; create a workflow change proposal"
         case .approvalRequired:
-            return "explicit user approval is required before applying or enabling a workflow"
+            return "human approval in meee2 is required before applying or enabling a workflow"
+        case .approvalInvalid(let message):
+            return message
+        case .storeCorrupted(let message):
+            return "workflow proposal store is unreadable: \(message)"
         }
     }
 }
@@ -155,7 +207,7 @@ final class WorkflowProposalStore {
     ) throws -> WorkflowProposal {
         lock.lock()
         defer { lock.unlock() }
-        var file = loadUnlocked()
+        var file = try loadUnlocked()
         let requirement = clean(rawRequirement)
         let idempotencyKey = rawIdempotencyKey.flatMap(cleanOptional)
         if let idempotencyKey,
@@ -167,9 +219,16 @@ final class WorkflowProposalStore {
             throw WorkflowProvisioningError.validation("requirement is required")
         }
         if let targetCanvasId {
-            guard BoardLayoutStore.shared.snapshot().canvases.contains(where: { $0.id == targetCanvasId }) else {
+            let snapshot = BoardLayoutStore.shared.snapshot()
+            guard snapshot.canvases.contains(where: { $0.id == targetCanvasId }) else {
                 throw WorkflowProvisioningError.validation("target canvas not found: \(targetCanvasId)")
             }
+            let graph = try PlannerBoardBridge.graphState(
+                for: targetCanvasId,
+                snapshot: snapshot,
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            try PlannerPermission.require(.createProposal, access: graph.access)
         }
         let now = Date()
         let proposal = WorkflowProposal(
@@ -189,16 +248,16 @@ final class WorkflowProposalStore {
         return proposal
     }
 
-    func get(id: String) -> WorkflowProposal? {
+    func get(id: String) throws -> WorkflowProposal? {
         lock.lock()
         defer { lock.unlock() }
-        return loadUnlocked().proposals.first { $0.id == id }
+        return try loadUnlocked().proposals.first { $0.id == id }
     }
 
-    func proposal(appliedTo canvasId: String) -> WorkflowProposal? {
+    func proposal(appliedTo canvasId: String) throws -> WorkflowProposal? {
         lock.lock()
         defer { lock.unlock() }
-        return loadUnlocked().proposals
+        return try loadUnlocked().proposals
             .filter { $0.appliedCanvasId == canvasId }
             .sorted { $0.updatedAt > $1.updatedAt }
             .first
@@ -207,7 +266,7 @@ final class WorkflowProposalStore {
     func revise(id: String, requirement: String?, blueprint: WorkflowBlueprint?, expectedVersion: Int?) throws -> WorkflowProposal {
         lock.lock()
         defer { lock.unlock() }
-        var file = loadUnlocked()
+        var file = try loadUnlocked()
         guard let index = file.proposals.firstIndex(where: { $0.id == id }) else {
             throw WorkflowProvisioningError.notFound
         }
@@ -236,7 +295,7 @@ final class WorkflowProposalStore {
     func markApplied(id: String, canvasId: String) throws -> WorkflowProposal {
         lock.lock()
         defer { lock.unlock() }
-        var file = loadUnlocked()
+        var file = try loadUnlocked()
         guard let index = file.proposals.firstIndex(where: { $0.id == id }) else {
             throw WorkflowProvisioningError.notFound
         }
@@ -447,16 +506,25 @@ final class WorkflowProposalStore {
         for step in steps { try visit(step.id) }
     }
 
-    private func loadUnlocked() -> StoreFile {
-        guard let data = try? Data(contentsOf: fileURL),
-              let file = try? decoder.decode(StoreFile.self, from: data) else {
+    private func loadUnlocked() throws -> StoreFile {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return StoreFile(proposals: [])
         }
-        return file
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return try decoder.decode(StoreFile.self, from: data)
+        } catch {
+            throw WorkflowProvisioningError.storeCorrupted(error.localizedDescription)
+        }
     }
 
     private func saveUnlocked(_ file: StoreFile) throws {
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let previous = try Data(contentsOf: fileURL)
+            _ = try decoder.decode(StoreFile.self, from: previous)
+            try previous.write(to: fileURL.appendingPathExtension("backup"), options: .atomic)
+        }
         try encoder.encode(file).write(to: fileURL, options: .atomic)
     }
 
@@ -475,14 +543,136 @@ final class WorkflowProposalStore {
     }
 }
 
+/// Human approval ledger. Agents may request an action, but only the Board's
+/// resolve endpoint can move it through processing and invoke the mutation.
+/// Records are durable so a restart never turns an unapproved request into an
+/// implicit approval or loses the audit trail.
+final class WorkflowApprovalStore {
+    static let shared = WorkflowApprovalStore(
+        fileURL: StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("workflow-approvals.json", isDirectory: false)
+    )
+
+    private struct StoreFile: Codable { var approvals: [WorkflowApprovalRecord] }
+
+    private let lock = NSLock()
+    private let fileURL: URL
+    private let encoder: JSONEncoder
+    private let decoder = JSONDecoder()
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+        encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    }
+
+    func request(
+        action: WorkflowApprovalAction,
+        proposal: WorkflowProposal? = nil,
+        canvasId: String? = nil,
+        actorId: String
+    ) throws -> WorkflowApprovalRecord {
+        lock.lock()
+        defer { lock.unlock() }
+        var file = try loadUnlocked()
+        if let existing = file.approvals.last(where: {
+            $0.action == action
+                && $0.proposalId == proposal?.id
+                && $0.proposalVersion == proposal?.version
+                && $0.canvasId == canvasId
+                && $0.actorId == actorId
+                && ($0.status == .pending || $0.status == .processing)
+        }) {
+            return existing
+        }
+        let record = WorkflowApprovalRecord(
+            id: UUID().uuidString.lowercased(),
+            action: action,
+            proposalId: proposal?.id,
+            proposalVersion: proposal?.version,
+            canvasId: canvasId,
+            actorId: actorId,
+            status: .pending,
+            error: nil,
+            createdAt: Date(),
+            resolvedAt: nil
+        )
+        file.approvals.append(record)
+        try saveUnlocked(file)
+        return record
+    }
+
+    func list(includeResolved: Bool = false, actorId: String? = nil) throws -> [WorkflowApprovalRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return try loadUnlocked().approvals
+            .filter { actorId == nil || $0.actorId == actorId }
+            .filter { includeResolved || $0.status == .pending || $0.status == .processing }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func beginResolution(id: String, approved: Bool, actorId: String) throws -> WorkflowApprovalRecord {
+        lock.lock()
+        defer { lock.unlock() }
+        var file = try loadUnlocked()
+        guard let index = file.approvals.firstIndex(where: { $0.id == id }) else {
+            throw WorkflowProvisioningError.approvalInvalid("workflow approval request not found")
+        }
+        guard file.approvals[index].status == .pending else {
+            throw WorkflowProvisioningError.approvalInvalid("workflow approval request is no longer pending")
+        }
+        guard file.approvals[index].actorId == actorId else {
+            throw WorkflowProvisioningError.approvalInvalid("workflow approval actor changed; request a new approval")
+        }
+        file.approvals[index].status = approved ? .processing : .rejected
+        file.approvals[index].resolvedAt = approved ? nil : Date()
+        try saveUnlocked(file)
+        return file.approvals[index]
+    }
+
+    func finish(id: String, error: Error? = nil) throws -> WorkflowApprovalRecord {
+        lock.lock()
+        defer { lock.unlock() }
+        var file = try loadUnlocked()
+        guard let index = file.approvals.firstIndex(where: { $0.id == id }) else {
+            throw WorkflowProvisioningError.approvalInvalid("workflow approval request not found")
+        }
+        file.approvals[index].status = error == nil ? .approved : .failed
+        file.approvals[index].error = error?.localizedDescription
+        file.approvals[index].resolvedAt = Date()
+        try saveUnlocked(file)
+        return file.approvals[index]
+    }
+
+    private func loadUnlocked() throws -> StoreFile {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return StoreFile(approvals: [])
+        }
+        do {
+            return try decoder.decode(StoreFile.self, from: Data(contentsOf: fileURL))
+        } catch {
+            throw WorkflowProvisioningError.storeCorrupted(error.localizedDescription)
+        }
+    }
+
+    private func saveUnlocked(_ file: StoreFile) throws {
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let previous = try Data(contentsOf: fileURL)
+            _ = try decoder.decode(StoreFile.self, from: previous)
+            try previous.write(to: fileURL.appendingPathExtension("backup"), options: .atomic)
+        }
+        try encoder.encode(file).write(to: fileURL, options: .atomic)
+    }
+}
+
 enum WorkflowProvisioner {
-    static func apply(proposal: WorkflowProposal, explicitlyApproved: Bool) throws -> WorkflowApplyEnvelope {
-        guard explicitlyApproved else { throw WorkflowProvisioningError.approvalRequired }
+    static func applyApproved(proposal: WorkflowProposal, actorId: String) throws -> WorkflowApplyEnvelope {
         if proposal.status == .applied, let canvasId = proposal.appliedCanvasId {
             return WorkflowApplyEnvelope(proposal: proposal, canvasId: canvasId, created: false)
         }
         if let targetCanvasId = proposal.targetCanvasId {
-            return try applyChange(proposal: proposal, canvasId: targetCanvasId)
+            return try applyChange(proposal: proposal, canvasId: targetCanvasId, actorId: actorId)
         }
         let scope = BoardLayoutStore.CanvasScope(rawValue: proposal.blueprint.scope) ?? .personal
         let snapshot = try BoardLayoutStore.shared.createCanvas(name: proposal.blueprint.name, scope: scope, kind: .board)
@@ -506,6 +696,7 @@ enum WorkflowProvisioner {
             BoardServer.shared.broadcastStateChanged()
             return WorkflowApplyEnvelope(proposal: applied, canvasId: canvasId, created: true)
         } catch {
+            try? PlannerBoardBridge.store.removeCanvasRecord(canvasId: canvasId)
             _ = try? BoardLayoutStore.shared.deleteCanvas(id: canvasId)
             throw error
         }
@@ -534,11 +725,38 @@ enum WorkflowProvisioner {
         }
         let schedules = graph.nodes.compactMap(\.schedule)
         var warnings: [String] = []
+        var errors: [String] = []
         if graph.nodes.contains(where: { $0.status == .blocked }) {
             warnings.append("One or more steps are currently blocked.")
         }
         if schedules.contains(where: { $0.enabled }) {
             warnings.append("One or more recurring jobs are already enabled.")
+        }
+        let connected = connectedIntegrationIds(required: try WorkflowProposalStore.shared
+            .proposal(appliedTo: canvasId)?.blueprint.integrations ?? [])
+        if let proposal = try WorkflowProposalStore.shared.proposal(appliedTo: canvasId) {
+            let missing = proposal.blueprint.integrations.filter { !connected.contains($0) }.sorted()
+            if !missing.isEmpty {
+                errors.append("Missing required integrations: \(missing.joined(separator: ", ")).")
+            }
+            for tracker in proposal.blueprint.trackers {
+                if tracker.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    errors.append("Tracker \(tracker.id) has no external reference.")
+                }
+                if !connected.contains(tracker.connector) {
+                    errors.append("Tracker \(tracker.id) connector \(tracker.connector) is not connected.")
+                }
+            }
+        } else {
+            warnings.append("No applied workflow proposal is linked to this canvas.")
+        }
+        for node in graph.nodes where node.schedule != nil {
+            if node.executorType != .claude && node.executorType != .codex {
+                errors.append("Scheduled node \(node.id) must use Claude or Codex.")
+            }
+            if node.schema.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                errors.append("Scheduled node \(node.id) has no execution goal.")
+            }
         }
         return WorkflowDryRunEnvelope(
             canvasId: canvasId,
@@ -547,29 +765,51 @@ enum WorkflowProvisioner {
             topologicalNodeIds: ordered,
             scheduledNodeCount: schedules.count,
             allSchedulesDisabled: schedules.allSatisfy { !$0.enabled },
+            ready: errors.isEmpty,
+            errors: errors,
             warnings: warnings
         )
     }
 
-    static func setEnabled(canvasId: String, enabled: Bool, explicitlyApproved: Bool) throws -> WorkflowStatusEnvelope {
-        guard explicitlyApproved else { throw WorkflowProvisioningError.approvalRequired }
+    static func setEnabledApproved(canvasId: String, enabled: Bool, actorId: String) throws -> WorkflowStatusEnvelope {
+        let plannerActorId: String? = actorId == "local-owner" ? nil : actorId
         let snapshot = BoardLayoutStore.shared.snapshot()
         let state = try PlannerBoardBridge.graphState(
             for: canvasId,
             snapshot: snapshot,
-            actorUserId: PlannerPermission.currentActorId()
+            actorUserId: plannerActorId
         )
-        for node in state.nodes {
-            guard var schedule = node.schedule else { continue }
-            schedule.enabled = enabled
-            schedule.nextRunAt = enabled ? schedule.nextOccurrence(after: Date()) : nil
-            _ = try PlannerBoardBridge.updateNodeSchedule(
-                nodeId: node.id,
-                schedule: schedule,
-                for: canvasId,
-                snapshot: snapshot,
-                actorUserId: PlannerPermission.currentActorId()
-            )
+        guard state.access.role == .owner else {
+            throw PlannerCoreError.permissionDenied(action: enabled ? "enable workflow" : "pause workflow", role: state.access.role)
+        }
+        if enabled {
+            let readiness = try dryRun(canvasId: canvasId)
+            guard readiness.ready else {
+                throw WorkflowProvisioningError.validation(readiness.errors.joined(separator: " "))
+            }
+        }
+        let originalRecord = PlannerBoardBridge.store.snapshotRecord(canvasId: canvasId)
+        do {
+            for node in state.nodes {
+                guard var schedule = node.schedule else { continue }
+                schedule.enabled = enabled
+                schedule.nextRunAt = enabled ? schedule.nextOccurrence(after: Date()) : nil
+                schedule.retryAt = nil
+                schedule.lastError = nil
+                schedule.consecutiveFailures = 0
+                _ = try PlannerBoardBridge.updateNodeSchedule(
+                    nodeId: node.id,
+                    schedule: schedule,
+                    for: canvasId,
+                    snapshot: snapshot,
+                    actorUserId: plannerActorId
+                )
+            }
+        } catch {
+            if let originalRecord {
+                try? PlannerBoardBridge.store.restoreCanvasRecord(originalRecord)
+            }
+            throw error
         }
         BoardServer.shared.broadcastStateChanged()
         return try status(canvasId: canvasId)
@@ -583,23 +823,44 @@ enum WorkflowProvisioner {
         )
         let counts = Dictionary(grouping: graph.nodes, by: { $0.status.rawValue }).mapValues(\.count)
         let schedules = graph.nodes.compactMap(\.schedule)
-        let proposal = WorkflowProposalStore.shared.proposal(appliedTo: canvasId)
-        let connected = Set(
-            IntegrationDetector.scan()
-                .filter { $0.state == .connected }
-                .map(\.integrationId)
-        )
+        let proposal = try WorkflowProposalStore.shared.proposal(appliedTo: canvasId)
         let required = proposal?.blueprint.integrations ?? []
+        let connected = connectedIntegrationIds(required: required)
         let missing = required.filter { !connected.contains($0) }.sorted()
         let latestRun = try PlannerBoardBridge.store.runs(canvasId: canvasId).last
+        let enabledCount = schedules.filter(\.enabled).count
+        let scheduleState: String
+        if schedules.isEmpty {
+            scheduleState = "not_scheduled"
+        } else if enabledCount == 0 {
+            scheduleState = "paused"
+        } else if enabledCount == schedules.count {
+            scheduleState = "enabled"
+        } else {
+            scheduleState = "partially_enabled"
+        }
+        let workflowApprovals = (try? WorkflowApprovalStore.shared.list(
+            includeResolved: false,
+            actorId: PlannerPermission.currentActorId() ?? "local-owner"
+        )) ?? []
+        let pendingWorkflowApprovals = workflowApprovals.filter {
+            $0.canvasId == canvasId || ($0.proposalId != nil && $0.proposalId == proposal?.id)
+        }.count
+        let scheduleErrors = Dictionary(uniqueKeysWithValues: graph.nodes.compactMap { node in
+            node.schedule?.lastError.map { (node.id, $0) }
+        })
         return WorkflowStatusEnvelope(
             canvasId: canvasId,
             title: graph.canvas.title,
-            enabled: schedules.contains(where: \.enabled),
+            enabled: scheduleState == "enabled",
+            scheduleState: scheduleState,
             nodeCounts: counts,
             scheduledNodeCount: schedules.count,
+            scheduleFailureCount: scheduleErrors.count,
+            scheduleErrors: scheduleErrors,
             nextRunAt: schedules.compactMap(\.nextRunAt).min(),
-            pendingApprovalCount: graph.proposals.filter { $0.status == .pending || $0.status == .approved }.count,
+            pendingApprovalCount: pendingWorkflowApprovals
+                + graph.proposals.filter { $0.status == .pending || $0.status == .approved }.count,
             missingIntegrations: missing,
             latestRun: latestRun
         )
@@ -622,13 +883,35 @@ enum WorkflowProvisioner {
             rowsByDepth[nodeDepth] = row + 1
             let trackerInputs = blueprint.trackers.filter { $0.readerStepIds.contains(step.id) }
             let trackerWriters = blueprint.trackers.filter { $0.writerStepIds.contains(step.id) }
-            let trackerOutputs = trackerWriters.map(\.reference)
             let involvedTrackers = uniqueTrackers(trackerInputs + trackerWriters)
+            let workflowPolicy = WorkflowNodePolicy(
+                trackers: involvedTrackers.map { tracker in
+                    WorkflowTrackerContract(
+                        id: tracker.id,
+                        connector: tracker.connector,
+                        reference: tracker.reference,
+                        tabColumns: Dictionary(uniqueKeysWithValues: tracker.tabs.map { ($0.id, $0.columns) }),
+                        fieldPolicies: tracker.fieldPolicies,
+                        canRead: tracker.readerStepIds.contains(step.id),
+                        canWrite: tracker.writerStepIds.contains(step.id)
+                    )
+                },
+                integrationPolicies: blueprint.integrationPolicies ?? [:]
+            )
+            let trackerOutputs: [String]
+            switch workflowPolicy.externalWriteMode {
+            case .directWrite:
+                trackerOutputs = trackerWriters.map(\.reference)
+            case .draftOnly, .prohibited:
+                trackerOutputs = trackerWriters.map { "workflow-draft://\($0.id)" }
+            }
             let contextSources = involvedTrackers.map {
                 ContextSource(kind: .artifact, title: trackerContract($0), reference: $0.reference)
             }
-            let approvers = step.approverIds.isEmpty && step.requiresApproval ? [ownerId] : step.approverIds
-            let handoff: HandoffPolicy = step.requiresApproval ? .anyApprover : .none
+            let policyRequiresApproval = !trackerWriters.isEmpty && workflowPolicy.externalWriteMode != .directWrite
+            let requiresApproval = step.requiresApproval || policyRequiresApproval
+            let approvers = step.approverIds.isEmpty && requiresApproval ? [ownerId] : step.approverIds
+            let handoff: HandoffPolicy = requiresApproval ? .anyApprover : .none
             let runtime = ExecutorType(rawValue: step.runtime) ?? .claude
             let schedule = scheduleByNode[step.id].map(scheduleValue)
             return PlanningNode(
@@ -652,25 +935,31 @@ enum WorkflowProvisioner {
                 nodeKind: .step,
                 layout: PlannerNodeLayout(x: Double(nodeDepth) * 380, y: Double(row) * 220, width: 320, height: 168),
                 schedule: schedule,
-                gate: step.requiresApproval ? PlannerNodeGate(
+                gate: requiresApproval ? PlannerNodeGate(
                     type: "owner-review",
                     label: "Owner approval required",
                     requiredArtifactRefs: [],
                     approvers: approvers,
                     onFailGotoNodeId: nil
                 ) : nil,
-                approvers: approvers
+                approvers: approvers,
+                workflowPolicy: workflowPolicy
             )
         }
     }
 
-    private static func applyChange(proposal: WorkflowProposal, canvasId: String) throws -> WorkflowApplyEnvelope {
+    private static func applyChange(proposal: WorkflowProposal, canvasId: String, actorId: String) throws -> WorkflowApplyEnvelope {
+        let plannerActorId: String? = actorId == "local-owner" ? nil : actorId
         let snapshot = BoardLayoutStore.shared.snapshot()
+        let originalRecord = PlannerBoardBridge.store.snapshotRecord(canvasId: canvasId)
         let graph = try PlannerBoardBridge.graphState(
             for: canvasId,
             snapshot: snapshot,
-            actorUserId: PlannerPermission.currentActorId()
+            actorUserId: plannerActorId
         )
+        guard graph.access.role == .owner else {
+            throw PlannerCoreError.permissionDenied(action: "apply workflow change", role: graph.access.role)
+        }
         let desired = materializeNodes(blueprint: proposal.blueprint, canvasId: canvasId, ownerId: graph.canvas.ownerId)
         let desiredById = Dictionary(uniqueKeysWithValues: desired.map { ($0.id, $0) })
         let managedCurrent = graph.nodes.filter { $0.id.hasPrefix("\(canvasId)-wf-") }
@@ -705,31 +994,39 @@ enum WorkflowProvisioner {
                 doerId: node.doerId,
                 reviewerIds: node.reviewerIds,
                 approverIds: node.approverIds,
-                handoffPolicy: node.handoffPolicy
+                handoffPolicy: node.handoffPolicy,
+                workflowPolicy: node.workflowPolicy
             ))
         }
-        let graphProposal = try PlannerBoardBridge.graphChangeProposal(
-            summary: proposal.blueprint.summary.isEmpty ? "Update workflow from proposal \(proposal.id)" : proposal.blueprint.summary,
-            changes: changes,
-            for: canvasId,
-            snapshot: snapshot,
-            actorUserId: graph.canvas.ownerId
-        )
-        _ = try PlannerBoardBridge.approveProposal(
-            proposalId: graphProposal.id,
-            for: canvasId,
-            snapshot: snapshot,
-            actorUserId: graph.canvas.ownerId
-        )
-        _ = try PlannerBoardBridge.applyProposal(
-            proposalId: graphProposal.id,
-            for: canvasId,
-            snapshot: snapshot,
-            actorUserId: graph.canvas.ownerId
-        )
-        let applied = try WorkflowProposalStore.shared.markApplied(id: proposal.id, canvasId: canvasId)
-        BoardServer.shared.broadcastStateChanged()
-        return WorkflowApplyEnvelope(proposal: applied, canvasId: canvasId, created: false)
+        do {
+            let graphProposal = try PlannerBoardBridge.graphChangeProposal(
+                summary: proposal.blueprint.summary.isEmpty ? "Update workflow from proposal \(proposal.id)" : proposal.blueprint.summary,
+                changes: changes,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: plannerActorId
+            )
+            _ = try PlannerBoardBridge.approveProposal(
+                proposalId: graphProposal.id,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: plannerActorId
+            )
+            _ = try PlannerBoardBridge.applyProposal(
+                proposalId: graphProposal.id,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: plannerActorId
+            )
+            let applied = try WorkflowProposalStore.shared.markApplied(id: proposal.id, canvasId: canvasId)
+            BoardServer.shared.broadcastStateChanged()
+            return WorkflowApplyEnvelope(proposal: applied, canvasId: canvasId, created: false)
+        } catch {
+            if let originalRecord {
+                try? PlannerBoardBridge.store.restoreCanvasRecord(originalRecord)
+            }
+            throw error
+        }
     }
 
     private static func scheduleValue(_ spec: WorkflowBlueprintSchedule) -> PlannerNodeSchedule {
@@ -754,6 +1051,27 @@ enum WorkflowProvisioner {
 
     private static func managedNodeId(canvasId: String, stepId: String) -> String {
         "\(canvasId)-wf-\(stepId)"
+    }
+
+    /// Curated integrations use the stronger detector (including OAuth and
+    /// credential probes). Blueprint-specific connectors such as Apollo may
+    /// also be supplied by an installed MCP server before they join the
+    /// curated catalog; for those, an exact/fragment server-name match is the
+    /// readiness signal.
+    private static func connectedIntegrationIds(required: [String]) -> Set<String> {
+        var connected = Set(
+            IntegrationDetector.scan().filter { $0.state == .connected }.map(\.integrationId)
+        )
+        let known = Set(IntegrationCatalog.all.map(\.id))
+        let configured = (IntegrationDetector.claudeMCPServerNames() + IntegrationDetector.codexMCPServerNames())
+            .map { $0.lowercased() }
+        for integration in required where !known.contains(integration) {
+            let needle = integration.lowercased()
+            if configured.contains(where: { $0 == needle || $0.contains(needle) }) {
+                connected.insert(integration)
+            }
+        }
+        return connected
     }
 
     private static func unique(_ values: [String]) -> [String] {

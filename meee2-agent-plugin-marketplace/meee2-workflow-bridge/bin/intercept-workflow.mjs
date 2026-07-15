@@ -41,6 +41,10 @@ function expandHome(p) {
   return p.startsWith('~') ? path.join(HOME, p.slice(1)) : p
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`
+}
+
 const RUNTIME_FILE = path.join(HOME, 'Library/Application Support/meee2/board-server.json')
 
 // BoardServer 对所有 mutating /api/* 请求要求 X-Meee2-Control-Token（同用户
@@ -71,10 +75,43 @@ function controlHeaders(token) {
   return headers
 }
 
-// 静态解析 workflow 脚本首部的 `export const meta = {...}`（Claude Code 强制
-// 纯字面量），给 meee2 建 canvas 骨架用。花括号平衡截取对象字面量后 eval ——
-// 脚本本身就是即将被 relay 执行的代码，这里没有新增信任面。解析失败返回 null
-// （meee2 侧退化为只有 exec 根节点，无 phase 骨架）。
+function decodeStaticString(quote, raw) {
+  if (quote === '"') {
+    try { return JSON.parse(`"${raw}"`) } catch { return null }
+  }
+  // Metadata accepts JS single-quoted/template strings, but interpolation and
+  // expressions are deliberately not evaluated in this hook process.
+  if (quote === '`' && raw.includes('${')) return null
+  return raw.replace(/\\(['"`\\nrt])/g, (_, ch) => ({ n: '\n', r: '\r', t: '\t' }[ch] ?? ch))
+}
+
+function staticStringProperty(source, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp('(?:^|[,\\s])' + escaped + '\\s*:\\s*(["\'`])((?:\\\\.|(?!\\1)[\\s\\S])*)\\1').exec(source)
+  return match ? decodeStaticString(match[1], match[2]) : null
+}
+
+function balancedObjects(source) {
+  const objects = []
+  let start = -1
+  let depth = 0
+  let quote = null
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]
+    if (quote) {
+      if (ch === '\\') { i++; continue }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue }
+    if (ch === '{') { if (depth === 0) start = i; depth++ }
+    if (ch === '}' && depth > 0 && --depth === 0) objects.push(source.slice(start, i + 1))
+  }
+  return objects
+}
+
+// Statically read only string literals from `export const meta`. Never import,
+// eval, or execute workflow text in the interception hook.
 function parseWorkflowMeta(script) {
   try {
     const anchor = script.indexOf('export const meta')
@@ -100,21 +137,15 @@ function parseWorkflowMeta(script) {
     }
     if (end < 0) return null
     const literal = script.slice(braceStart, end + 1)
-    // eslint-disable-next-line no-new-func
-    const meta = new Function(`"use strict"; return (${literal})`)()
-    if (!meta || typeof meta !== 'object') return null
-    const phases = Array.isArray(meta.phases)
-      ? meta.phases
-          .filter((p) => p && typeof p.title === 'string' && p.title.trim())
-          .slice(0, 20)
-          .map((p) => ({
-            title: String(p.title).slice(0, 120),
-            detail: typeof p.detail === 'string' ? p.detail.slice(0, 500) : null,
-          }))
-      : []
+    const phasesAnchor = literal.search(/\bphases\s*:/)
+    const phaseObjects = phasesAnchor >= 0 ? balancedObjects(literal.slice(phasesAnchor)) : []
+    const phases = phaseObjects.slice(0, 20).map((phase) => ({
+      title: staticStringProperty(phase, 'title')?.trim().slice(0, 120) || null,
+      detail: staticStringProperty(phase, 'detail')?.slice(0, 500) || null,
+    })).filter((phase) => phase.title)
     return {
-      name: typeof meta.name === 'string' ? meta.name.slice(0, 120) : null,
-      description: typeof meta.description === 'string' ? meta.description.slice(0, 500) : null,
+      name: staticStringProperty(literal, 'name')?.slice(0, 120) || null,
+      description: staticStringProperty(literal, 'description')?.slice(0, 500) || null,
       phases,
     }
   } catch {
@@ -122,8 +153,8 @@ function parseWorkflowMeta(script) {
   }
 }
 
-// 顺手 GC：runs/ 下超过 7 天且已到终态（status.json state=done/failed，或压根
-// 没有 status.json 的老 run）的目录。任何失败都不影响主流程。
+// 顺手 GC：只删除 runs/ 下超过 7 天且 status.json 明确标记为 done/failed
+// 的目录；缺失或损坏的状态不能证明执行结束，必须保留供恢复/诊断。
 function gcOldRuns() {
   try {
     const runsRoot = path.join(BRIDGE_ROOT, 'runs')
@@ -133,12 +164,13 @@ function gcOldRuns() {
       try {
         const stat = fs.statSync(dir)
         if (!stat.isDirectory() || stat.mtimeMs > cutoff) continue
-        let terminal = true
+        let terminal = false
         try {
           const status = JSON.parse(fs.readFileSync(path.join(dir, 'status.json'), 'utf8'))
           terminal = status.state === 'done' || status.state === 'failed'
         } catch {
-          // 无 status.json（0.1.x 时代的 run）→ 过期即清
+          // Missing/corrupt status is not proof of completion. Preserve it so
+          // GC can never delete a long-running or diagnostically useful run.
         }
         if (terminal) fs.rmSync(dir, { recursive: true, force: true })
       } catch {
@@ -280,7 +312,7 @@ ${workflowParams}
 
   // ---- 让 meee2 接管 relay 会话 ----
   // env 前缀让 relay 会话里的本 hook 直接放行；instructions 里再用 scriptPath 形式兜底。
-  const command = `MEEE2_WORKFLOW_RELAY=1 claude --dangerously-skip-permissions '读取文件 ${instructionsFile} 并严格按其中步骤执行。'`
+  const command = `MEEE2_WORKFLOW_RELAY=1 claude --dangerously-skip-permissions ${shellQuote(`读取文件 ${instructionsFile} 并严格按其中步骤执行。`)}`
 
   // 首选（meee2 ≥ 带 workflow-bridge 消费端）：注册 run —— meee2 建 canvas
   // 可视化骨架、spawn relay、tail journal、维护 runDir/status.json。

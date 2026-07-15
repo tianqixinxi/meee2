@@ -64,6 +64,7 @@ import type {
   SessionArtifactsEnvelope,
   SessionEnvironmentSnapshot,
   ArtifactPageEnvelope,
+  WorkflowApprovalRecord,
 } from './types'
 import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
@@ -486,6 +487,22 @@ async function jsonRequest<T>(
 export function fetchState(): Promise<BoardState> {
   if (PLANNER_DEMO_MODE) return Promise.resolve(demoBoardState())
   return jsonRequest<BoardState>('/api/state')
+}
+
+export async function fetchWorkflowApprovals(): Promise<WorkflowApprovalRecord[]> {
+  const result = await jsonRequest<{ approvals: WorkflowApprovalRecord[] }>('/api/workflow-approvals')
+  return result.approvals
+}
+
+export async function resolveWorkflowApproval(
+  approvalId: string,
+  approved: boolean,
+): Promise<{ approval: WorkflowApprovalRecord }> {
+  return jsonRequest(`/api/workflow-approvals/${encodeURIComponent(approvalId)}/resolve`, {
+    method: 'POST',
+    headers: { 'X-Meee2-Human-Approval': 'board-ui' },
+    body: JSON.stringify({ approved }),
+  })
 }
 
 export function fetchSessionIntakeDiagnostics(): Promise<SessionIntakeDiagnostics> {

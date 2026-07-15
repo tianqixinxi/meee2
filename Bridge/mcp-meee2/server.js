@@ -183,16 +183,14 @@ const TOOLS = [
   {
     name: 'apply_workflow_proposal',
     description:
-      'Materialize an approved proposal as a meee2 workflow Canvas, or apply ' +
-      'an approved change proposal. Call only after the user explicitly says ' +
-      'to create/apply it. Applying leaves every recurring job disabled.',
+      'Request human approval in the meee2 Board to materialize this proposal. ' +
+      'The tool never applies directly; the user must approve the durable request in meee2.',
     inputSchema: {
       type: 'object',
       properties: {
         proposalId: { type: 'string' },
-        explicitlyApproved: { type: 'boolean', description: 'Must be true after explicit user approval.' },
       },
-      required: ['proposalId', 'explicitlyApproved'],
+      required: ['proposalId'],
     },
   },
   {
@@ -209,27 +207,24 @@ const TOOLS = [
   {
     name: 'enable_workflow',
     description:
-      'Enable all recurring jobs on a workflow Canvas. This is separate from ' +
-      'apply and requires fresh explicit user approval because it creates future side effects.',
+      'Request a fresh human approval in meee2 before enabling all recurring jobs.',
     inputSchema: {
       type: 'object',
       properties: {
         canvasId: { type: 'string' },
-        explicitlyApproved: { type: 'boolean' },
       },
-      required: ['canvasId', 'explicitlyApproved'],
+      required: ['canvasId'],
     },
   },
   {
     name: 'pause_workflow',
-    description: 'Pause every recurring job on a workflow Canvas after explicit user approval.',
+    description: 'Request human approval in meee2 to pause every recurring job.',
     inputSchema: {
       type: 'object',
       properties: {
         canvasId: { type: 'string' },
-        explicitlyApproved: { type: 'boolean' },
       },
-      required: ['canvasId', 'explicitlyApproved'],
+      required: ['canvasId'],
     },
   },
   {
@@ -1041,7 +1036,7 @@ async function handleApplyWorkflowProposal(args) {
   return await callApi(
     'POST',
     `/api/workflow-proposals/${encodeURIComponent(args.proposalId)}/apply`,
-    { explicitlyApproved: args.explicitlyApproved === true },
+    {},
   )
 }
 
@@ -1059,7 +1054,7 @@ async function handleSetWorkflowEnabled(args, enabled) {
   return await callApi(
     'POST',
     `/api/workflows/${encodeURIComponent(args.canvasId)}/${enabled ? 'enable' : 'pause'}`,
-    { explicitlyApproved: args.explicitlyApproved === true },
+    {},
   )
 }
 

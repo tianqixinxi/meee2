@@ -21,6 +21,7 @@ public final class BoardServer {
     public static let legacyBindEnvVar = "MEEE2_BOARD_BIND"
     public static let devOriginsEnvVar = "MEEE2_BOARD_DEV_ORIGINS"
     public static let controlTokenHeader = "X-Meee2-Control-Token"
+    public static let humanApprovalHeader = "X-Meee2-Human-Approval"
     static let viteDevOrigins: Set<String> = [
         "http://127.0.0.1:5002",
         "http://localhost:5002"
@@ -478,7 +479,7 @@ public final class BoardServer {
     private static func corsHeaders(for request: HttpRequest) -> [String: String] {
         var headers: [String: String] = [
             "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, \(controlTokenHeader)",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, \(controlTokenHeader), \(humanApprovalHeader)",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin"
         ]
@@ -705,6 +706,8 @@ public final class BoardServer {
         server.GET["/api/workflow-proposals/:id"] = BoardServer.cors(BoardAPI.getWorkflowProposal)
         server.PATCH["/api/workflow-proposals/:id"] = BoardServer.cors(BoardAPI.reviseWorkflowProposal)
         server.POST["/api/workflow-proposals/:id/apply"] = BoardServer.cors(BoardAPI.applyWorkflowProposal)
+        server.GET["/api/workflow-approvals"] = BoardServer.cors(BoardAPI.listWorkflowApprovals)
+        server.POST["/api/workflow-approvals/:id/resolve"] = BoardServer.cors(BoardAPI.resolveWorkflowApproval)
         server.POST["/api/workflows/:id/dry-run"] = BoardServer.cors(BoardAPI.dryRunWorkflow)
         server.POST["/api/workflows/:id/enable"] = BoardServer.cors(BoardAPI.enableWorkflow)
         server.POST["/api/workflows/:id/pause"] = BoardServer.cors(BoardAPI.pauseWorkflow)

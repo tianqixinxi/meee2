@@ -101,7 +101,12 @@ final class WorkflowProvisioningTests: XCTestCase {
         XCTAssertEqual(research.dependsOnNodeIds, [source.id])
         XCTAssertEqual(research.contextSources.map(\.reference), ["gsheet://venture-tracker"])
         XCTAssertTrue(research.contextSources[0].title.contains("financial=human_only"))
-        XCTAssertTrue(research.schema.outputs.contains("gsheet://venture-tracker"))
+        XCTAssertTrue(research.schema.outputs.contains("workflow-draft://venture-tracker"))
+        XCTAssertEqual(research.workflowPolicy?.externalWriteMode, .prohibited)
+        let contract = NodeContractV2.derive(from: research).contract
+        XCTAssertNil(contract.output.externalWriteTarget)
+        XCTAssertEqual(contract.output.externalWriteMode, .prohibited)
+        XCTAssertEqual(contract.output.fieldPolicies?["financial"], "human_only")
         XCTAssertTrue(research.schema.goal.contains("outlook-email=read_only"))
         XCTAssertEqual(research.handoffPolicy, .anyApprover)
         XCTAssertEqual(research.approverIds, ["partner"])
@@ -176,18 +181,175 @@ final class WorkflowProvisioningTests: XCTestCase {
         XCTAssertNil(item.sessionId)
     }
 
-    func testApplyRequiresExplicitApprovalBeforeAnyCanvasMutation() throws {
+    func testApplyRequiresDurableHumanApprovalRequest() throws {
         let proposal = try makeStore().create(
             requirement: "Build a tracker",
             blueprint: blueprint(),
             idempotencyKey: nil
         )
-        XCTAssertThrowsError(try WorkflowProvisioner.apply(
-            proposal: proposal,
-            explicitlyApproved: false
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-workflow-approval-tests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let approvals = WorkflowApprovalStore(fileURL: directory.appendingPathComponent("approvals.json"))
+        let first = try approvals.request(action: .apply, proposal: proposal, actorId: "owner")
+        let retry = try approvals.request(action: .apply, proposal: proposal, actorId: "owner")
+        XCTAssertEqual(first.id, retry.id)
+        XCTAssertEqual(first.status, .pending)
+        XCTAssertEqual(try approvals.list(), [first])
+        XCTAssertThrowsError(try approvals.beginResolution(
+            id: first.id, approved: true, actorId: "different-user"
+        ))
+    }
+
+    func testScheduledTickStaysRunningAfterVerifiedDelivery() throws {
+        let canvasId = "scheduled-running-\(UUID().uuidString.lowercased())"
+        let nodeId = "\(canvasId)-node"
+        let node = PlanningNode(
+            id: nodeId,
+            canvasId: canvasId,
+            title: "Daily overview",
+            schema: NodeSchema(inputs: [], outputs: ["overview"], goal: "Refresh overview"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner",
+            status: .ready,
+            schedule: PlannerNodeSchedule(
+                enabled: true,
+                intervalSeconds: 60,
+                prompt: "Refresh now",
+                nextRunAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        _ = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: "owner", title: "Scheduled", plannerContext: "test"),
+            seedNodes: [node]
+        )
+        let record = try PlannerBoardBridge.store.markScheduledTickSent(
+            canvasId: canvasId, nodeId: nodeId, sentAt: Date()
+        )
+        let updated = try XCTUnwrap(record.nodes.first { $0.id == nodeId })
+        XCTAssertEqual(updated.workflowRunState, .running)
+        XCTAssertNotNil(updated.schedule?.lastSentAt)
+        XCTAssertNotNil(updated.schedule?.nextRunAt)
+    }
+
+    func testScheduledFailureRecordsBoundedRetryState() throws {
+        let canvasId = "scheduled-retry-\(UUID().uuidString.lowercased())"
+        let nodeId = "\(canvasId)-node"
+        let attemptedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let node = PlanningNode(
+            id: nodeId,
+            canvasId: canvasId,
+            title: "Daily overview",
+            schema: NodeSchema(inputs: [], outputs: ["overview"], goal: "Refresh overview"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner",
+            status: .ready,
+            schedule: PlannerNodeSchedule(
+                enabled: true,
+                intervalSeconds: 60,
+                prompt: "Refresh now",
+                nextRunAt: attemptedAt
+            )
+        )
+        _ = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: "owner", title: "Scheduled", plannerContext: "test"),
+            seedNodes: [node]
+        )
+
+        let first = try PlannerBoardBridge.store.markScheduledTickFailed(
+            canvasId: canvasId,
+            nodeId: nodeId,
+            error: "session unavailable",
+            attemptedAt: attemptedAt
+        )
+        let firstNode = try XCTUnwrap(first.nodes.first { $0.id == nodeId })
+        XCTAssertEqual(firstNode.workflowRunState, .failed)
+        XCTAssertEqual(firstNode.schedule?.consecutiveFailures, 1)
+        XCTAssertEqual(firstNode.schedule?.lastError, "session unavailable")
+        XCTAssertEqual(firstNode.schedule?.retryAt, attemptedAt.addingTimeInterval(15))
+        XCTAssertTrue(PlannerBoardBridge.store.dueScheduledNodes(now: attemptedAt).allSatisfy { $0.nodeId != nodeId })
+        XCTAssertTrue(PlannerBoardBridge.store.dueScheduledNodes(now: attemptedAt.addingTimeInterval(15)).contains { $0.nodeId == nodeId })
+    }
+
+    func testProtectedTrackerOutputRejectsDirectWriteAndHumanOnlyFields() throws {
+        let canvasId = "protected-tracker-\(UUID().uuidString.lowercased())"
+        let normalized = try WorkflowProposalStore.normalized(blueprint())
+        let nodes = WorkflowProvisioner.materializeNodes(
+            blueprint: normalized,
+            canvasId: canvasId,
+            ownerId: "owner"
+        )
+        let node = try XCTUnwrap(nodes.first { $0.id == "\(canvasId)-wf-research" })
+        _ = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: "owner", title: "Protected", plannerContext: "test"),
+            seedNodes: nodes
+        )
+
+        XCTAssertThrowsError(try PlannerBoardBridge.store.submitNodeOutput(
+            canvasId: canvasId,
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Direct write", routeTo: ["owner"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "Tracker",
+                    reference: "gsheet://venture-tracker",
+                    payload: nil,
+                    routeTo: ["owner"]
+                )],
+                next: .complete
+            )
         )) { error in
-            XCTAssertEqual(error as? WorkflowProvisioningError, .approvalRequired)
+            XCTAssertTrue(error.localizedDescription.contains("not authorized"))
         }
+
+        XCTAssertThrowsError(try PlannerBoardBridge.store.submitNodeOutput(
+            canvasId: canvasId,
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Draft write", routeTo: ["owner"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .generic,
+                    title: "Draft",
+                    reference: "workflow-draft://venture-tracker",
+                    payload: .object(["fields": .object(["financial": .string("Series A")])]),
+                    routeTo: ["owner"]
+                )],
+                next: .complete
+            )
+        )) { error in
+            XCTAssertTrue(error.localizedDescription.contains("human_only"))
+        }
+    }
+
+    func testCorruptProposalStoreFailsClosedAndPreservesBytes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-workflow-corrupt-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("proposals.json")
+        let corrupt = Data(#"{"proposals":["#.utf8)
+        try corrupt.write(to: url)
+        let store = WorkflowProposalStore(fileURL: url)
+
+        XCTAssertThrowsError(try store.create(
+            requirement: "must not overwrite",
+            blueprint: blueprint(),
+            idempotencyKey: nil
+        )) { error in
+            guard case .storeCorrupted = error as? WorkflowProvisioningError else {
+                return XCTFail("expected storeCorrupted, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: url), corrupt)
     }
 
     private func makeStore() -> WorkflowProposalStore {
