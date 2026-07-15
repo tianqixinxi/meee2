@@ -125,15 +125,18 @@ const TOOLS = [
     description:
       'Turn a user\'s natural-language business process into a durable meee2 ' +
       'workflow proposal: Canvas steps, tracker contracts, human/AI field ' +
-      'policies, integrations, and recurring jobs. This only saves a DRAFT; ' +
-      'it creates no Canvas and performs no external writes. Present the ' +
-      'returned proposal in business language and wait for explicit user approval.',
+      'policies, integrations, and recurring jobs. By default this saves a DRAFT ' +
+      'and immediately opens the single required approval in the meee2 Board; it ' +
+      'still creates no Canvas and performs no external writes until the human ' +
+      'approves there. Set draftOnly only when the user explicitly asks to save ' +
+      'a draft without requesting approval.',
     inputSchema: {
       type: 'object',
       properties: {
         requirement: { type: 'string', description: 'The original user requirement, preserved verbatim.' },
         blueprint: WORKFLOW_BLUEPRINT_SCHEMA,
         idempotencyKey: { type: 'string', description: 'Stable key for retry-safe creation.' },
+        draftOnly: { type: 'boolean', description: 'Save without opening Board approval. Defaults to false.' },
       },
       required: ['requirement', 'blueprint'],
     },
@@ -143,7 +146,8 @@ const TOOLS = [
     description:
       'Create a DRAFT change proposal for an existing meee2 workflow Canvas. ' +
       'Supply the complete desired blueprint, not a partial patch. This does ' +
-      'not mutate the Canvas until the user explicitly approves apply_workflow_proposal.',
+      'not mutate the Canvas; by default it immediately opens the required Board ' +
+      'approval. Set draftOnly only when the user explicitly asks to save a draft.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -151,6 +155,7 @@ const TOOLS = [
         requirement: { type: 'string' },
         blueprint: WORKFLOW_BLUEPRINT_SCHEMA,
         idempotencyKey: { type: 'string' },
+        draftOnly: { type: 'boolean' },
       },
       required: ['canvasId', 'requirement', 'blueprint'],
     },
@@ -168,7 +173,8 @@ const TOOLS = [
     name: 'revise_workflow_proposal',
     description:
       'Revise a DRAFT workflow proposal after user feedback. Pass expectedVersion ' +
-      'to prevent overwriting a newer revision. Applied proposals are immutable.',
+      'to prevent overwriting a newer revision. The revised version opens a fresh ' +
+      'Board approval unless draftOnly is true. Applied proposals are immutable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -176,6 +182,7 @@ const TOOLS = [
         expectedVersion: { type: 'integer', minimum: 1 },
         requirement: { type: 'string' },
         blueprint: WORKFLOW_BLUEPRINT_SCHEMA,
+        draftOnly: { type: 'boolean' },
       },
       required: ['proposalId', 'expectedVersion'],
     },
@@ -184,7 +191,8 @@ const TOOLS = [
     name: 'apply_workflow_proposal',
     description:
       'Request human approval in the meee2 Board to materialize this proposal. ' +
-      'The tool never applies directly; the user must approve the durable request in meee2.',
+      'The tool never applies directly; the user must approve the durable request in meee2. ' +
+      'Normally only needed for a proposal previously saved with draftOnly=true or to retry.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1002,12 +1010,13 @@ async function handleProposeWorkflow(args, targetCanvasId = null) {
   if (!args.blueprint || typeof args.blueprint !== 'object') {
     throw new Error('blueprint is required')
   }
-  return await callApi('POST', '/api/workflow-proposals', {
+  const proposalEnvelope = await callApi('POST', '/api/workflow-proposals', {
     requirement: String(args.requirement).trim(),
     blueprint: args.blueprint,
     idempotencyKey: args.idempotencyKey,
     targetCanvasId,
   })
+  return await withWorkflowApproval(proposalEnvelope, args.draftOnly === true)
 }
 
 async function handleReadWorkflowProposal(args) {
@@ -1020,7 +1029,7 @@ async function handleReadWorkflowProposal(args) {
 
 async function handleReviseWorkflowProposal(args) {
   if (!args.proposalId) throw new Error('proposalId is required')
-  return await callApi(
+  const proposalEnvelope = await callApi(
     'PATCH',
     `/api/workflow-proposals/${encodeURIComponent(args.proposalId)}`,
     {
@@ -1029,6 +1038,18 @@ async function handleReviseWorkflowProposal(args) {
       blueprint: args.blueprint,
     },
   )
+  return await withWorkflowApproval(proposalEnvelope, args.draftOnly === true)
+}
+
+async function withWorkflowApproval(proposalEnvelope, draftOnly) {
+  const proposalId = proposalEnvelope?.proposal?.id
+  if (draftOnly || !proposalId) return proposalEnvelope
+  const approvalEnvelope = await handleApplyWorkflowProposal({ proposalId })
+  return {
+    ...proposalEnvelope,
+    approval: approvalEnvelope.approval,
+    nextAction: 'Approve or reject this request in the meee2 Board.',
+  }
 }
 
 async function handleApplyWorkflowProposal(args) {
@@ -1079,9 +1100,12 @@ const INSTRUCTIONS = [
   'interface for reading node contracts and submitting structured canvas output.',
   '',
   'Workflow creation: translate natural-language requirements into ONE complete',
-  'blueprint and call propose_workflow. Explain the business steps, tracker,',
-  'human-review fields, integrations, and schedules; hide node/canvas internals',
-  'unless the user asks. Wait for explicit approval before apply_workflow_proposal.',
+  'blueprint and call propose_workflow. This immediately opens the one required',
+  'human approval in the meee2 Board by default, so do NOT ask for a second chat',
+  'confirmation and do NOT call apply_workflow_proposal again. Explain the business',
+  'steps, tracker, human-review fields, integrations, and schedules; hide node/canvas',
+  'internals unless the user asks. Use draftOnly=true only when they explicitly ask',
+  'to save a draft without opening approval.',
   'Apply and enable are separate approvals: apply creates or updates the Canvas',
   'with recurring jobs disabled; dry_run_workflow is side-effect free; only call',
   'enable_workflow after a fresh explicit approval. Existing workflow edits use',

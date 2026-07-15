@@ -201,6 +201,34 @@ final class WorkflowProvisioningTests: XCTestCase {
         ))
     }
 
+    func testNewProposalVersionSupersedesItsPendingApproval() throws {
+        let store = makeStore()
+        let original = try store.create(
+            requirement: "Build a tracker",
+            blueprint: blueprint(),
+            idempotencyKey: nil
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-workflow-approval-version-tests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let approvals = WorkflowApprovalStore(fileURL: directory.appendingPathComponent("approvals.json"))
+        let first = try approvals.request(action: .apply, proposal: original, actorId: "owner")
+        let revised = try store.revise(
+            id: original.id,
+            requirement: "Build a revised tracker",
+            blueprint: nil,
+            expectedVersion: original.version
+        )
+
+        let current = try approvals.request(action: .apply, proposal: revised, actorId: "owner")
+        let all = try approvals.list(includeResolved: true)
+
+        XCTAssertNotEqual(first.id, current.id)
+        XCTAssertEqual(current.status, .pending)
+        XCTAssertEqual(all.first(where: { $0.id == first.id })?.status, .superseded)
+        XCTAssertEqual(try approvals.list(), [current])
+    }
+
     func testScheduledTickStaysRunningAfterVerifiedDelivery() throws {
         let canvasId = "scheduled-running-\(UUID().uuidString.lowercased())"
         let nodeId = "\(canvasId)-node"

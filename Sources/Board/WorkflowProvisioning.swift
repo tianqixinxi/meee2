@@ -90,6 +90,7 @@ enum WorkflowApprovalStatus: String, Codable, Equatable {
     case processing
     case approved
     case rejected
+    case superseded
     case failed
 }
 
@@ -584,6 +585,18 @@ final class WorkflowApprovalStore {
                 && ($0.status == .pending || $0.status == .processing)
         }) {
             return existing
+        }
+        if let proposal {
+            for index in file.approvals.indices where
+                file.approvals[index].action == action
+                && file.approvals[index].proposalId == proposal.id
+                && file.approvals[index].proposalVersion != proposal.version
+                && file.approvals[index].actorId == actorId
+                && file.approvals[index].status == .pending {
+                file.approvals[index].status = .superseded
+                file.approvals[index].error = "superseded by proposal version \(proposal.version)"
+                file.approvals[index].resolvedAt = Date()
+            }
         }
         let record = WorkflowApprovalRecord(
             id: UUID().uuidString.lowercased(),

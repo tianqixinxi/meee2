@@ -804,7 +804,7 @@ export interface ContextSource {
 }
 
 export type WorkflowApprovalAction = 'apply' | 'enable' | 'pause'
-export type WorkflowApprovalStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'failed'
+export type WorkflowApprovalStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'superseded' | 'failed'
 
 export interface WorkflowApprovalRecord {
   id: string

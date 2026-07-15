@@ -16,13 +16,13 @@ Canvas Orchestration Profile is the runtime model truth for a canvas: workflow, 
 When the user describes a business process instead of an existing node:
 
 1. Translate it into one complete blueprint: business steps, dependencies, tracker tabs, per-field write policy, required integrations, and recurring schedules.
-2. Call `propose_workflow`. This stores a draft only; it must not create external resources or a Canvas.
-3. Explain the result in business language. Keep Canvas ids, node ids, routing, and runtime internals out of the primary explanation unless the user asks.
-4. Call `apply_workflow_proposal` to create a pending approval request. Tell the user to approve it in the meee2 Board; the agent cannot self-approve. Applying creates or updates the Canvas but leaves all recurring jobs disabled.
-5. Call `dry_run_workflow` to validate the structure without dispatching agents or writing external systems.
+2. Call `propose_workflow`. By default it stores the draft and immediately opens the single required approval in the meee2 Board. It must not create external resources or a Canvas before that Board approval. Do not ask for another confirmation in chat and do not call `apply_workflow_proposal` again.
+3. Explain the result in business language and tell the user that it is waiting in the Board. Keep Canvas ids, node ids, routing, and runtime internals out of the primary explanation unless the user asks.
+4. Use `draftOnly=true` only when the user explicitly asks to save a draft without opening approval. `apply_workflow_proposal` is only for submitting one of those draft-only proposals later or retrying a missing approval request.
+5. After the Board approval creates or updates the Canvas, call `dry_run_workflow` to validate the structure without dispatching agents or writing external systems.
 6. Call `enable_workflow` only to request a separate Board approval, because enabling creates future side effects. `pause_workflow` also creates a human approval request.
 
-For an existing Canvas, call `propose_workflow_change` with the full desired blueprint. Do not mutate the graph directly. Use `read_workflow_proposal` and `revise_workflow_proposal` while refining a draft, and `get_workflow_status` for a business-level status summary.
+For an existing Canvas, call `propose_workflow_change` with the full desired blueprint. It also opens Board approval by default. Do not mutate the graph directly. Use `read_workflow_proposal` and `revise_workflow_proposal` while refining a draft; a revision opens a fresh approval and supersedes the older pending version unless `draftOnly=true`. Use `get_workflow_status` for a business-level status summary.
 
 Tracker field policies are safety boundaries:
 
