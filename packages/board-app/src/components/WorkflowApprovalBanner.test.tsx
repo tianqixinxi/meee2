@@ -29,15 +29,20 @@ describe('WorkflowApprovalBanner', () => {
         requestedAt: '2026-07-16T00:00:00Z',
       }])
       .mockResolvedValue([])
-    api.resolveWorkflowApproval.mockResolvedValue(undefined)
+    api.resolveWorkflowApproval.mockResolvedValue({
+      approval: { id: 'approval-1', status: 'approved' },
+      applyResult: { canvasId: 'canvas-1', created: true },
+    })
+    const onOpenCanvas = vi.fn()
 
-    render(<I18nProvider><WorkflowApprovalBanner /></I18nProvider>)
+    render(<I18nProvider><WorkflowApprovalBanner onOpenCanvas={onOpenCanvas} /></I18nProvider>)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Enable recurring jobs')
     expect(api.resolveWorkflowApproval).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
 
     await waitFor(() => expect(api.resolveWorkflowApproval).toHaveBeenCalledWith('approval-1', true))
+    await waitFor(() => expect(onOpenCanvas).toHaveBeenCalledWith('canvas-1'))
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
   })
 })

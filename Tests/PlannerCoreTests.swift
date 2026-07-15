@@ -6121,9 +6121,9 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(result.promptPreamble.contains("should not show"))
     }
 
-    /// E2.2: submitting output to an upstream node auto-dispatches downstream
-    /// auto-mode nodes that flip to readyToStart.
-    func testSubmitNodeOutputAutoDispatchesDownstreamAutoNode() throws {
+    /// Submitting output makes an eligible downstream node ready, but leaves
+    /// starting its session to an explicit user action.
+    func testSubmitNodeOutputLeavesDownstreamReadyForManualStart() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         // Force the downstream node into auto execution mode + clear gate so
@@ -6148,18 +6148,18 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
 
-        XCTAssertEqual(result.autoDispatchedNodeIds, [downstreamId])
         let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == downstreamId })
-        XCTAssertEqual(downstream.workflowRunState, .dispatched)
+        XCTAssertEqual(downstream.workflowRunState, .readyToStart)
+        XCTAssertNil(downstream.sessionId)
     }
 
-    /// P1 (PR #109) — fan-in auto-dispatch must wait for ALL upstreams.
+    /// A fan-in node must wait for ALL upstreams before becoming startable.
     ///
     /// D dependsOn [A, B, C], all auto/claude (mirrors the coding-orchestration
     /// 集成 node fanning in from 前端/后端/重构). Completing A (routed to D) must
-    /// NOT make D an auto-dispatch candidate; A+B still not; only after C (all
-    /// three done) does D flip to readyToStart and become a candidate.
-    func testFanInAutoDispatchWaitsForAllUpstreams() throws {
+    /// NOT make D ready; A+B still does not; only after C (all three done) does
+    /// D flip to readyToStart, without starting a session automatically.
+    func testFanInReadinessWaitsForAllUpstreams() throws {
         let canvasId = "canvas-fanin"
         let canvas = PlanningCanvas(
             id: canvasId, ownerId: "owner-a", title: "Fan-in Canvas",
@@ -6182,8 +6182,8 @@ final class PlannerCoreTests: XCTestCase {
         let d = node("fanin-d", deps: ["fanin-a", "fanin-b", "fanin-c"])
         _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [a, b, c, d])
 
-        func submit(_ producerId: String) throws -> [PlanningNode] {
-            try PlannerBoardBridge.store.submitNodeOutput(
+        func submit(_ producerId: String) throws -> PlanningNode {
+            _ = try PlannerBoardBridge.store.submitNodeOutput(
                 canvasId: canvasId,
                 nodeId: producerId,
                 output: PlannerNodeOutput(
@@ -6193,18 +6193,20 @@ final class PlannerCoreTests: XCTestCase {
                     artifacts: [],
                     next: .complete
                 )
-            ).autoDispatchCandidates
+            )
+            let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+            return try XCTUnwrap(record.nodes.first { $0.id == "fanin-d" })
         }
 
-        // After A: D has 2 unfinished upstreams (B, C) → NOT a candidate.
+        // After A: D has 2 unfinished upstreams (B, C) → not ready.
         let afterA = try submit("fanin-a")
-        XCTAssertFalse(afterA.contains { $0.id == "fanin-d" },
-                       "D must not auto-dispatch after only A is done")
+        XCTAssertNotEqual(afterA.workflowRunState, .readyToStart,
+                          "D must not become ready after only A is done")
 
-        // After A+B: D still has 1 unfinished upstream (C) → NOT a candidate.
+        // After A+B: D still has 1 unfinished upstream (C) → not ready.
         let afterB = try submit("fanin-b")
-        XCTAssertFalse(afterB.contains { $0.id == "fanin-d" },
-                       "D must not auto-dispatch after only A+B are done")
+        XCTAssertNotEqual(afterB.workflowRunState, .readyToStart,
+                          "D must not become ready after only A+B are done")
 
         // D must also still be un-flipped (not readyToStart) at this point.
         let midRecord = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
@@ -6212,15 +6214,16 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNotEqual(midD.workflowRunState, .readyToStart,
                           "D must not be flipped to readyToStart until all upstreams are done")
 
-        // After C: all three upstreams done → D becomes a candidate.
+        // After C: all three upstreams done → D is ready, but not dispatched.
         let afterC = try submit("fanin-c")
-        XCTAssertTrue(afterC.contains { $0.id == "fanin-d" },
-                      "D must auto-dispatch only after ALL three upstreams (A,B,C) are done")
+        XCTAssertEqual(afterC.workflowRunState, .readyToStart,
+                       "D must become ready only after ALL three upstreams are done")
+        XCTAssertNil(afterC.sessionId)
     }
 
-    /// Guard: the linear single-dep ENG-2 chain is unaffected — a node with one
-    /// upstream still auto-dispatches the moment that upstream completes.
-    func testLinearSingleDepAutoDispatchUnaffected() throws {
+    /// A linear single-dependency node becomes ready as soon as its upstream
+    /// completes, but still requires a manual start.
+    func testLinearSingleDepBecomesReadyWithoutDispatch() throws {
         let canvasId = "canvas-linear-fanin"
         let canvas = PlanningCanvas(
             id: canvasId, ownerId: "owner-a", title: "Linear Canvas",
@@ -6241,7 +6244,7 @@ final class PlannerCoreTests: XCTestCase {
         )
         _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [a, b])
 
-        let candidates = try PlannerBoardBridge.store.submitNodeOutput(
+        _ = try PlannerBoardBridge.store.submitNodeOutput(
             canvasId: canvasId,
             nodeId: "lin-a",
             output: PlannerNodeOutput(
@@ -6251,10 +6254,12 @@ final class PlannerCoreTests: XCTestCase {
                 artifacts: [],
                 next: .complete
             )
-        ).autoDispatchCandidates
+        )
 
-        XCTAssertTrue(candidates.contains { $0.id == "lin-b" },
-                      "single-dep chain must still auto-dispatch B the moment A completes")
+        let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+        let downstream = try XCTUnwrap(record.nodes.first { $0.id == "lin-b" })
+        XCTAssertEqual(downstream.workflowRunState, .readyToStart)
+        XCTAssertNil(downstream.sessionId)
     }
 
     /// Bonus deliverable: refineSessionPrompt builds a no-schema-mutation

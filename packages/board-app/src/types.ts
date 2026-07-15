@@ -819,6 +819,17 @@ export interface WorkflowApprovalRecord {
   resolvedAt?: string | null
 }
 
+export interface WorkflowApprovalResolution {
+  approval: WorkflowApprovalRecord
+  applyResult?: {
+    canvasId: string
+    created: boolean
+  } | null
+  workflowStatus?: {
+    canvasId: string
+  } | null
+}
+
 export type ExecutionMode = 'auto' | 'human'
 export type ExecutorType =
   | 'claude'

@@ -1241,78 +1241,15 @@ enum BoardAPI {
         )
     }
 
-    static func materializeAutoDispatchedSessions(canvasId: String, result: inout PlannerNodeOutputResult) {
-        // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched downstream
-        // nodes in the background so the user's focused app stays put. The
-        // dispatch state is already persisted by the store (see
-        // PlannerBoardBridge.submitNodeOutput), this just materializes the
-        // terminal so the session actually runs.
-        guard let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty else { return }
-        var autoSpawnStarted = 0
-        var autoSpawnSkipped: [String] = []
-        var autoSpawnFailed: [String] = []
-        for autoNodeId in autoIds {
-            guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
-                autoSpawnSkipped.append("\(autoNodeId): missing node")
-                continue
-            }
-            do {
-                let spawnRequest = try recordPlannerDispatchIntent(
-                    canvasId: canvasId,
-                    node: node,
-                    cwdOverride: nil,
-                    includeInitialPromptInIntent: false
-                )
-                guard let spawnReq = spawnRequest else {
-                    autoSpawnSkipped.append("\(autoNodeId): no spawn request")
-                    continue
-                }
-                let surface = try createInternalSessionSurface(
-                    provider: spawnReq.provider,
-                    cwd: spawnReq.cwd,
-                    command: spawnReq.command,
-                    createIfMissing: true,
-                    canvasId: canvasId,
-                    nodeId: autoNodeId,
-                    initialPrompt: spawnReq.initialPrompt
-                )
-                _ = PlannerSessionRunStateBridge.observe(
-                    sessionId: surface.sessionId,
-                    purpose: spawnReq.purpose,
-                    status: .active
-                )
-                autoSpawnStarted += 1
-                NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
-            } catch {
-                autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
-                NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
-            }
-        }
-        var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
-        if !autoSpawnSkipped.isEmpty {
-            parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
-        }
-        if !autoSpawnFailed.isEmpty {
-            parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
-        }
-        result.hint = [result.hint, parts.joined(separator: " ")]
-            .compactMap { value in
-                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return trimmed.isEmpty ? nil : trimmed
-            }
-            .joined(separator: " ")
-        NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
-    }
-
     /// external-first writeback: after a gating submit, dispatch one dedicated
     /// artifact-sync session per external-object reference the agent just wrote,
     /// so the mirror snapshot catches up to the real external object. Best-effort
     /// — a sync-dispatch failure must NEVER fail the submit (the external write
     /// already landed; the worst case is a stale mirror the user can refresh
     /// manually). Reuses the same per-reference dedupe + session registry as the
-    /// manual 「同步快照」 button via `dispatchArtifactSyncSession`. Engine decided
-    /// the references (`result.reconcileReferences`); this materializes them —
-    /// the same engine-decides / BoardAPI-spawns split as auto-dispatch.
+    /// manual 「同步快照」 button via `dispatchArtifactSyncSession`. The engine
+    /// decides the references (`result.reconcileReferences`); this materializes
+    /// the dedicated sync sessions.
     static func reconcileExternalWriteMirrors(canvasId: String, references: [String]?) {
         guard let references, !references.isEmpty else { return }
         for reference in references {
@@ -3679,7 +3616,6 @@ enum BoardAPI {
                 }
             }
             routePlannerOutputMessages(result.routes)
-            materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
             reconcileExternalWriteMirrors(canvasId: canvasId, references: result.reconcileReferences)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
@@ -3738,7 +3674,7 @@ enum BoardAPI {
                         .string("下一行动: Ada")
                     ])
                 ])
-                var result = try submitPokerSystemState(
+                let result = try submitPokerSystemState(
                     canvasId: canvasId,
                     dealerNodeId: dealerNodeId,
                     summary: "Rules Orchestrator started Poker Table",
@@ -3746,7 +3682,6 @@ enum BoardAPI {
                     actionLog: actionLog,
                     actorUserId: actor
                 )
-                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
                 BoardServer.shared.broadcastStateChanged()
                 return jsonResponse(result, status: 201, reason: "Created")
             case "pause-auto", "resume-auto", "step":
@@ -3778,7 +3713,7 @@ enum BoardAPI {
                     ]))
                     summary = "Rules Orchestrator \(status)"
                 }
-                var result = try submitPokerSystemState(
+                let result = try submitPokerSystemState(
                     canvasId: canvasId,
                     dealerNodeId: dealerNodeId,
                     summary: summary,
@@ -3786,7 +3721,6 @@ enum BoardAPI {
                     actionLog: .object(["actionLog": patch.objectValue?["actionLog"] ?? .array([])]),
                     actorUserId: actor
                 )
-                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
                 BoardServer.shared.broadcastStateChanged()
                 return jsonResponse(result, status: 201, reason: "Created")
             default:

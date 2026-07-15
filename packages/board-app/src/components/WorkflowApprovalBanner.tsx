@@ -26,7 +26,11 @@ const COPY = {
   },
 } as const
 
-export function WorkflowApprovalBanner() {
+interface WorkflowApprovalBannerProps {
+  onOpenCanvas?: (canvasId: string) => void
+}
+
+export function WorkflowApprovalBanner({ onOpenCanvas }: WorkflowApprovalBannerProps) {
   const { locale } = useI18n()
   const copy = COPY[locale] ?? COPY.en
   const [approval, setApproval] = useState<WorkflowApprovalRecord | null>(null)
@@ -58,8 +62,14 @@ export function WorkflowApprovalBanner() {
     setBusy(true)
     setError(null)
     try {
-      await resolveWorkflowApproval(approval.id, approved)
+      const result = await resolveWorkflowApproval(approval.id, approved)
       setApproval(null)
+      if (approved) {
+        const canvasId = result.applyResult?.canvasId
+          ?? result.workflowStatus?.canvasId
+          ?? approval.canvasId
+        if (canvasId) onOpenCanvas?.(canvasId)
+      }
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Workflow approval failed')

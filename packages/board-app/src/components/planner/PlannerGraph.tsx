@@ -7,7 +7,7 @@ import {
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertTriangle, PlayCircle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
@@ -62,7 +62,6 @@ import {
   LOCK_VIEWPORT_PREFERENCES_CHANGED,
   loadLockViewportOnSwitch,
   loadPlannerViewport,
-  loadSpawnProvider,
   savePlannerViewport,
 } from '../../preferences'
 import {
@@ -241,7 +240,6 @@ function PlannerGraphInner({
   const [creatingSessionNodeIds, setCreatingSessionNodeIds] = useState<Set<string>>(() => new Set())
   const [sessionHealthBoardState, setSessionHealthBoardState] = useState<BoardState | null>(boardState)
   const [resumingClosedSessions, setResumingClosedSessions] = useState(false)
-  const [startingReadySessions, setStartingReadySessions] = useState(false)
   const [mcpStatus, setMCPStatus] = useState<Meee2MCPStatus | null>(null)
   const [mcpStatusError, setMCPStatusError] = useState<string | null>(null)
   // UI-4: which node is showing the "Attach data source" popover (nodeId | null).
@@ -1459,10 +1457,6 @@ function PlannerGraphInner({
     return collectClosedBoundSessions(plannerState?.nodes ?? [], sessionHealthBoardState?.sessions ?? [])
   }, [plannerState?.nodes, sessionHealthBoardState?.sessions])
 
-  const readySessionPlan = useMemo(() => {
-    return collectReadySessionPlan(plannerState?.nodes ?? [], sessionHealthBoardState?.sessions ?? [])
-  }, [plannerState?.nodes, sessionHealthBoardState?.sessions])
-
   useEffect(() => {
     if (!plannerState || plannerState.nodes.every((node) => !node.sessionId?.trim())) return
     let cancelled = false
@@ -1510,82 +1504,6 @@ function PlannerGraphInner({
       .catch((err) => notifyError((err as Error).message || 'Failed to restore closed sessions'))
       .finally(() => setResumingClosedSessions(false))
   }, [canvasId, closedBoundSessions, loadState, notifyError, onNotify])
-
-  const handleStartReadySessions = useCallback(() => {
-    if (!workspacePath.trim()) {
-      notifyError('Current canvas workspace is not ready yet.')
-      return
-    }
-    if (readySessionPlan.total === 0) return
-    warnMCPWritebackIfNeeded()
-    setStartingReadySessions(true)
-    setError(null)
-    const createNodeIds = readySessionPlan.create.map((node) => node.id)
-    const missingBoundSessionIds = [
-      ...readySessionPlan.resume.map((item) => item.sessionId),
-      ...readySessionPlan.recreate.map((item) => item.sessionId),
-    ]
-    fetchState()
-      .catch(() => null)
-      .then((beforeState) => {
-        const work: Promise<unknown>[] = []
-        if (missingBoundSessionIds.length > 0) {
-          work.push(resumeClosedPlannerSessions(canvasId, missingBoundSessionIds).then((result) => {
-            if (result.resumed.length > 0 && createNodeIds.length === 0) {
-              const first = result.resumed[0]
-              window.dispatchEvent(new CustomEvent('meee2:open-session', {
-                detail: {
-                  sessionId: first.sessionId,
-                  surfaceId: first.surfaceId,
-                  canvasId,
-                },
-              }))
-            }
-            if (result.skipped.length > 0) {
-              notifyError(result.skipped.map((item) => item.reason).join('; '))
-            }
-          }))
-        }
-        for (const node of readySessionPlan.create) {
-          work.push(dispatchPlannerNodeSession(canvasId, node.id, dispatchRunnerForExecutor(node.executorType), workspacePath.trim())
-            .then((state) => {
-              handleGraphStateChanged(state)
-              setCreatingSessionNodeIds((current) => new Set(current).add(node.id))
-            }))
-        }
-        return Promise.all(work).then(() => beforeState)
-      })
-      .then((beforeState) => {
-        if (readySessionPlan.total > 0) {
-          onNotify?.('success', `Starting ${readySessionPlan.total} ready node${readySessionPlan.total === 1 ? '' : 's'}.`)
-        }
-        if (createNodeIds.length === 0) {
-          loadState()
-          void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
-          return
-        }
-        void beforeState
-        void pollForReadyNodeSessions(canvasId, createNodeIds, handleGraphStateChanged, () => {
-          setCreatingSessionNodeIds((current) => {
-            const next = new Set(current)
-            createNodeIds.forEach((nodeId) => next.delete(nodeId))
-            return next
-          })
-          void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
-        })
-      })
-      .catch((err) => notifyError((err as Error).message || 'Failed to start ready sessions'))
-      .finally(() => setStartingReadySessions(false))
-  }, [
-    canvasId,
-    handleGraphStateChanged,
-    loadState,
-    notifyError,
-    onNotify,
-    readySessionPlan,
-    warnMCPWritebackIfNeeded,
-    workspacePath,
-  ])
 
   const hasActionableDrift = useMemo(() => {
     return (plannerState?.states ?? []).some((state) =>
@@ -1874,22 +1792,8 @@ function PlannerGraphInner({
     '--planner-chat-width': `${plannerPanelWidth}px`,
   } as CSSProperties
   const mcpWarning = mcpStatusError || (mcpStatus && !mcpStatus.launches ? mcpStatus.error || 'Meee2 MCP is not available.' : null)
-  const hasSessionActionBanner = readySessionPlan.total > 0 || closedBoundSessions.length > 0
-  const sessionActionBannerTitle = [
-    readySessionPlan.total > 0
-      ? `${readySessionPlan.total} ready node${readySessionPlan.total === 1 ? '' : 's'} can start`
-      : null,
-    closedBoundSessions.length > 0
-      ? `${closedBoundSessions.length} bound session${closedBoundSessions.length === 1 ? '' : 's'} closed`
-      : null,
-  ].filter(Boolean).join(' · ')
-  const readySessionActionSummary = readySessionPlan.total > 0
-    ? formatSessionActionSummary([
-      [readySessionPlan.create.length, 'create'],
-      [readySessionPlan.recreate.length, 'recreate'],
-      [readySessionPlan.resume.length, 'resume'],
-    ])
-    : null
+  const hasSessionActionBanner = closedBoundSessions.length > 0
+  const sessionActionBannerTitle = `${closedBoundSessions.length} bound session${closedBoundSessions.length === 1 ? '' : 's'} closed`
   const closedBoundSessionSummary = closedBoundSessions.length > 0
     ? `${formatClosedBoundSessionActions(closedBoundSessions)} · ${closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}${closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}`
     : null
@@ -2019,39 +1923,24 @@ function PlannerGraphInner({
               )}
               {hasSessionActionBanner && (
                 <div
-                  className={`planner-mcp-banner planner-session-action-banner${closedBoundSessions.length > 0 ? ' is-warning' : ' is-ready'}`}
+                  className="planner-mcp-banner planner-session-action-banner is-warning"
                   role="status"
                 >
-                  {closedBoundSessions.length > 0
-                    ? <AlertTriangle size={16} aria-hidden />
-                    : <PlayCircle size={16} aria-hidden />}
+                  <AlertTriangle size={16} aria-hidden />
                   <div className="planner-mcp-banner__copy">
                     <strong>{sessionActionBannerTitle}</strong>
-                    {readySessionActionSummary && <span>Ready: {readySessionActionSummary}</span>}
                     {closedBoundSessionSummary && <span>Closed: {closedBoundSessionSummary}</span>}
                     <em>Recreates missing internal sessions; resumes only when a real provider resume id exists.</em>
                   </div>
                   <div className="planner-session-action-banner__actions">
-                    {readySessionPlan.total > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleStartReadySessions}
-                        disabled={startingReadySessions}
-                      >
-                        <PlayCircle size={14} className={startingReadySessions ? 'spin' : undefined} aria-hidden />
-                        Start ready
-                      </button>
-                    )}
-                    {closedBoundSessions.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleResumeClosedSessions}
-                        disabled={resumingClosedSessions}
-                      >
-                        <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
-                        {closedBoundSessionButtonLabel}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={handleResumeClosedSessions}
+                      disabled={resumingClosedSessions}
+                    >
+                      <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
+                      {closedBoundSessionButtonLabel}
+                    </button>
                   </div>
                 </div>
               )}
@@ -2416,41 +2305,6 @@ interface ClosedBoundSession {
   action: 'resume' | 'recreate'
 }
 
-interface ReadySessionPlan {
-  create: PlanningNode[]
-  resume: ClosedBoundSession[]
-  recreate: ClosedBoundSession[]
-  total: number
-}
-
-function collectReadySessionPlan(
-  nodes: PlanningNode[],
-  sessions: BoardState['sessions'],
-): ReadySessionPlan {
-  const create: PlanningNode[] = []
-  const resumeBySessionId = new Map<string, ClosedBoundSession>()
-  const recreateBySessionId = new Map<string, ClosedBoundSession>()
-  for (const node of nodes) {
-    if ((node.nodeKind ?? 'step') !== 'step' || node.status !== 'ready') continue
-    if (plannerNodeDoesNotNeedLiveSession(node)) continue
-    const sessionId = node.sessionId?.trim()
-    if (!sessionId) {
-      create.push(node)
-      continue
-    }
-    if (sessions.some((session) => sessionMatchesBoundId(session.id, sessionId))) continue
-    const action = missingBoundSessionAction(sessionId)
-    const target = action === 'resume' ? resumeBySessionId : recreateBySessionId
-    const existing = target.get(sessionId) ?? { sessionId, nodeIds: [], nodeTitles: [], action }
-    existing.nodeIds.push(node.id)
-    existing.nodeTitles.push(node.title)
-    target.set(sessionId, existing)
-  }
-  const resume = [...resumeBySessionId.values()]
-  const recreate = [...recreateBySessionId.values()]
-  return { create, resume, recreate, total: create.length + resume.length + recreate.length }
-}
-
 function collectClosedBoundSessions(
   nodes: PlanningNode[],
   sessions: BoardState['sessions'],
@@ -2523,12 +2377,6 @@ function plannerNodeDoesNotNeedLiveSession(node: PlanningNode): boolean {
 
 // sessionMatchesBoundId 下沉到 plannerGraphAdapter(与 boundSessionLive 共用同一
 // 别名匹配规则),改从那里 import — 见文件顶部 import。
-
-function dispatchRunnerForExecutor(executorType: PlanningNode['executorType']): PlannerDispatchRunner {
-  if (executorType === 'codex') return 'codex'
-  if (executorType === 'claude') return 'claude'
-  return loadSpawnProvider()
-}
 
 function normalizeInputName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -2672,47 +2520,6 @@ async function pollForBoundNodeSession(
     if (sawNewSession) return
     const state = await fetchPlannerGraphState(canvasId)
     onState(state)
-  } finally {
-    onDone()
-  }
-}
-
-async function pollForReadyNodeSessions(
-  canvasId: string,
-  nodeIds: string[],
-  onState: (state: PlannerGraphState) => void,
-  onDone: () => void,
-) {
-  const pending = new Set(nodeIds)
-  try {
-    for (let attempt = 0; attempt < 36 && pending.size > 0; attempt += 1) {
-      await delay(attempt < 4 ? 900 : 1800)
-      try {
-        await fetchState()
-        const state = await fetchPlannerGraphState(canvasId)
-        onState(state)
-        for (const nodeId of [...pending]) {
-          const node = state.nodes.find((item) => item.id === nodeId)
-          if (!node) {
-            pending.delete(nodeId)
-            continue
-          }
-          if (node.sessionId?.trim()) {
-            pending.delete(nodeId)
-            continue
-          }
-          if (node.workflowRunState !== 'dispatched' && node.workflowRunState !== 'running') {
-            pending.delete(nodeId)
-          }
-        }
-      } catch {
-        // Session discovery is eventually consistent; keep polling.
-      }
-    }
-    if (pending.size > 0) {
-      const state = await fetchPlannerGraphState(canvasId)
-      onState(state)
-    }
   } finally {
     onDone()
   }

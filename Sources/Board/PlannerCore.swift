@@ -2893,16 +2893,11 @@ struct PlannerNodeOutputResult: Codable, Equatable {
     var versionId: String?
     /// ENG-2 / E2.1: 1-based version index within `(canvasId, nodeId)`.
     var versionIndex: Int?
-    /// ENG-2 / E2.2: downstream nodes that flipped to readyToStart and are
-    /// marked auto-mode — BoardAPI auto-dispatches them so users see "session
-    /// creating…" without a manual click. UI surfaces the same node ids so it
-    /// can render the affordance immediately on the optimistic path.
-    var autoDispatchedNodeIds: [String]?
     /// external-first writeback: external-object references (e.g.
     /// `gsheet://venture-tracker/Pipeline`) whose mirror should be reconciled
     /// after THIS (gating) submit. Computed engine-side; BoardAPI materializes
-    /// each into a dedicated artifact-sync session — same split as
-    /// `autoDispatchedNodeIds` (engine decides, BoardAPI spawns). Only populated
+    /// each into a dedicated artifact-sync session: the engine identifies the
+    /// references and BoardAPI spawns the sync sessions. Only populated
     /// on a downstream-gating `.done` submit; nil/empty otherwise.
     var reconcileReferences: [String]?
 }
@@ -7333,8 +7328,8 @@ final class PlannerStore {
     /// Fan-in gate: is EVERY `dependsOnNodeIds` of `node` in a done state?
     ///
     /// A node with multiple upstreams (e.g. the orchestration 集成 node that
-    /// dependsOn 前端/后端/重构) must not auto-start when only the producer that
-    /// just routed to it is done — all of its upstreams must be done first.
+    /// dependsOn 前端/后端/重构) must not become ready when only the producer
+    /// that just routed to it is done — all of its upstreams must be done first.
     /// `gateWait`/`failed`/`running` upstreams do NOT count as done, mirroring
     /// the per-route `producerIsDone` check (a parked「待确认」producer is not
     /// done until `confirmNodeReview`). A node with no deps is trivially ready.
@@ -7355,8 +7350,7 @@ final class PlannerStore {
     ) throws -> (
         record: CanvasRecord,
         routes: [PlannerOutputRoute],
-        version: NodeVersion?,
-        autoDispatchCandidates: [PlanningNode]
+        version: NodeVersion?
     ) {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
@@ -7645,7 +7639,7 @@ final class PlannerStore {
                 // (e.g. 集成 dependsOn 前端/后端/重构), the producer that just
                 // routed here being done is NOT enough — flipping to
                 // readyToStart now would let the FIRST branch to finish
-                // auto-start 集成 before the other branches produced their
+                // expose 集成 as ready before the other branches produced their
                 // outputs. Require EVERY dependsOnNodeIds to be done. A
                 // single-dep (linear ENG-2) chain is unaffected: its one dep is
                 // the producer, so `allDependenciesDone` ≡ `producerIsDone`.
@@ -7738,25 +7732,7 @@ final class PlannerStore {
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
 
-            // ENG-2 / E2.2: auto-dispatch candidates — downstream nodes that
-            // (a) just flipped to readyToStart, (b) have no live session, and
-            // (c) declare auto execution mode. The BoardAPI layer is
-            // responsible for materializing the session (spawn terminal etc).
-            // This list intentionally excludes human-mode nodes (those wait on
-            // a human dispatch click).
-            let candidates: [PlanningNode] = record.nodes.filter { node in
-                guard routeTargets.contains(node.id) else { return false }
-                guard node.workflowRunState == .readyToStart else { return false }
-                // FAN-IN gate (P1): never auto-dispatch a node until ALL of its
-                // upstreams are done. Belt-and-suspenders with the readyToStart
-                // flip above — a node must not auto-spawn a session on the first
-                // upstream's completion.
-                guard allDependenciesDone(node, in: record) else { return false }
-                let hasSession = (node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                if hasSession { return false }
-                return node.executionMode == .auto
-            }
-            return (record, routes, version, candidates)
+            return (record, routes, version)
         }
     }
 
@@ -7989,63 +7965,6 @@ final class PlannerStore {
                 nodeId: nodeId,
                 summary: "Updated layout for \(record.nodes[index].title)"
             ))
-            document.canvases[canvasId] = record
-            try save(canvasId: canvasId)
-            return record
-        }
-    }
-
-    /// Execution-layer mutation: bind an existing session onto a node DIRECTLY,
-    /// no proposal / owner gate. Sets `sessionId`, mirrors it onto
-    /// `chatThreadId`, marks the node as session-sourced and moves it to
-    /// `running`. Permission is enforced by the caller (`requireNodeUpdate`).
-    /// PR6+7 · §5.2 auto-advance attempt writer. When a node is auto-dispatched
-    /// because an upstream node completed, record the attempt through the single
-    /// writer with an `.autoWorkflow` origin carrying the upstream edge + attempt
-    /// reference and a computed causalKey. Best-effort: no-op if there is no
-    /// active run (manual canvases / preview) so it never blocks the dispatch.
-    @discardableResult
-    func recordAutoAdvanceAttempt(
-        canvasId: String,
-        nodeId: String,
-        fromNodeId: String
-    ) throws -> CanvasRecord {
-        try withLock {
-            var record = try requireRecord(canvasId: canvasId)
-            guard activeRunIndex(in: record) != nil else { return record }
-            let upstreamAttemptIndex = (activeRunNodeState(in: record, nodeId: fromNodeId)?
-                .attempts.last?.index) ?? 0
-            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
-                let attemptIndex = state.attempts.count
-                let lamport = self.nextLamportSeq(canvasId: canvasId)
-                let causalKey = Self.causalKey(
-                    canvasId: canvasId,
-                    nodeId: nodeId,
-                    attemptIndex: attemptIndex,
-                    lamportSeq: lamport
-                )
-                let origin = TriggerOrigin.autoWorkflow(
-                    upstreamEdgeRef: TriggerOrigin.AutoWorkflowEdgeRef(
-                        canvasId: canvasId,
-                        fromNodeId: fromNodeId,
-                        toNodeId: nodeId
-                    ),
-                    upstreamAttemptId: UpstreamAttemptRef(
-                        canvasId: canvasId,
-                        nodeId: fromNodeId,
-                        attemptIndex: upstreamAttemptIndex,
-                        causalKey: causalKey
-                    )
-                )
-                // Append directly (lamport already consumed above to feed the
-                // causalKey) rather than re-entering appendAttempt's own bump.
-                state.attempts.append(NodeAttempt(
-                    index: attemptIndex,
-                    runState: .dispatched,
-                    origin: origin
-                ))
-            }
-            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -9759,41 +9678,6 @@ enum PlannerBoardBridge {
                         == outputArtifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         })
-        // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
-        // bridge layer so the engine path stays pure (BoardAPI is the place
-        // that actually spawns terminals — see `recordPlannerDispatchIntent`
-        // + `startTerminalSession`). We only auto-dispatch here at the store
-        // level — the BoardAPI handler observes `autoDispatchedNodeIds` and
-        // kicks off the terminal spawn in the background so the response
-        // can return inside the spec's 500ms budget.
-        var autoIds: [String] = []
-        for candidate in submitted.autoDispatchCandidates {
-            do {
-                _ = try store.dispatchNode(
-                    canvasId: canvasId,
-                    nodeId: candidate.id,
-                    dispatch: PlannerNodeDispatch(
-                        runner: .claude,
-                        skill: nil,
-                        actor: candidate.doerId,
-                        command: nil,
-                        fallbackRunner: nil
-                    )
-                )
-                // PR6+7 · §5.2: an auto-dispatch is a workflow-driven attempt.
-                // Record it through the single attempt writer with an
-                // `.autoWorkflow` origin (upstream = the node that just
-                // submitted). Best-effort — never block the dispatch.
-                _ = try? store.recordAutoAdvanceAttempt(
-                    canvasId: canvasId,
-                    nodeId: candidate.id,
-                    fromNodeId: nodeId
-                )
-                autoIds.append(candidate.id)
-            } catch {
-                MLog("[ENG-2][auto-dispatch] skip node=\(candidate.id) reason=\(error.localizedDescription)")
-            }
-        }
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         let requirementHint = graph.nodes
             .first(where: { $0.id == nodeId })
@@ -9830,7 +9714,6 @@ enum PlannerBoardBridge {
             hint: requirementHint,
             versionId: submitted.version?.id,
             versionIndex: submitted.version?.versionIndex,
-            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds,
             reconcileReferences: reconcileRefs.isEmpty ? nil : reconcileRefs
         )
     }

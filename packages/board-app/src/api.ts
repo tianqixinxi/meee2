@@ -65,6 +65,7 @@ import type {
   SessionEnvironmentSnapshot,
   ArtifactPageEnvelope,
   WorkflowApprovalRecord,
+  WorkflowApprovalResolution,
 } from './types'
 import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
@@ -497,7 +498,7 @@ export async function fetchWorkflowApprovals(): Promise<WorkflowApprovalRecord[]
 export async function resolveWorkflowApproval(
   approvalId: string,
   approved: boolean,
-): Promise<{ approval: WorkflowApprovalRecord }> {
+): Promise<WorkflowApprovalResolution> {
   return jsonRequest(`/api/workflow-approvals/${encodeURIComponent(approvalId)}/resolve`, {
     method: 'POST',
     headers: { 'X-Meee2-Human-Approval': 'board-ui' },

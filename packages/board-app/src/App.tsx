@@ -1501,7 +1501,7 @@ export default function App() {
           onOpenSession={handlePaletteOpenSession}
         />
         <GuideOverlay />
-        <WorkflowApprovalBanner />
+        <WorkflowApprovalBanner onOpenCanvas={handlePaletteOpenCanvas} />
         <UpdateBanner />
         <ToastViewport toasts={toasts} />
       </div>
