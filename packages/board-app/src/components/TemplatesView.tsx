@@ -33,6 +33,7 @@ import {
   fetchTeamMembers,
   fetchTemplateCatalog,
   type CanvasTemplate,
+  type CanvasTemplateGuide,
   type CanvasTemplateSource,
   type ClaudeWorkflow,
   type ClaudeWorkflowList,
@@ -74,6 +75,7 @@ const SOURCE_LABEL: Record<CanvasTemplateSource, string> = {
   'canvas-script': 'Canvas Script',
 }
 const CLAUDE_WORKFLOW_MAX_BYTES = 256 * 1024
+const TEMPLATE_QUICK_START_PENDING_KEY = 'meee2.templateQuickStart.pending'
 
 const ICONS_BY_NAME: Record<string, LucideIcon> = {
   'git-pull-request': GitPullRequest,
@@ -207,6 +209,11 @@ export function TemplatesView({
     }
     setApplying(true)
     setApplyError(null)
+    window.sessionStorage.setItem(TEMPLATE_QUICK_START_PENDING_KEY, JSON.stringify({
+      templateId: applyTarget.id,
+      templateName: applyTarget.name,
+      guide: resolvedTemplateGuide(applyTarget),
+    }))
     onApplyTemplate(applyTarget.id, name, applyScopeDraft)
       .then(() => {
         setApplyTarget(null)
@@ -214,6 +221,7 @@ export function TemplatesView({
         setApplying(false)
       })
       .catch((err) => {
+        window.sessionStorage.removeItem(TEMPLATE_QUICK_START_PENDING_KEY)
         setApplyError((err as Error).message || "Couldn't apply that template.")
         setApplying(false)
       })
@@ -490,6 +498,7 @@ export function TemplatesView({
 
       {applyTarget && (
         <TemplateModal title={`Use template - ${applyTarget.name}`} subtitle={`Creates a new canvas from v${applyTarget.version}.`} onClose={() => !applying && setApplyTarget(null)}>
+          <TemplateGuidePanel template={applyTarget} compact />
           <input value={applyNameDraft} onChange={(event) => setApplyNameDraft(event.target.value)} placeholder="Canvas name" autoFocus disabled={applying} />
           <ScopeToggle value={applyScopeDraft} onChange={setApplyScopeDraft} disabled={applying} />
           {applyError && <div className="inline-error">{applyError}</div>}
@@ -505,6 +514,7 @@ export function TemplatesView({
           wide
         >
           <TemplatePreviewCanvas template={previewTarget} />
+          <TemplateGuidePanel template={previewTarget} />
           <div className="template-preview__actions">
             {!previewTarget.readOnly && (
               <button
@@ -622,6 +632,40 @@ function GalleryCard({ template, owner, onPreview, onEdit, onMetadata }: Gallery
         </div>
       </button>
     </article>
+  )
+}
+
+function resolvedTemplateGuide(template: CanvasTemplate): CanvasTemplateGuide {
+  if (template.guide) return template.guide
+  const requiredInputs = template.defaultNodes.flatMap((node) =>
+    (node.inputs ?? []).map((label) => ({ label, nodeTitle: node.title })),
+  )
+  const expectedOutputs = Array.from(new Set(template.defaultNodes.flatMap((node) => node.outputs ?? [])))
+  return {
+    useCase: template.description || 'Reusable canvas structure',
+    requiredInputs,
+    expectedOutputs,
+    quickStart: [
+      'Create a canvas from this template.',
+      requiredInputs.length ? 'Add the required inputs to the highlighted nodes.' : 'Review each node goal and owner.',
+      'Start the first ready node and review the resulting artifacts.',
+    ],
+  }
+}
+
+function TemplateGuidePanel({ template, compact = false }: { template: CanvasTemplate; compact?: boolean }) {
+  const guide = resolvedTemplateGuide(template)
+  return (
+    <section className={`template-guide${compact ? ' template-guide--compact' : ''}`} aria-label="Template quick start">
+      <div><strong>Best for</strong><p>{guide.useCase}</p></div>
+      {guide.requiredInputs.length > 0 && (
+        <div><strong>Required inputs</strong><ul>{guide.requiredInputs.map((input, index) => <li key={`${input.label}-${index}`}>{input.label}{input.nodeTitle ? ` → ${input.nodeTitle}` : ''}</li>)}</ul></div>
+      )}
+      {!compact && guide.expectedOutputs.length > 0 && (
+        <div><strong>Expected outputs</strong><ul>{guide.expectedOutputs.map((output) => <li key={output}>{output}</li>)}</ul></div>
+      )}
+      {!compact && <div><strong>Quick start</strong><ol>{guide.quickStart.map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol></div>}
+    </section>
   )
 }
 

@@ -32,22 +32,19 @@ export function deriveDisplayStatus(node: PlanningNode, boundSessionLive = false
   // 「失败」已下线 —— failed 本质是 agent/人「需要人回应」,统一并入该桶。
   // 纯上游依赖未就绪的 blocked(无 runState)仍显示「卡住」(等上游),非会话态。
   const wfs = node.workflowRunState ?? null
-  const isWorkNode = (node.nodeKind ?? 'step') === 'step' || node.nodeKind === 'session'
   if (wfs === 'running' || wfs === 'dispatched') {
     return { label: '运行中', tone: 'running' }
   }
   if (wfs === 'awaiting-input' || wfs === 'gate-wait' || wfs === 'failed') {
     return { label: '需要人回应', tone: 'awaiting' }
   }
-  // 状态跟会话走:只要绑定会话还活着(可打开续聊),即便 node 已落到 done / 未启动,
-  // 也显示「在线待命」—— 否则会出现「显示已结束却仍能打开活会话」的矛盾。会话结束后
-  // (boundSessionLive=false)才回落到下面的 node 终结态:工作节点 done→未启动
-  // (做完=会话结束=回未启动,产物留账本)、非工作节点 done→完成。
+  // 节点结果与会话存活是两条独立真相。完成的工作节点必须保持「已完成」；
+  // 会话是否仍在线由 inspector 的会话状态单独展示。
+  if (wfs === 'done' || node.status === 'done') {
+    return { label: '已完成', tone: 'done' }
+  }
   if (boundSessionLive) {
     return { label: '在线待命', tone: 'running' }
-  }
-  if (!isWorkNode && (wfs === 'done' || node.status === 'done')) {
-    return { label: '完成', tone: 'done' }
   }
   if (node.status === 'blocked') {
     return { label: '卡住', tone: 'blocked' }
@@ -174,6 +171,8 @@ export type PrimaryAction =
   | 'open'
   | 'select-delivery'
   | 'assign-person'
+  | 'submit-human'
+  | 'add-input'
 
 export const PRIMARY_ACTION_TEXT: Record<Exclude<PrimaryAction, 'none'>, string> = {
   'open-sub-canvas': '打开子画板',
@@ -186,6 +185,8 @@ export const PRIMARY_ACTION_TEXT: Record<Exclude<PrimaryAction, 'none'>, string>
   open: '打开',
   'select-delivery': '选交付物',
   'assign-person': '分配负责人',
+  'submit-human': '填写并提交',
+  'add-input': '添加输入',
 }
 
 export function primaryActionLabel(input: {
@@ -201,6 +202,8 @@ export function primaryActionLabel(input: {
   canChangeStatus?: boolean
   canCreateSession: boolean
   creatingSession: boolean
+  executorType?: string
+  missingRequiredInput?: string
 }): PrimaryAction {
   // UI-simplification — "Open session" 已从卡片主操作砍掉(user 反馈):
   // 平替在 inspector 进展段 hover 上。返回 'none' 等于不显示主操作按钮 →
@@ -212,6 +215,14 @@ export function primaryActionLabel(input: {
     // step 分支的 create-session 语义,并补上 session 节点的 spawn 入口
     // (之前 session nodeKind 走 fall-through 返回 'none',用户无从启动)。
     if (input.nodeKind === 'step' || input.nodeKind === 'session') {
+      if (input.workflowRunState === 'done' || input.status === 'done') return 'view-output'
+      if (
+        input.missingRequiredInput
+        && !input.sessionId
+        && input.workflowRunState !== 'running'
+        && input.workflowRunState !== 'dispatched'
+      ) return 'add-input'
+      if (input.executorType === 'human') return 'submit-human'
       if (input.creatingSession) return 'creating-session'
       if (input.sessionId) return 'none'
       if (
@@ -237,6 +248,13 @@ export function primaryActionLabel(input: {
   if (input.sessionId) return 'none'
   if (input.creatingSession) return 'creating-session'
   return 'open'
+}
+
+export function requiredInputActionLabel(input: string): string {
+  const normalized = input.trim()
+  if (/pdf/i.test(normalized)) return '添加 PDF'
+  if (/模板|template/i.test(normalized)) return '选择模板'
+  return normalized ? `添加 ${normalized}` : '添加输入'
 }
 
 // === nextAction (inspector / 进展行用) ===

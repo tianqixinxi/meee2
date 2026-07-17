@@ -1301,7 +1301,7 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text-dim);
 }
 .planner-node-modal__progress-runtime-state strong { color: var(--text-primary); font-weight: 600; }
 .planner-node-modal__progress-runtime-state.is-awaiting strong { color: #b85540; }
@@ -8158,6 +8158,150 @@
   gap: 4px;
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.planner-attach-popover__source-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.planner-attach-popover__source-tabs button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.planner-attach-popover__source-tabs button[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+
+.planner-node-modal__review-panel,
+.planner-node-modal__human-output,
+.planner-node-modal__review-form {
+  display: grid;
+  gap: 8px;
+}
+
+.planner-node-modal__review-panel {
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.planner-node-modal__review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.planner-node-modal__review-actions button,
+.planner-node-modal__review-form button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-paper);
+  color: var(--text);
+}
+
+.planner-node-modal__review-actions button.is-primary,
+.planner-node-modal__review-form button.is-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.planner-node-modal__review-form textarea,
+.planner-node-modal__human-output textarea {
+  min-height: 92px;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-paper);
+  color: var(--text);
+  font: inherit;
+}
+
+.planner-node-modal__review-error,
+.planner-node-modal__runtime-mismatch {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.planner-runtime-summary {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 18;
+  padding: 6px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 999px;
+  background: rgba(31, 31, 29, 0.82);
+  color: var(--text-secondary);
+  font-size: 11px;
+  backdrop-filter: blur(10px);
+}
+
+.planner-quick-start-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.planner-quick-start {
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--bg-paper);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+}
+
+.planner-quick-start header,
+.planner-quick-start footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planner-quick-start header div {
+  display: grid;
+  gap: 3px;
+}
+
+.planner-quick-start header span,
+.planner-quick-start p,
+.planner-quick-start li {
+  color: var(--text-dim);
+}
+
+.planner-quick-start__missing {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.planner-quick-start__missing button {
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .planner-assign-dialog__summary {

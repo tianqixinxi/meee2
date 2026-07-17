@@ -94,6 +94,24 @@ enum WorkflowApprovalStatus: String, Codable, Equatable {
     case failed
 }
 
+struct WorkflowApprovalProposalPreview: Codable, Equatable {
+    struct Step: Codable, Equatable {
+        var id: String
+        var title: String
+        var dependsOn: [String]
+        var runtime: String
+        var requiresApproval: Bool
+    }
+
+    var name: String
+    var summary: String
+    var version: Int
+    var steps: [Step]
+    var trackerCount: Int
+    var schedules: [String]
+    var changeKind: String
+}
+
 struct WorkflowApprovalRecord: Codable, Equatable {
     var id: String
     var action: WorkflowApprovalAction
@@ -105,6 +123,7 @@ struct WorkflowApprovalRecord: Codable, Equatable {
     var error: String?
     var createdAt: Date
     var resolvedAt: Date?
+    var proposalPreview: WorkflowApprovalProposalPreview?
 }
 
 struct WorkflowApprovalEnvelope: Encodable {
@@ -608,7 +627,26 @@ final class WorkflowApprovalStore {
             status: .pending,
             error: nil,
             createdAt: Date(),
-            resolvedAt: nil
+            resolvedAt: nil,
+            proposalPreview: proposal.map { proposal in
+                WorkflowApprovalProposalPreview(
+                    name: proposal.blueprint.name,
+                    summary: proposal.blueprint.summary,
+                    version: proposal.version,
+                    steps: proposal.blueprint.steps.map { step in
+                        WorkflowApprovalProposalPreview.Step(
+                            id: step.id,
+                            title: step.title,
+                            dependsOn: step.dependsOn,
+                            runtime: step.runtime,
+                            requiresApproval: step.requiresApproval
+                        )
+                    },
+                    trackerCount: proposal.blueprint.trackers.count,
+                    schedules: proposal.blueprint.schedules.map { "\($0.nodeId): \($0.cadence)" },
+                    changeKind: proposal.targetCanvasId == nil ? "create" : "update"
+                )
+            }
         )
         file.approvals.append(record)
         try saveUnlocked(file)

@@ -817,6 +817,15 @@ export interface WorkflowApprovalRecord {
   error?: string | null
   createdAt: string
   resolvedAt?: string | null
+  proposalPreview?: {
+    name: string
+    summary: string
+    version: number
+    steps: Array<{ id: string; title: string; dependsOn: string[]; runtime: string; requiresApproval: boolean }>
+    trackerCount: number
+    schedules: string[]
+    changeKind: 'create' | 'update' | string
+  } | null
 }
 
 export interface WorkflowApprovalResolution {
@@ -1038,9 +1047,11 @@ export interface ArtifactPageEnvelope {
   items: ArtifactPageItem[]
   cursor?: string | null
   total: number
+  availableTotal?: number
   hasMore: boolean
   canvasCount: number
   groupCounts: Record<string, number>
+  statusCounts?: Record<string, number>
 }
 
 /** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /
@@ -1196,6 +1207,7 @@ export interface PlannerNodeOutput {
   message?: PlannerNodeOutputMessage | null
   artifacts: PlannerNodeOutputArtifact[]
   next: PlannerNodeOutputNext
+  force_new_version?: boolean
 }
 
 export interface PlannerRouteTarget {

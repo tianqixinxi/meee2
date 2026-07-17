@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { NodeInspectorModal } from './NodeInspectorModal'
-import type { PlannerWorkflowRunState, PlanningNode, Session } from '../../types'
+import type { NodeStateSnapshot, PlannerWorkflowRunState, PlanningNode, Session } from '../../types'
+
+const api = vi.hoisted(() => ({
+  listArtifactVersions: vi.fn(),
+  proposePlannerGraphChange: vi.fn(),
+  resolvePlannerNodeReview: vi.fn(),
+  submitHumanPlannerNodeOutput: vi.fn(),
+  updatePlannerNodeSchedule: vi.fn(),
+}))
+vi.mock('../../api', () => api)
 
 // The inspector imports ./InspectorArtifactBody (only used on the `artifact`
 // branch, which these step/session tests never hit) — stub it so the module
@@ -59,12 +68,13 @@ function session(overrides: Partial<Session> = {}): Session {
 function renderModal(props: {
   node: PlanningNode
   boundSession?: Session | null
+  state?: NodeStateSnapshot | null
 }) {
   return render(
     <NodeInspectorModal
       node={props.node}
       canvasId="c1"
-      state={null}
+      state={props.state ?? null}
       onClose={() => {}}
       onOpenSession={() => {}}
       boundSession={props.boundSession ?? null}
@@ -74,8 +84,47 @@ function renderModal(props: {
 
 describe('NodeInspectorModal 进展 live-block gating', () => {
   beforeEach(() => {
+    Object.values(api).forEach((mock) => mock.mockReset())
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
+  })
+
+  it('renders a formal human submit action and never offers an AI start action', () => {
+    api.submitHumanPlannerNodeOutput.mockReturnValue(new Promise(() => {}))
+    renderModal({
+      node: node({ executorType: 'human', executionMode: 'human', schema: { inputs: [], outputs: ['report'], goal: '' } }),
+    })
+
+    expect(screen.queryByRole('button', { name: /开干/ })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('填写这一步的完成说明或最终产物内容'), {
+      target: { value: 'Human completed report' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /填写并提交/ }))
+
+    expect(api.submitHumanPlannerNodeOutput).toHaveBeenCalled()
+    expect(api.submitHumanPlannerNodeOutput.mock.calls[0][2]).toMatchObject({
+      nodeId: 'node-1',
+      status: 'done',
+      artifacts: [{ reference: 'report', payload: { type: 'text', text: 'Human completed report' } }],
+    })
+  })
+
+  it('requires review detail before sending a request-changes decision', () => {
+    api.resolvePlannerNodeReview.mockReturnValue(new Promise(() => {}))
+    renderModal({
+      node: node({ workflowRunState: 'gate-wait' }),
+      state: { needsOwnerReview: true } as NodeStateSnapshot,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '要求修改' }))
+    const submit = screen.getByRole('button', { name: '提交修改意见' })
+    expect(submit).toBeDisabled()
+    fireEvent.change(screen.getByPlaceholderText(/说明需要修改什么/), { target: { value: '补充风险说明' } })
+    fireEvent.click(submit)
+
+    expect(api.resolvePlannerNodeReview).toHaveBeenCalledWith(
+      'c1', 'node-1', { decision: 'request_changes', comment: '补充风险说明', correctedOutput: undefined },
+    )
   })
   afterEach(() => {
     vi.useRealTimers()

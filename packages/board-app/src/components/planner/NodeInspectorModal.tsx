@@ -20,6 +20,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   listArtifactVersions,
   proposePlannerGraphChange,
+  resolvePlannerNodeReview,
+  submitHumanPlannerNodeOutput,
   updatePlannerNodeSchedule,
 } from '../../api'
 import { loadSpawnProvider } from '../../preferences'
@@ -33,6 +35,7 @@ import type {
   PlanProposal,
   PlannerAccess,
   PlannerArtifact,
+  PlannerArtifactKind,
   PlannerArtifactVersion,
   PlannerDispatchRunner,
   PlannerGraphState,
@@ -138,6 +141,87 @@ export function NodeInspectorModal({
   const [scheduleInterval, setScheduleInterval] = useState(() => String(Math.max(1, Math.round((node.schedule?.intervalSeconds ?? 900) / 60))))
   const [schedulePrompt, setSchedulePrompt] = useState(() => node.schedule?.prompt ?? defaultSchedulePrompt(node))
   const [actionBusy, setActionBusy] = useState(false)
+  const [humanOutput, setHumanOutput] = useState('')
+  const [reviewComment, setReviewComment] = useState('')
+  const [reviewCorrection, setReviewCorrection] = useState('')
+  const [reviewPanel, setReviewPanel] = useState<'none' | 'changes' | 'correct'>('none')
+  const [reviewBusy, setReviewBusy] = useState(false)
+  const [reviewError, setReviewError] = useState<string | null>(null)
+
+  const submitHumanOutput = async () => {
+    const summary = humanOutput.trim()
+    if (!summary || reviewBusy) return
+    setReviewBusy(true)
+    setReviewError(null)
+    const reference = node.schema.outputs[0] ?? 'human-output'
+    try {
+      const result = await submitHumanPlannerNodeOutput(canvasId, node.id, {
+        nodeId: node.id,
+        status: 'done',
+        message: { summary, routeTo: [] },
+        artifacts: node.schema.outputs.length > 0 ? [{
+          kind: 'generic',
+          title: reference,
+          reference,
+          payload: { type: 'text', text: summary },
+          routeTo: [],
+        }] : [],
+        next: 'complete',
+      })
+      setHumanOutput('')
+      onGraphStateChanged?.(result.graph)
+    } catch (cause) {
+      setReviewError(cause instanceof Error ? cause.message : '提交失败')
+    } finally {
+      setReviewBusy(false)
+    }
+  }
+
+  const resolveReview = async (decision: 'approve' | 'request_changes', corrected = false) => {
+    if (reviewBusy) return
+    if (decision === 'request_changes' && !reviewComment.trim()) {
+      setReviewError('要求修改时必须填写具体意见。')
+      return
+    }
+    if (corrected && !reviewCorrection.trim()) {
+      setReviewError('请填写修订后的产物内容。')
+      return
+    }
+    setReviewBusy(true)
+    setReviewError(null)
+    try {
+      const matchingArtifacts = artifacts.filter((artifact) => artifact.nodeId === node.id)
+      const latest = matchingArtifacts[matchingArtifacts.length - 1]
+      const reference = latest?.reference ?? node.schema.outputs[0] ?? 'human-review'
+      const kind: PlannerArtifactKind = latest?.kind ?? 'generic'
+      const state = await resolvePlannerNodeReview(canvasId, node.id, {
+        decision,
+        comment: decision === 'request_changes' ? reviewComment.trim() : undefined,
+        correctedOutput: corrected ? {
+          nodeId: node.id,
+          status: 'needs_review',
+          message: { summary: 'Human reviewer submitted a corrected version.', routeTo: [] },
+          artifacts: [{
+            kind,
+            title: latest?.title ?? reference,
+            reference,
+            payload: { type: 'text', text: reviewCorrection.trim() },
+            routeTo: [],
+          }],
+          next: 'needs_owner_review',
+          force_new_version: true,
+        } : undefined,
+      })
+      setReviewComment('')
+      setReviewCorrection('')
+      setReviewPanel('none')
+      onGraphStateChanged?.(state)
+    } catch (cause) {
+      setReviewError(cause instanceof Error ? cause.message : '审核失败')
+    } finally {
+      setReviewBusy(false)
+    }
+  }
   const [actionError, setActionError] = useState<string | null>(null)
   // canvas-spec §8 — the widget ⚙ popover was removed from the inspector;
   // node-view selection is no longer surfaced here.
@@ -183,6 +267,14 @@ export function NodeInspectorModal({
   const runtimeSurfaceId = boundSession?.surfaceId?.trim() ?? ''
   const runtimeProviderId = boundSession?.providerResumeSessionId?.trim() ?? ''
   const hasRuntimeDebugIds = runtimeSurfaceId.length > 0 || runtimeProviderId.length > 0
+  const plannedRunner = node.dispatch?.runner ?? node.executorType
+  const actualProvider = boundSession?.pluginDisplayName?.trim() || boundSession?.pluginId?.trim() || null
+  const actualModel = boundSession?.usageStats?.model?.trim() || null
+  const runtimeMismatch = Boolean(
+    actualProvider
+      && (plannedRunner === 'codex' || plannedRunner === 'claude')
+      && !actualProvider.toLowerCase().includes(plannedRunner),
+  )
 
   // UI-simplification §2.6 — 进展 段次级动作。
   // Re-run / mark-down 从节点卡片 footer 搬过来,不再跟 primary action 抢注意力。
@@ -333,17 +425,43 @@ export function NodeInspectorModal({
 
         {/* canvas-spec §8 — surface 待确认 (gate awaiting a human confirm)
          *  DISTINCTLY from 卡住. `state.needsOwnerReview` is true when the run
-         *  is parked at a gateWait that needs the owner's go-ahead. There is no
-         *  dedicated confirm endpoint in api.ts, so we render the 待确认 banner
-         *  and point the user at the bound session (the confirm flow lives in
-         *  the session), per spec「if none, just show the 待确认 state」. */}
+         *  is parked at a gateWait that needs the owner's go-ahead. All three
+         *  decisions use the formal review endpoint and preserve artifact history. */}
         {!isTemplate && needsOwnerReview && (
-          <div className="planner-node-modal__progress-runtime-state is-awaiting">
-            <span className="planner-node-modal__progress-runtime-dot" aria-hidden />
-            <strong>待确认</strong>
-            <span className="planner-node-modal__progress-runtime-session">
-              这一步做完了,等你确认后才会推进
-            </span>
+          <div className="planner-node-modal__review-panel">
+            <div className="planner-node-modal__progress-runtime-state is-awaiting">
+              <span className="planner-node-modal__progress-runtime-dot" aria-hidden />
+              <strong>待确认</strong>
+              <span className="planner-node-modal__progress-runtime-session">批准后才会推进下游</span>
+            </div>
+            <div className="planner-node-modal__review-actions">
+              <button type="button" className="is-primary" disabled={reviewBusy} onClick={() => void resolveReview('approve')}>
+                批准
+              </button>
+              <button type="button" disabled={reviewBusy} onClick={() => setReviewPanel((value) => value === 'changes' ? 'none' : 'changes')}>
+                要求修改
+              </button>
+              <button type="button" disabled={reviewBusy} onClick={() => setReviewPanel((value) => value === 'correct' ? 'none' : 'correct')}>
+                修订并批准
+              </button>
+            </div>
+            {reviewPanel === 'changes' && (
+              <div className="planner-node-modal__review-form">
+                <textarea value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} placeholder="说明需要修改什么；这段意见会发送给当前会话或带入下一次运行。" />
+                <button type="button" className="is-primary" disabled={reviewBusy || !reviewComment.trim()} onClick={() => void resolveReview('request_changes')}>
+                  {reviewBusy ? '提交中…' : '提交修改意见'}
+                </button>
+              </div>
+            )}
+            {reviewPanel === 'correct' && (
+              <div className="planner-node-modal__review-form">
+                <textarea value={reviewCorrection} onChange={(event) => setReviewCorrection(event.target.value)} placeholder="填写修订后的最终内容；原 AI 版本会保留在版本历史中。" />
+                <button type="button" className="is-primary" disabled={reviewBusy || !reviewCorrection.trim()} onClick={() => void resolveReview('approve', true)}>
+                  {reviewBusy ? '保存中…' : '保存新版本并批准'}
+                </button>
+              </div>
+            )}
+            {reviewError && <p className="planner-node-modal__review-error" role="alert">{reviewError}</p>}
           </div>
         )}
 
@@ -371,7 +489,7 @@ export function NodeInspectorModal({
                 : isRunning ? '运行中'
                 : wfs === 'ready_to_start' ? '未启动'
                 : wfs === 'pending' ? '未启动'
-                : wfs === 'done' ? '未启动'
+                : wfs === 'done' ? '已完成'
                 : null
               return (
                 <>
@@ -399,6 +517,14 @@ export function NodeInspectorModal({
                    *      只留最近消息 + 完成/最后活动时间,外加下方的「打开会话」导航。 */}
                   {hasSession && boundSession && showLiveDetails && (
                     <div className="planner-node-modal__progress-runtime-live">
+                      <span className="planner-node-modal__progress-runtime-live-row">
+                        <Route size={11} aria-hidden /> 计划 {plannedRunner} · 实际 {actualProvider ?? '未知'} · {actualModel ?? '模型未知'}
+                      </span>
+                      {runtimeMismatch && (
+                        <span className="planner-node-modal__progress-runtime-live-row planner-node-modal__runtime-mismatch">
+                          <AlertTriangle size={11} aria-hidden /> 实际 Provider 与节点计划不一致
+                        </span>
+                      )}
                       {showLiveDetails && !isDone && boundSession.currentTask && (
                         <span className="planner-node-modal__progress-runtime-live-row">
                           <Route size={11} aria-hidden /> {boundSession.currentTask}
@@ -451,7 +577,7 @@ export function NodeInspectorModal({
                       </button>
                     )
                   )}
-                  {!hasSession && node.status === 'ready' && canChangeStatus && onReplaceSession && (
+                  {!hasSession && node.executorType !== 'human' && node.status === 'ready' && canChangeStatus && onReplaceSession && (
                     <button
                       type="button"
                       className="planner-node-modal__progress-runtime-action is-primary"
@@ -460,6 +586,19 @@ export function NodeInspectorModal({
                     >
                       <Sparkles size={12} aria-hidden /> 开干 · 起会话
                     </button>
+                  )}
+                  {!hasSession && node.executorType === 'human' && node.status !== 'done' && !needsOwnerReview && (
+                    <div className="planner-node-modal__human-output">
+                      <textarea
+                        value={humanOutput}
+                        onChange={(event) => setHumanOutput(event.target.value)}
+                        placeholder="填写这一步的完成说明或最终产物内容"
+                      />
+                      <button type="button" className="planner-node-modal__progress-runtime-action is-primary" disabled={reviewBusy || !humanOutput.trim()} onClick={() => void submitHumanOutput()}>
+                        <UserRound size={12} aria-hidden /> {reviewBusy ? '提交中…' : '填写并提交'}
+                      </button>
+                      {reviewError && <span className="planner-node-modal__review-error" role="alert">{reviewError}</span>}
+                    </div>
                   )}
                 </>
               )

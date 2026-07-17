@@ -161,7 +161,7 @@ describe('InputCardSections (modal variant)', () => {
     render(<InputCardSections node={node({ dependsOnNodeIds: ['dep-a'] })} variant="modal" />)
     expect(screen.getByText('上游')).toBeInTheDocument()
     expect(screen.getByText('外部源')).toBeInTheDocument()
-    expect(screen.getByText('接入数据源')).toBeInTheDocument()
+    expect(screen.getByText('添加输入')).toBeInTheDocument()
     expect(screen.getByText('dep-a')).toBeInTheDocument()
     // 旧的硬编码「全量传入」已移除 —— fallback 不再假造 EdgeMode
     expect(screen.queryByText('全量传入')).not.toBeInTheDocument()

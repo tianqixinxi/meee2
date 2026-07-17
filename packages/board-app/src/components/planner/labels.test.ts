@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveDisplayStatus, isSessionEnded } from './labels'
+import { deriveDisplayStatus, isSessionEnded, primaryActionLabel, requiredInputActionLabel } from './labels'
 import type { PlannerWorkflowRunState, PlanningNode, PlanningNodeStatus } from '../../types'
 
 function node(
@@ -42,16 +42,15 @@ describe('deriveDisplayStatus', () => {
     }
   })
 
-  // 状态跟会话走(2026-06-02): 工作节点 done 且无活会话 → 回到「未启动」
-  // (做完=会话结束=回未启动,产物留账本)。
-  it('maps a done step/session work node with no live session to 未启动', () => {
+  // 节点结果与会话存活状态分离: done 永远保留「已完成」结果真相。
+  it('maps a done step/session work node to 已完成', () => {
     expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'step' }))).toEqual({
-      label: '未启动',
-      tone: 'ready',
+      label: '已完成',
+      tone: 'done',
     })
     expect(deriveDisplayStatus(node({ workflowRunState: null, status: 'done', nodeKind: 'session' }))).toEqual({
-      label: '未启动',
-      tone: 'ready',
+      label: '已完成',
+      tone: 'done',
     })
   })
 
@@ -59,7 +58,7 @@ describe('deriveDisplayStatus', () => {
   // running → 「运行中」—— 外部 workflow 的 agent 节点没有可重开的会话语义。
   it('maps external mirror nodes by workflowRunState', () => {
     expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'external' }))).toEqual({
-      label: '完成',
+      label: '已完成',
       tone: 'done',
     })
     expect(deriveDisplayStatus(node({ workflowRunState: 'running', nodeKind: 'external' }))).toEqual({
@@ -67,17 +66,16 @@ describe('deriveDisplayStatus', () => {
       tone: 'running',
     })
     expect(deriveDisplayStatus(node({ workflowRunState: null, status: 'done', nodeKind: 'external' }))).toEqual({
-      label: '完成',
+      label: '已完成',
       tone: 'done',
     })
   })
 
-  // 状态跟会话走: 只要绑定会话还活着,done / 未启动 的节点都显示「在线待命」
-  // —— 消除"显示已结束却能打开活会话"的矛盾。
-  it('maps a node with a live bound session to 在线待命', () => {
+  // done 结果优先；尚未执行但绑定了活会话时，显示会话在线待命。
+  it('keeps done result separate from a live bound session', () => {
     expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'step' }), true)).toEqual({
-      label: '在线待命',
-      tone: 'running',
+      label: '已完成',
+      tone: 'done',
     })
     expect(deriveDisplayStatus(node({ workflowRunState: 'pending', nodeKind: 'step' }), true)).toEqual({
       label: '在线待命',
@@ -98,13 +96,13 @@ describe('deriveDisplayStatus', () => {
     })
   })
 
-  it('keeps 完成 for non-work nodes (subCanvas / artifact / external)', () => {
+  it('keeps 已完成 for non-work nodes (subCanvas / artifact / external)', () => {
     expect(deriveDisplayStatus(node({ workflowRunState: 'done', nodeKind: 'subCanvas' }))).toEqual({
-      label: '完成',
+      label: '已完成',
       tone: 'done',
     })
     expect(deriveDisplayStatus(node({ workflowRunState: null, status: 'done', nodeKind: 'artifact' }))).toEqual({
-      label: '完成',
+      label: '已完成',
       tone: 'done',
     })
   })
@@ -129,6 +127,30 @@ describe('deriveDisplayStatus', () => {
     expect(
       deriveDisplayStatus(node({ workflowRunState: null, status: 'draft' as PlanningNodeStatus })),
     ).toEqual({ label: '未启动', tone: 'ready' })
+  })
+})
+
+describe('required input primary action', () => {
+  it('takes precedence over spawning AI or submitting human work', () => {
+    for (const executorType of ['claude', 'human']) {
+      expect(primaryActionLabel({
+        mode: 'design',
+        hasSelectedDelivery: true,
+        runStatus: 'ready_to_start',
+        workflowRunState: 'ready_to_start',
+        sessionId: null,
+        nodeKind: 'step',
+        status: 'ready',
+        blockers: [],
+        canChangeStatus: true,
+        canCreateSession: true,
+        creatingSession: false,
+        executorType,
+        missingRequiredInput: 'PDF brief',
+      })).toBe('add-input')
+    }
+    expect(requiredInputActionLabel('PDF brief')).toBe('添加 PDF')
+    expect(requiredInputActionLabel('海报模板')).toBe('选择模板')
   })
 })
 

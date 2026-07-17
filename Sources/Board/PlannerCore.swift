@@ -3042,6 +3042,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     /// A change carries a change `kind` outside the known PlanChange.Kind set.
     case unknownChangeKind(String)
     case invalidNodeOutput(String)
+    case nodeNotReviewable(String)
     case activeSessionExists(nodeId: String)
     /// Direct artifact read/write addressed an artifact (by id or reference)
     /// that doesn't exist on the canvas.
@@ -3099,6 +3100,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "Meee2 AI proposal uses unknown change kind: \(kind)"
         case .invalidNodeOutput(let hint):
             return hint
+        case .nodeNotReviewable(let id):
+            return "planning node is not awaiting review: \(id)"
         case .activeSessionExists(let nodeId):
             return "node \(nodeId) already has an active session; complete or split the node before starting another"
         case .artifactNotFound(let selector):
@@ -6937,9 +6940,11 @@ final class PlannerStore {
                 return record
             }
             guard runState == .gateWait else {
-                throw PlannerCoreError.invalidNodeOutput(
-                    "Only a node awaiting review (gate-wait) can be confirmed."
-                )
+                throw PlannerCoreError.nodeNotReviewable(nodeId)
+            }
+            for artifactIndex in record.artifacts.indices where
+                record.artifacts[artifactIndex].nodeId == nodeId {
+                record.artifacts[artifactIndex].reviewStatus = "approved"
             }
             record.nodes[nodeIndex].status = .done
             record.nodes[nodeIndex].workflowRunState = .done
@@ -6976,6 +6981,54 @@ final class PlannerStore {
                 type: .nodeStateChanged,
                 nodeId: nodeId,
                 summary: "Confirmed review for \(confirmedTitle) — node done, downstream unblocked"
+            ))
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    /// Sends an awaiting-review node back for another pass without losing the
+    /// submitted artifacts. A bound session can continue in-place; otherwise
+    /// the node becomes startable again. Downstream nodes remain blocked.
+    func requestNodeReviewChanges(
+        canvasId: String,
+        nodeId: String,
+        comment: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            guard record.nodes[nodeIndex].workflowRunState == .gateWait else {
+                throw PlannerCoreError.nodeNotReviewable(nodeId)
+            }
+            let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw PlannerCoreError.invalidNodeOutput("Review feedback is required when requesting changes.")
+            }
+            let hasSession = record.nodes[nodeIndex].sessionId?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            record.nodes[nodeIndex].status = .ready
+            record.nodes[nodeIndex].workflowRunState = hasSession ? .awaitingInput : .readyToStart
+            record.nodes[nodeIndex].blockedReason = trimmed
+            record.nodes[nodeIndex].outputSubmittedAt = nil
+            for artifactIndex in record.artifacts.indices where
+                record.artifacts[artifactIndex].nodeId == nodeId {
+                record.artifacts[artifactIndex].reviewStatus = "rejected"
+            }
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = hasSession ? .awaitingInput : .readyToStart
+                state.finishedAt = nil
+                Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: hasSession)
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Changes requested: \(trimmed)"
             ))
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
@@ -9546,6 +9599,22 @@ enum PlannerBoardBridge {
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
+    static func requestNodeReviewChanges(
+        nodeId: String,
+        comment: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.requestNodeReviewChanges(canvasId: canvasId, nodeId: nodeId, comment: comment)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
     static func updateNodeSchedule(
         nodeId: String,
         schedule: PlannerNodeSchedule?,
@@ -9651,7 +9720,26 @@ enum PlannerBoardBridge {
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         let workspacePath = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
         var normalizedOutput = output
-        normalizedOutput.artifacts = try output.artifacts.map { artifact in
+        let hasExplicitRoute = !(normalizedOutput.message?.routeTo.isEmpty ?? true)
+            || normalizedOutput.artifacts.contains { !$0.routeTo.isEmpty }
+        if submittedByKind == .human && !hasExplicitRoute {
+            let downstream = state.nodes
+                .filter { ($0.dependsOnNodeIds ?? []).contains(nodeId) }
+                .map(\.id)
+                .sorted()
+            if !downstream.isEmpty {
+                if normalizedOutput.message != nil {
+                    normalizedOutput.message?.routeTo = downstream
+                }
+                normalizedOutput.artifacts = normalizedOutput.artifacts.map { artifact in
+                    var next = artifact
+                    next.routeTo = downstream
+                    return next
+                }
+            }
+        }
+        let routedArtifacts = normalizedOutput.artifacts
+        normalizedOutput.artifacts = try routedArtifacts.map { artifact in
             let reference = artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
             let artifactId = "artifact-\(canvasId)-\(nodeId)-\(stableArtifactSuffix(reference))"
             let payload = try PlannerArtifactStorage.normalizePayload(

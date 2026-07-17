@@ -8499,6 +8499,19 @@ html.board-empty-omni .canvas-toolbar__panel {
 .workflow-approval-banner__copy .workflow-approval-banner__error { color: var(--danger, #e57373); }
 .workflow-approval-banner__actions { display: flex; gap: 7px; flex: 0 0 auto; }
 .workflow-approval-banner__actions button { min-width: 72px; min-height: 32px; padding: 6px 12px; border-radius: 8px; }
+.workflow-approval-modal-backdrop { position: fixed; inset: 0; z-index: var(--z-dialog, 10000); display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.58); }
+.workflow-approval-modal { display: grid; width: min(760px, calc(100vw - 48px)); max-height: min(760px, calc(100vh - 48px)); overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-paper); box-shadow: 0 24px 80px rgba(0,0,0,.4); color: var(--text); }
+.workflow-approval-modal header,
+.workflow-approval-modal footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.workflow-approval-modal header div { display: grid; gap: 4px; }
+.workflow-approval-modal header span { color: var(--text-dim); font-size: 12px; }
+.workflow-approval-modal__body { overflow: auto; padding: 14px 16px; }
+.workflow-approval-modal__body ol { display: grid; gap: 7px; margin: 12px 0; padding-left: 22px; }
+.workflow-approval-modal__body li { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-muted); }
+.workflow-approval-modal__body li strong,
+.workflow-approval-modal__body li span { display: block; }
+.workflow-approval-modal__body li span { margin-top: 3px; color: var(--text-dim); font-size: 11px; }
+.workflow-approval-modal footer { justify-content: flex-end; border-top: 1px solid var(--border); border-bottom: 0; }
 .workflow-approval-banner ~ .update-banner { top: 84px; }
 @media (max-width: 760px) {
   .workflow-approval-banner {
@@ -15579,6 +15592,28 @@ button.template-gallery__tag {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.template-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-muted);
+}
+
+.template-guide--compact { grid-template-columns: 1fr; }
+.template-guide strong { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+.template-guide p,
+.template-guide ul,
+.template-guide ol { margin: 5px 0 0; color: var(--text); font-size: 12px; line-height: 1.5; }
+.template-guide ul,
+.template-guide ol { padding-left: 18px; }
+
+@media (max-width: 760px) {
+  .template-guide { grid-template-columns: 1fr; }
 }
 
 

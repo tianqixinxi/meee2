@@ -215,7 +215,7 @@ export function InputCardSections({
             {legacyExternal.map((row, index) => {
               const lastSync = row.sync_session
                 ? `已同步 · 来自 ${shortRef(row.sync_session)}`
-                : '尚未同步'
+                : '静态引用'
               return (
                 <li
                   key={`${row.connector}:${row.ref}:${index}`}
@@ -257,7 +257,7 @@ export function InputCardSections({
           }}
         >
           <Plus size={11} aria-hidden />
-          接入数据源
+          添加输入
         </button>
       </section>
 
@@ -329,6 +329,10 @@ export function connectorFromSource(source: ContextSource): string {
 export function shortRef(ref: string): string {
   const trimmed = (ref || '').trim()
   if (!trimmed) return '—'
+  if (trimmed.startsWith('/')) {
+    const parts = trimmed.split('/').filter(Boolean)
+    return parts[parts.length - 1] ?? '本地文件'
+  }
   if (trimmed.length <= 36) return trimmed
   return `${trimmed.slice(0, 16)}…${trimmed.slice(-16)}`
 }

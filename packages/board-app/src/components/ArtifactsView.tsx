@@ -82,9 +82,10 @@ export function ArtifactsView({
   const [activeGroup, setActiveGroup] = useState<ArtifactTypeGroupId | 'all'>('all')
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
   const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
-  const [stateFilter, setStateFilter] = useState<StateFilter>('ready')
+  const [stateFilter, setStateFilter] = useState<StateFilter>('all')
   const [artifactItems, setArtifactItems] = useState<ArtifactIndexItem[]>([])
   const [artifactTotal, setArtifactTotal] = useState(0)
+  const [availableTotal, setAvailableTotal] = useState(0)
   const [canvasCount, setCanvasCount] = useState(0)
   const [counts, setCounts] = useState(() => artifactGroupCounts([]))
   const [artifactCursor, setArtifactCursor] = useState<string | null>(null)
@@ -153,6 +154,7 @@ export function ArtifactsView({
         if (cancelled || pageRequestSequenceRef.current !== sequence) return
         setArtifactItems(pageItemsToIndex(page.items))
         setArtifactTotal(page.total)
+        setAvailableTotal(page.availableTotal ?? page.total)
         setCanvasCount(page.canvasCount)
         setCounts(normalizedGroupCounts(page.groupCounts))
         setArtifactCursor(page.cursor ?? null)
@@ -426,12 +428,29 @@ export function ArtifactsView({
                 setWindowStart(Math.min(maxStart, Math.max(0, estimatedStart)))
               }}
             >
-              {allItems.length === 0 ? (
+              {allItems.length === 0 && !error ? (
                 <div className="artifacts-empty">
                   <Archive size={15} aria-hidden />
-                  <span>{t('artifacts.empty')}</span>
+                  <span>{availableTotal > 0 ? t('artifacts.filteredEmpty') : t('artifacts.neverProduced')}</span>
+                  {availableTotal > 0 ? (
+                    <button type="button" className="ghost" onClick={() => {
+                      setQuery('')
+                      setDebouncedQuery('')
+                      setActiveGroup('all')
+                      setScopeFilter('all')
+                      setCanvasFilter('all')
+                      setStateFilter('all')
+                      onClearSessionFilter?.()
+                    }}>
+                      {t('artifacts.clearFilters')}
+                    </button>
+                  ) : activeCanvasId ? (
+                    <button type="button" className="ghost" onClick={() => onOpenCanvas(activeCanvasId)}>
+                      {t('artifacts.openCanvasButton')}
+                    </button>
+                  ) : null}
                 </div>
-              ) : (
+              ) : allItems.length > 0 ? (
                 <table className="artifacts-table">
                   <thead>
                     <tr>
@@ -482,7 +501,7 @@ export function ArtifactsView({
                     )}
                   </tbody>
                 </table>
-              )}
+              ) : null}
               {hasMore && (
                 <div className="artifacts-index__pagination" role="status" aria-live="polite">
                   <button

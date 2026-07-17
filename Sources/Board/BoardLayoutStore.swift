@@ -143,6 +143,30 @@ public final class BoardLayoutStore {
     }
 
     public struct TemplateMetadata: Codable, Equatable {
+        public struct GuideInput: Codable, Equatable {
+            public var label: String
+            public var nodeTitle: String?
+
+            public init(label: String, nodeTitle: String? = nil) {
+                self.label = label
+                self.nodeTitle = nodeTitle
+            }
+        }
+
+        public struct Guide: Codable, Equatable {
+            public var useCase: String
+            public var requiredInputs: [GuideInput]
+            public var expectedOutputs: [String]
+            public var quickStart: [String]
+
+            public init(useCase: String, requiredInputs: [GuideInput], expectedOutputs: [String], quickStart: [String]) {
+                self.useCase = useCase
+                self.requiredInputs = requiredInputs
+                self.expectedOutputs = expectedOutputs
+                self.quickStart = quickStart
+            }
+        }
+
         public var description: String
         public var icon: String
         public var tags: [String]
@@ -153,6 +177,7 @@ public final class BoardLayoutStore {
         public var updatedBy: String?
         public var updatedAt: Date
         public var revisions: [TemplateRevision]
+        public var guide: Guide?
 
         public init(
             description: String = "",
@@ -164,7 +189,8 @@ public final class BoardLayoutStore {
             replacedFromCanvasId: String? = nil,
             updatedBy: String? = nil,
             updatedAt: Date = Date(),
-            revisions: [TemplateRevision] = []
+            revisions: [TemplateRevision] = [],
+            guide: Guide? = nil
         ) {
             self.description = description
             self.icon = icon
@@ -176,6 +202,7 @@ public final class BoardLayoutStore {
             self.updatedBy = updatedBy
             self.updatedAt = updatedAt
             self.revisions = revisions
+            self.guide = guide
         }
     }
 

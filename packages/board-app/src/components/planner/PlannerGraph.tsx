@@ -17,6 +17,7 @@ import {
   assignPlannerNode,
   bindPlannerSessionToNode,
   bindPlannerNodeInput,
+  uploadPlannerNodeInputFile,
   createPlannerDeliveryPipeline,
   deletePlannerNode,
   detachPlannerNodeSession,
@@ -89,7 +90,7 @@ import {
   type PlannerNodeSelectionDetail,
 } from '../../lib/guide'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
-import { AttachDataSourcePopover } from './AttachDataSourcePopover'
+import { AttachDataSourcePopover, type NodeInputSubmission } from './AttachDataSourcePopover'
 import { NodeInspectorModal, truncateMessageText } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
@@ -138,6 +139,7 @@ const edgeTypes = {
 const PANEL_WIDTH_KEY = 'meee2.planner.aiPanelWidth'
 const PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
 const IO_ARTIFACT_VISIBILITY_KEY_PREFIX = 'meee2.planner.ioArtifacts'
+const TEMPLATE_QUICK_START_PENDING_KEY = 'meee2.templateQuickStart.pending'
 const DEFAULT_PANEL_WIDTH = 420
 const MIN_PANEL_WIDTH = 340
 const MAX_PANEL_WIDTH = 680
@@ -185,6 +187,7 @@ function PlannerGraphInner({
   }, [plannerState?.nodes])
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [templateQuickStart, setTemplateQuickStart] = useState<TemplateQuickStart | null>(null)
   const [guidedNodeId, setGuidedNodeId] = useState<string | null>(null)
   const guidedNodeTimerRef = useRef<number | null>(null)
   const guideDispatchTimerRef = useRef<number | null>(null)
@@ -344,6 +347,19 @@ function PlannerGraphInner({
   useEffect(() => {
     refreshMCPStatus()
   }, [refreshMCPStatus, canvasId])
+
+  useEffect(() => {
+    if (variant !== 'board' || plannerState?.canvas.id !== canvasId) return
+    const raw = window.sessionStorage.getItem(TEMPLATE_QUICK_START_PENDING_KEY)
+    if (!raw) return
+    window.sessionStorage.removeItem(TEMPLATE_QUICK_START_PENDING_KEY)
+    try {
+      const parsed = JSON.parse(raw) as TemplateQuickStart
+      if (parsed.guide?.quickStart?.length) setTemplateQuickStart(parsed)
+    } catch {
+      // Invalid one-shot state should never block the newly created canvas.
+    }
+  }, [canvasId, plannerState?.canvas.id, variant])
 
   useEffect(() => {
     if (clearRevision <= 0) return
@@ -967,51 +983,52 @@ function PlannerGraphInner({
     setAttachDataSourceNodeId(nodeId)
   }, [])
 
-  // Submit handler from the popover. No-op + TODO today: real wiring lives
-  // in INT-2 (Notion + 6 others) once the connector hub exposes both the
-  // connector list and a `POST /api/planner/.../nodes/:id/external-bindings`
-  // endpoint. The call is best-effort so the popover can close cleanly.
   const handleSubmitAttachDataSource = useCallback(async (
     nodeId: string,
-    input: { connectorSlug: string; ref: string },
+    input: NodeInputSubmission,
   ) => {
-    // TODO(INT-2 / ENG-3 follow-up): replace this with the real
-    // bind-external-input API. Today the canvas DTO has no field for the
-    // resulting `NodeContractExternalInput[]` either; once it does, refresh
-    // graph state here.
-    try {
-      await fetch(
-        `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/external-bindings`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ connector: input.connectorSlug, ref: input.ref }),
+    let state: PlannerGraphState
+    if (input.kind === 'file') {
+      state = await uploadPlannerNodeInputFile(canvasId, nodeId, input.input, input.file)
+    } else if (input.kind === 'url') {
+      state = await bindPlannerNodeInput(canvasId, nodeId, {
+        input: input.input,
+        source: { kind: 'url', url: input.url, title: input.url },
+      })
+    } else {
+      state = await bindPlannerNodeInput(canvasId, nodeId, {
+        input: input.input,
+        source: {
+          kind: 'integration',
+          integrationId: input.integrationId,
+          entityKind: 'resource',
+          entityRef: input.entityRef,
+          title: `${input.integrationId}: ${input.entityRef}`,
         },
-      )
-    } catch {
-      // Swallow — the endpoint may not exist yet. The popover surfaces no
-      // network error so the user sees the action as accepted; INT-2 will
-      // upgrade this to a real bind that returns the new contract state.
+      })
     }
-    // eslint-disable-next-line no-console
-    console.info(
-      '[UI-4 TODO] attach data source no-op',
-      { canvasId, nodeId, connector: input.connectorSlug, ref: input.ref },
-    )
-  }, [canvasId])
+    handleGraphStateChanged(state)
+  }, [canvasId, handleGraphStateChanged])
 
-  // Refresh-now per external row. Stub today; INT-2 / ENG-3 will dispatch
-  // the bound sync session and bump a "last synced at" timestamp on the row.
   const handleRefreshExternalInput = useCallback((
     nodeId: string,
     external: NodeContractExternalInput,
   ) => {
-    // eslint-disable-next-line no-console
-    console.info(
-      '[UI-4 TODO] refresh external input (no-op until INT-2)',
-      { canvasId, nodeId, connector: external.connector, ref: external.ref, syncSession: external.sync_session },
-    )
-  }, [canvasId])
+    const node = plannerState?.nodes.find((item) => item.id === nodeId)
+    const slot = node?.schema.inputs[0]
+    if (!slot) return
+    bindPlannerNodeInput(canvasId, nodeId, {
+      input: slot,
+      source: {
+        kind: 'integration',
+        integrationId: external.connector,
+        entityKind: 'resource',
+        entityRef: external.ref,
+      },
+    }).then(handleGraphStateChanged).catch((cause) => notifyError(
+      cause instanceof Error ? cause.message : 'Failed to refresh external input',
+    ))
+  }, [canvasId, handleGraphStateChanged, notifyError, plannerState?.nodes])
 
   // Dialogue retention popover: hook is currently a logger; the real wiring
   // will dispatch a refine-session-prompt proposal (ENG-2 endpoint) or a
@@ -1646,7 +1663,7 @@ function PlannerGraphInner({
       // chat panel so the user can decide whether to re-ask with an edit
       // verb. The panel auto-expands on first reply (see PlannerProposalPanel).
       emitPlannerEvent('planner.answer_only', { canvasId, message: trimmed, intent: 'answer' })
-      const markdown = answerOnlyClarification(trimmed)
+      const markdown = answerOnlyClarification(trimmed, plannerState, selectedNode)
       setAnswerOnlyReply({ id: Date.now(), markdown })
       return
     }
@@ -1800,6 +1817,7 @@ function PlannerGraphInner({
   const closedBoundSessionButtonLabel = closedBoundSessions.some((item) => item.action === 'resume')
     ? 'Recover missing'
     : 'Recreate missing'
+  const runtimeSummary = runtimeSummaryForNodes(plannerState?.nodes ?? [])
 
   return (
     <section className="planner-workspace" aria-label="Meee2 AI graph" data-guide-target="planner-workspace">
@@ -1888,6 +1906,7 @@ function PlannerGraphInner({
           </div>
         )}
         <div className="planner-flow" data-guide-target="planner-flow">
+          {runtimeSummary && <div className="planner-runtime-summary" aria-label="Planned runtimes">{runtimeSummary}</div>}
           {((showWorkspacePreview && activeProposal) || hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
               {showWorkspacePreview && activeProposal && (
@@ -2066,9 +2085,30 @@ function PlannerGraphInner({
       {attachDataSourceNodeId && (
         <AttachDataSourcePopover
           nodeId={attachDataSourceNodeId}
+          inputs={plannerState?.nodes.find((node) => node.id === attachDataSourceNodeId)?.schema.inputs ?? []}
           onClose={() => setAttachDataSourceNodeId(null)}
           onSubmit={(input) => handleSubmitAttachDataSource(attachDataSourceNodeId, input)}
         />
+      )}
+      {templateQuickStart && plannerState && (
+        <div className="planner-quick-start-backdrop">
+          <div className="planner-quick-start" role="dialog" aria-modal="true" aria-label={`Quick start - ${templateQuickStart.templateName}`}>
+            <header><div><strong>{templateQuickStart.templateName}</strong><span>Quick Start · only shown once</span></div><button type="button" onClick={() => setTemplateQuickStart(null)}>×</button></header>
+            <p>{templateQuickStart.guide.useCase}</p>
+            <ol>{templateQuickStart.guide.quickStart.map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol>
+            {missingTemplateInputs(templateQuickStart, plannerState.nodes).length > 0 && (
+              <div className="planner-quick-start__missing">
+                <strong>Missing inputs</strong>
+                {missingTemplateInputs(templateQuickStart, plannerState.nodes).map(({ input, node }) => (
+                  <button key={`${node.id}-${input}`} type="button" onClick={() => { setTemplateQuickStart(null); handleOpenNodeDetails(node.id) }}>
+                    {input} → {node.title}
+                  </button>
+                ))}
+              </div>
+            )}
+            <footer><button type="button" className="primary" onClick={() => setTemplateQuickStart(null)}>Got it</button></footer>
+          </div>
+        </div>
       )}
       {assignDialogNodeId && assignDialogNode && (
         <AssignNodeDialog
@@ -2092,6 +2132,43 @@ function PlannerGraphInner({
       )}
     </section>
   )
+}
+
+interface TemplateQuickStart {
+  templateId: string
+  templateName: string
+  guide: {
+    useCase: string
+    requiredInputs: Array<{ label: string; nodeTitle?: string | null; nodeId?: string | null }>
+    expectedOutputs: string[]
+    quickStart: string[]
+  }
+}
+
+function missingTemplateInputs(value: TemplateQuickStart, nodes: PlanningNode[]): Array<{ input: string; node: PlanningNode }> {
+  return value.guide.requiredInputs.flatMap((required) => {
+    const node = nodes.find((candidate) =>
+      (required.nodeId && candidate.id === required.nodeId)
+      || (required.nodeTitle && candidate.title === required.nodeTitle),
+    )
+    if (!node) return []
+    const bound = node.contextSources.some((source) => source.title.trim().toLowerCase() === required.label.trim().toLowerCase())
+    return bound ? [] : [{ input: required.label, node }]
+  })
+}
+
+function runtimeSummaryForNodes(nodes: PlanningNode[]): string {
+  const counts = new Map<string, number>()
+  for (const node of nodes) {
+    if ((node.nodeKind ?? 'step') !== 'step' && node.nodeKind !== 'session') continue
+    const runner = node.dispatch?.runner ?? node.executorType
+    const label = runner === 'codex' ? 'Codex' : runner === 'claude' ? 'Claude' : runner === 'human' ? 'Human' : 'Default'
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  return ['Codex', 'Claude', 'Human', 'Default']
+    .filter((label) => counts.has(label))
+    .map((label) => `${counts.get(label)} ${label}`)
+    .join(' · ')
 }
 
 function readStoredPanelCollapsed(): boolean {
@@ -2233,14 +2310,49 @@ function clampPanelWidth(width: number): number {
 // edit if they really did want one. This is a placeholder until a textual
 // answer-only LLM call is wired in (TODO: route through `/api/llm/chat`
 // without the proposal-generation system prompt).
-function answerOnlyClarification(message: string): string {
+function answerOnlyClarification(
+  message: string,
+  state: PlannerCanvasState | null,
+  selectedNode: PlanningNode | null,
+): string {
+  if (!state) return '当前画布还没有加载完成；刷新后我可以根据实际节点、输入和产物说明下一步。'
+  const normalized = message.toLowerCase()
+  const target = selectedNode ?? state.nodes.find((node) => node.status !== 'done') ?? state.nodes[0]
+  if (/怎么用|如何用|how to|template|模板/.test(normalized)) {
+    const roots = state.nodes.filter((node) => (node.dependsOnNodeIds ?? []).length === 0)
+    const inputLines = roots.flatMap((node) => node.schema.inputs.map((input) => `- **${input}** → ${node.title}`))
+    return [
+      `### ${state.canvas.title} 的使用顺序`,
+      '',
+      inputLines.length ? '先添加这些输入：' : '这个画布没有声明必填外部输入。',
+      ...inputLines,
+      '',
+      `然后从 ${roots.map((node) => `**${node.title}**`).join('、') || '第一个未完成节点'} 开始。节点完成后，正式结果会进入 Artifacts。`,
+      '',
+      '这次只是回答问题，没有修改画布。',
+    ].join('\n')
+  }
+  if (/为什么|不能开始|blocked|stuck|卡住|开干/.test(normalized)) {
+    if (!target) return '当前画布没有可执行节点。'
+    const missingInputs = target.schema.inputs.filter((input) => !target.contextSources.some((source) => source.title.toLowerCase() === input.toLowerCase()))
+    const dependencies = (target.dependsOnNodeIds ?? []).filter((id) => state.nodes.find((node) => node.id === id)?.status !== 'done')
+    return [
+      `**${target.title}** 当前状态：${target.workflowRunState ?? target.status}。`,
+      missingInputs.length ? `缺少输入：${missingInputs.join('、')}。` : '输入合同没有发现缺口。',
+      dependencies.length ? `仍在等待上游节点：${dependencies.map((id) => state.nodes.find((node) => node.id === id)?.title ?? id).join('、')}。` : '上游依赖已满足。',
+      target.blockedReason ? `阻塞原因：${target.blockedReason}` : '',
+      '这次只是诊断，没有修改画布。',
+    ].filter(Boolean).join('\n\n')
+  }
+  if (/产物|artifact|output|成果|结果/.test(normalized)) {
+    const artifacts = state.artifacts ?? []
+    return `当前画布有 **${artifacts.length}** 个正式产物记录，来自 ${new Set(artifacts.map((artifact) => artifact.nodeId)).size} 个节点。打开 Artifacts 可查看最新版本和历史版本。`
+  }
   return [
-    'I read your message as a **question** about the current graph, not a request to change it, so I did not modify the canvas.',
-    '',
-    `> ${message.replace(/\n/g, ' ')}`,
-    '',
-    'If you want me to actually edit the graph, re-send with an explicit verb — e.g. "add a review step", "rename node X to …", "split this node into …", "改成 …", "加一个 …".',
-  ].join('\n')
+    `当前画布有 ${state.nodes.length} 个节点；${state.nodes.filter((node) => node.status === 'done').length} 个已完成，${state.nodes.filter((node) => node.workflowRunState === 'running').length} 个运行中。`,
+    target ? `当前建议关注：**${target.title}**。` : '',
+    '这次被识别为问答，因此没有生成或应用修改提案。',
+  ].filter(Boolean).join('\n\n')
 }
 
 function shouldInspectDrift(

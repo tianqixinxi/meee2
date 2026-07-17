@@ -741,6 +741,16 @@ export interface CanvasTemplateNodeSpec {
   doerId?: string | null
   positionHint?: Record<string, number> | null
   widget?: unknown
+  inputs?: string[] | null
+  outputs?: string[] | null
+  goal?: string | null
+}
+
+export interface CanvasTemplateGuide {
+  useCase: string
+  requiredInputs: Array<{ label: string; nodeTitle?: string | null }>
+  expectedOutputs: string[]
+  quickStart: string[]
 }
 
 export type CanvasTemplateSource = 'official' | 'team' | 'private' | 'canvas-script'
@@ -774,6 +784,7 @@ export interface CanvasTemplate {
   renderProfile?: CanvasRenderProfile | null
   renderObjects?: CanvasObject[]
   renderRelations?: CanvasRelation[]
+  guide?: CanvasTemplateGuide | null
 }
 
 export interface CanvasTemplateCatalog {
@@ -861,6 +872,7 @@ export interface TemplateMetadataInput {
   tags?: string[]
   icon?: string
   defaultCanvasKind?: CanvasKind
+  guide?: CanvasTemplateGuide
 }
 
 export function createTemplateFromCanvas(input: TemplateMetadataInput & { canvasId: string }): Promise<CanvasList> {
@@ -1828,6 +1840,32 @@ export function submitPlannerNodeOutput(
   )
 }
 
+export function submitHumanPlannerNodeOutput(
+  canvasId: string,
+  nodeId: string,
+  output: PlannerNodeOutput,
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/human-output`,
+    { method: 'POST', body: JSON.stringify(output) },
+  )
+}
+
+export function resolvePlannerNodeReview(
+  canvasId: string,
+  nodeId: string,
+  input: {
+    decision: 'approve' | 'request_changes'
+    comment?: string
+    correctedOutput?: PlannerNodeOutput
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/review`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+}
+
 export function runCanvasSceneAction(
   canvasId: string,
   input: {
@@ -2049,9 +2087,13 @@ export function bindPlannerNodeInput(
   nodeId: string,
   input: {
     input: string
-    reference: string
+    reference?: string
     kind?: ContextSourceKind
     title?: string
+    source?:
+      | { kind: 'url'; url: string; title?: string }
+      | { kind: 'integration'; integrationId: string; entityKind?: string; entityRef: string; title?: string }
+      | { kind: 'file'; reference: string; title?: string }
   },
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
@@ -2059,6 +2101,27 @@ export function bindPlannerNodeInput(
     {
       method: 'PATCH',
       body: JSON.stringify(input),
+    },
+  )
+}
+
+export async function uploadPlannerNodeInputFile(
+  canvasId: string,
+  nodeId: string,
+  input: string,
+  file: File,
+): Promise<PlannerGraphState> {
+  const dataBase64 = await fileToBase64(file)
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/inputs/files`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        input,
+        filename: file.name || 'input',
+        contentType: file.type || 'application/octet-stream',
+        dataBase64,
+      }),
     },
   )
 }

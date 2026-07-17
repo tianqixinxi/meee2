@@ -46,6 +46,7 @@ function renderView(overrides: Partial<ComponentProps<typeof TemplatesView>> = {
 
 describe('TemplatesView Claude Code workflow imports', () => {
   beforeEach(() => {
+    window.sessionStorage.clear()
     apiMocks.fetchTeamMembers.mockResolvedValue({ members: [] })
     apiMocks.fetchCanvasTemplates.mockResolvedValue([])
     apiMocks.fetchTemplateCatalog.mockResolvedValue({ templates: [], tags: ['engineering', 'release', 'ops'] })
@@ -256,6 +257,13 @@ describe('TemplatesView Claude Code workflow imports', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use template' }))
     expect(screen.getByRole('dialog', { name: /Use template - Release Checklist/ })).toBeInTheDocument()
     expect(onApplyTemplate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Create canvas' }))
+    await waitFor(() => expect(onApplyTemplate).toHaveBeenCalledWith('official-release', 'Release Checklist', 'personal'))
+    expect(JSON.parse(window.sessionStorage.getItem('meee2.templateQuickStart.pending') ?? '{}')).toMatchObject({
+      templateId: 'official-release',
+      templateName: 'Release Checklist',
+      guide: { useCase: 'Ship safely' },
+    })
   })
 
   it('shows owner-gated team template editing', async () => {

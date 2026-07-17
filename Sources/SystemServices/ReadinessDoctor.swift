@@ -86,6 +86,8 @@ public enum ReadinessDoctor {
         checks.append(hookSocketCheck())
         checks.append(boardServerCheck())
         checks.append(mcpCheck(mcpStatus))
+        checks.append(localFirstCapabilitiesCheck())
+        checks.append(contentsOf: pluginLoadChecks())
         checks.append(contentsOf: storageChecks(
             stagedMCPServerPath: runtime.stagedMCPServerPath,
             expectedMCPServerPath: runtime.mcpServerPath
@@ -99,6 +101,58 @@ public enum ReadinessDoctor {
             requiredFailed: requiredFailed,
             checks: checks,
             checkedAt: Date()
+        )
+    }
+
+    private static func pluginLoadChecks() -> [ReadinessCheck] {
+        let failures = PluginManager.shared.failedPlugins
+        guard !failures.isEmpty else {
+            return [ReadinessCheck(
+                id: "dynamic-plugins",
+                title: "Dynamic plugins",
+                status: .pass,
+                severity: .informational,
+                detail: "No plugin load failures were detected.",
+                recoveryAction: nil,
+                metadata: [:],
+                settingsSection: "developer"
+            )]
+        }
+        return failures.map { failure in
+            ReadinessCheck(
+                id: "dynamic-plugin-\(failure.id)",
+                title: "Plugin failed: \(failure.name)",
+                status: .warn,
+                severity: .recommended,
+                detail: "\(failure.error) Open Settings → Developer for the plugin path and compatibility details.",
+                recoveryAction: nil,
+                metadata: [
+                    "pluginId": failure.id,
+                    "version": failure.version,
+                    "path": failure.dylibPath,
+                    "compatibilityError": failure.isCompatibilityError ? "true" : "false",
+                    "logPath": "/tmp/meee2.log"
+                ],
+                settingsSection: "developer"
+            )
+        }
+    }
+
+    private static func localFirstCapabilitiesCheck() -> ReadinessCheck {
+        ReadinessCheck(
+            id: "local-first-capabilities",
+            title: "Local-first capabilities",
+            status: .pass,
+            severity: .informational,
+            detail: "Local canvases, managed files, sessions, and artifacts work without sign-in. "
+                + "Agent integrations require their own connection; shared team services require an online account.",
+            recoveryAction: nil,
+            metadata: [
+                "withoutSignIn": "canvases,files,sessions,artifacts",
+                "integrationRequired": "agent integrations",
+                "onlineAccountRequired": "shared team services"
+            ],
+            settingsSection: "integrations"
         )
     }
 

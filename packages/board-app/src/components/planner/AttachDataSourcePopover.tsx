@@ -1,216 +1,169 @@
-/**
- * UI-4 · Attach Data Source popover.
- *
- * Lists the user's connected connectors (from INT-1's
- * `/api/v1/connect/connectors` endpoint) and lets the user pick one + supply
- * a ref. On submit, asks the container to bind it to the node — today this
- * is a no-op + TODO; INT-2 wires it to a sync-session bind.
- *
- * When the endpoint returns an empty list or 404, shows an honest empty state
- * with a warning message. No fallback stub connector is injected.
- */
+import { FileUp, Link2, Plug, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { fetchAgentScan } from '../../api'
+import type { AgentIntegrationStatus } from '../../types'
 
-import { Plug, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-
-export interface ConnectorRow {
-  id: string
-  /** Display label e.g. "Notion", "GitHub Sandbox". */
-  label: string
-  /** Slug stored on `NodeContractExternalInput.connector`. */
-  slug: string
-}
+export type NodeInputSubmission =
+  | { kind: 'file'; input: string; file: File }
+  | { kind: 'url'; input: string; url: string }
+  | { kind: 'integration'; input: string; integrationId: string; entityRef: string }
 
 export interface AttachDataSourcePopoverProps {
   nodeId: string
+  inputs: string[]
   onClose: () => void
-  onSubmit: (input: { connectorSlug: string; ref: string }) => Promise<void> | void
+  onSubmit: (input: NodeInputSubmission) => Promise<void>
 }
+
+type SourceKind = NodeInputSubmission['kind']
 
 export function AttachDataSourcePopover({
   nodeId,
+  inputs,
   onClose,
   onSubmit,
 }: AttachDataSourcePopoverProps) {
-  const [connectors, setConnectors] = useState<ConnectorRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [selectedSlug, setSelectedSlug] = useState<string>('')
-  const [refValue, setRefValue] = useState<string>('')
+  const [sourceKind, setSourceKind] = useState<SourceKind>('file')
+  const [inputSlot, setInputSlot] = useState(inputs[0] ?? '')
+  const [file, setFile] = useState<File | null>(null)
+  const [url, setURL] = useState('')
+  const [entityRef, setEntityRef] = useState('')
+  const [integrationId, setIntegrationId] = useState('')
+  const [statuses, setStatuses] = useState<AgentIntegrationStatus[]>([])
+  const [loadingIntegrations, setLoadingIntegrations] = useState(true)
   const [submitting, setSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const refInputRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState<string | null>(null)
+  const urlRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setLoadError(null)
-    fetchConnectorsSafe()
-      .then((rows) => {
+    fetchAgentScan()
+      .then((result) => {
         if (cancelled) return
-        if (rows.length === 0) {
-          setLoadError('No connectors available. INT-1 connector hub may not be deployed yet.')
-          setConnectors([])
-          setSelectedSlug('')
-        } else {
-          setConnectors(rows)
-          setSelectedSlug((current) => current || rows[0]?.slug || '')
-        }
+        setStatuses(result.statuses)
       })
-      .catch((err) => {
-        if (cancelled) return
-        setConnectors([])
-        setSelectedSlug('')
-        setLoadError((err as Error).message || 'Failed to load connectors')
+      .catch(() => {
+        if (!cancelled) setStatuses([])
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setLoadingIntegrations(false)
       })
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [])
 
-  useEffect(() => {
-    refInputRef.current?.focus()
-  }, [selectedSlug])
+  const integrations = useMemo(() => {
+    const byId = new Map<string, AgentIntegrationStatus>()
+    for (const status of statuses) {
+      const current = byId.get(status.integrationId)
+      if (!current || status.state === 'connected') byId.set(status.integrationId, status)
+    }
+    return Array.from(byId.values()).filter((status) => status.state === 'connected' || status.state === 'partial')
+  }, [statuses])
 
-  const handleSubmit = async () => {
-    const trimmedRef = refValue.trim()
-    if (!selectedSlug || !trimmedRef) {
-      setSubmitError('Pick a connector and provide a ref.')
+  useEffect(() => {
+    if (!integrationId && integrations[0]) setIntegrationId(integrations[0].integrationId)
+  }, [integrationId, integrations])
+
+  const submit = async () => {
+    if (!inputSlot) {
+      setError('这个节点没有可绑定的输入槽。')
       return
     }
+    let value: NodeInputSubmission
+    if (sourceKind === 'file') {
+      if (!file) { setError('请选择一个文件。'); return }
+      if (file.size > 10 * 1024 * 1024) { setError('单个文件不能超过 10 MB。'); return }
+      value = { kind: 'file', input: inputSlot, file }
+    } else if (sourceKind === 'url') {
+      const trimmed = url.trim()
+      if (!/^https?:\/\//i.test(trimmed)) { setError('请输入 http 或 https URL。'); return }
+      value = { kind: 'url', input: inputSlot, url: trimmed }
+    } else {
+      if (!integrationId || !entityRef.trim()) { setError('请选择集成并填写资源引用。'); return }
+      value = { kind: 'integration', input: inputSlot, integrationId, entityRef: entityRef.trim() }
+    }
     setSubmitting(true)
-    setSubmitError(null)
+    setError(null)
     try {
-      await onSubmit({ connectorSlug: selectedSlug, ref: trimmedRef })
+      await onSubmit(value)
       onClose()
-    } catch (err) {
-      setSubmitError((err as Error).message || 'Failed to attach data source')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '添加输入失败')
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div
-      className="planner-attach-popover-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div
-        className="planner-attach-popover"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Attach data source to node ${nodeId}`}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="planner-attach-popover-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="planner-attach-popover" role="dialog" aria-modal="true" aria-label={`为节点 ${nodeId} 添加输入`}>
         <div className="planner-attach-popover__header">
-          <strong>
-            <Plug size={12} aria-hidden /> Attach data source
-          </strong>
-          <button
-            type="button"
-            className="planner-attach-popover__close"
-            onClick={onClose}
-            aria-label="Close attach popover"
-          >
+          <strong>添加输入</strong>
+          <button type="button" className="planner-attach-popover__close" onClick={onClose} aria-label="关闭">
             <X size={13} aria-hidden />
           </button>
         </div>
 
-        {loading ? (
-          <p className="planner-attach-popover__muted">Loading your connectors…</p>
-        ) : (
+        <label className="planner-attach-popover__field">
+          <span>输入槽</span>
+          <select value={inputSlot} disabled={submitting || inputs.length === 0} onChange={(event) => setInputSlot(event.target.value)}>
+            {inputs.map((input) => <option key={input} value={input}>{input}</option>)}
+          </select>
+        </label>
+
+        <div className="planner-attach-popover__source-tabs" role="tablist" aria-label="输入来源">
+          {([
+            ['file', FileUp, '本地文件'],
+            ['url', Link2, 'URL'],
+            ['integration', Plug, '已连接集成'],
+          ] as const).map(([kind, Icon, label]) => (
+            <button key={kind} type="button" role="tab" aria-selected={sourceKind === kind} onClick={() => { setSourceKind(kind); setError(null) }}>
+              <Icon size={12} aria-hidden /> {label}
+            </button>
+          ))}
+        </div>
+
+        {sourceKind === 'file' && (
+          <label className="planner-attach-popover__field">
+            <span>文件（最大 10 MB）</span>
+            <input type="file" disabled={submitting} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          </label>
+        )}
+        {sourceKind === 'url' && (
+          <label className="planner-attach-popover__field">
+            <span>网页地址</span>
+            <input ref={urlRef} value={url} disabled={submitting} onChange={(event) => setURL(event.target.value)} placeholder="https://…" />
+          </label>
+        )}
+        {sourceKind === 'integration' && (
           <>
-            {loadError && (
-              <p className="planner-attach-popover__warn">{loadError}</p>
+            {loadingIntegrations ? <p className="planner-attach-popover__muted">正在读取 Agent 集成…</p> : integrations.length === 0 ? (
+              <p className="planner-attach-popover__warn">当前没有可用的 Agent 集成。仍可使用文件或 URL。</p>
+            ) : (
+              <>
+                <label className="planner-attach-popover__field">
+                  <span>集成</span>
+                  <select value={integrationId} disabled={submitting} onChange={(event) => setIntegrationId(event.target.value)}>
+                    {integrations.map((status) => <option key={status.integrationId} value={status.integrationId}>{status.integrationName}</option>)}
+                  </select>
+                </label>
+                <label className="planner-attach-popover__field">
+                  <span>资源引用</span>
+                  <input value={entityRef} disabled={submitting} onChange={(event) => setEntityRef(event.target.value)} placeholder="例如 owner/repo#123、doc-id" />
+                </label>
+              </>
             )}
-            <label className="planner-attach-popover__field">
-              <span>Connector</span>
-              <select
-                value={selectedSlug}
-                disabled={submitting}
-                onChange={(event) => setSelectedSlug(event.target.value)}
-              >
-                {connectors.map((row) => (
-                  <option key={row.id} value={row.slug}>
-                    {row.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="planner-attach-popover__field">
-              <span>Ref</span>
-              <input
-                ref={refInputRef}
-                value={refValue}
-                disabled={submitting}
-                onChange={(event) => setRefValue(event.target.value)}
-                placeholder="e.g. acme/repo, doc-id, page-id"
-              />
-            </label>
-            {submitError && (
-              <p className="planner-attach-popover__error">{submitError}</p>
-            )}
-            <div className="planner-attach-popover__actions">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={submitting}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primary"
-                onClick={handleSubmit}
-                disabled={submitting || !selectedSlug || refValue.trim().length === 0 || connectors.length === 0}
-              >
-                {submitting ? 'Attaching…' : 'Attach'}
-              </button>
-            </div>
           </>
         )}
+
+        {error && <p className="planner-attach-popover__error" role="alert">{error}</p>}
+        <div className="planner-attach-popover__actions">
+          <button type="button" onClick={onClose} disabled={submitting}>取消</button>
+          <button type="button" className="primary" onClick={() => void submit()} disabled={submitting || inputs.length === 0}>
+            {submitting ? '添加中…' : '添加输入'}
+          </button>
+        </div>
       </div>
     </div>
   )
-}
-
-/**
- * Wrap the connectors fetch so a 404 (INT-1 not yet deployed) or non-JSON
- * response does not break the popover. INT-2 will replace this with a typed
- * helper exported from `../../api`.
- */
-async function fetchConnectorsSafe(): Promise<ConnectorRow[]> {
-  try {
-    const response = await fetch('/api/v1/connect/connectors', {
-      headers: { Accept: 'application/json' },
-    })
-    if (!response.ok) return []
-    const body = (await response.json()) as { connectors?: Array<{
-      id?: string
-      slug?: string
-      label?: string
-      name?: string
-      title?: string
-    }> }
-    const rows = Array.isArray(body?.connectors) ? body.connectors : []
-    return rows
-      .map((row, index): ConnectorRow | null => {
-        const slug = String(row.slug ?? row.id ?? '').trim()
-        if (!slug) return null
-        const label = String(row.label ?? row.name ?? row.title ?? slug).trim()
-        return {
-          id: String(row.id ?? `${slug}-${index}`),
-          label,
-          slug,
-        }
-      })
-      .filter((row): row is ConnectorRow => Boolean(row))
-  } catch {
-    return []
-  }
 }

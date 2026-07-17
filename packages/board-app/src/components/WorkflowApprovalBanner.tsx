@@ -13,6 +13,7 @@ const COPY = {
     detail: 'Requested by your agent. Review and decide here; agents cannot approve this action.',
     approve: 'Approve',
     reject: 'Reject',
+    review: 'Review details',
     working: 'Applying…',
   },
   'zh-CN': {
@@ -22,6 +23,7 @@ const COPY = {
     detail: '这是 Agent 提交的请求，需要你在这里决定；Agent 无法替你批准。',
     approve: '批准',
     reject: '拒绝',
+    review: '查看详情',
     working: '处理中…',
   },
 } as const
@@ -36,6 +38,7 @@ export function WorkflowApprovalBanner({ onOpenCanvas }: WorkflowApprovalBannerP
   const [approval, setApproval] = useState<WorkflowApprovalRecord | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -64,6 +67,7 @@ export function WorkflowApprovalBanner({ onOpenCanvas }: WorkflowApprovalBannerP
     try {
       const result = await resolveWorkflowApproval(approval.id, approved)
       setApproval(null)
+      setDetailsOpen(false)
       if (approved) {
         const canvasId = result.applyResult?.canvasId
           ?? result.workflowStatus?.canvasId
@@ -87,13 +91,39 @@ export function WorkflowApprovalBanner({ onOpenCanvas }: WorkflowApprovalBannerP
         {error && <span className="workflow-approval-banner__error">{error}</span>}
       </div>
       <div className="workflow-approval-banner__actions">
-        <button type="button" className="ghost" disabled={busy} onClick={() => void resolve(false)}>
-          {copy.reject}
-        </button>
-        <button type="button" className="primary" disabled={busy} onClick={() => void resolve(true)}>
-          {busy ? copy.working : copy.approve}
+        <button type="button" className="primary" disabled={busy} onClick={() => setDetailsOpen(true)}>
+          {copy.review}
         </button>
       </div>
+      {detailsOpen && (
+        <div className="workflow-approval-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && setDetailsOpen(false)}>
+          <div className="workflow-approval-modal" role="dialog" aria-modal="true" aria-label={copy[approval.action]}>
+            <header>
+              <div><strong>{approval.proposalPreview?.name ?? copy[approval.action]}</strong><span>{approval.proposalPreview?.summary ?? copy.detail}</span></div>
+              <button type="button" className="ghost" disabled={busy} onClick={() => setDetailsOpen(false)}>×</button>
+            </header>
+            {approval.proposalPreview && (
+              <div className="workflow-approval-modal__body">
+                <p>v{approval.proposalPreview.version} · {approval.proposalPreview.changeKind === 'create' ? '新建工作流' : '更新工作流'} · {approval.proposalPreview.trackerCount} trackers</p>
+                <ol>
+                  {approval.proposalPreview.steps.map((step) => (
+                    <li key={step.id}>
+                      <strong>{step.title}</strong>
+                      <span>{step.runtime}{step.dependsOn.length ? ` · depends on ${step.dependsOn.join(', ')}` : ' · root'}{step.requiresApproval ? ' · requires approval' : ''}</span>
+                    </li>
+                  ))}
+                </ol>
+                {approval.proposalPreview.schedules.length > 0 && <p>Schedules: {approval.proposalPreview.schedules.join(' · ')}</p>}
+              </div>
+            )}
+            {error && <span className="workflow-approval-banner__error">{error}</span>}
+            <footer>
+              <button type="button" className="ghost" disabled={busy} onClick={() => void resolve(false)}>{copy.reject}</button>
+              <button type="button" className="primary" disabled={busy} onClick={() => void resolve(true)}>{busy ? copy.working : copy.approve}</button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

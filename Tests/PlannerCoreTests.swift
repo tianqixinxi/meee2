@@ -4256,10 +4256,60 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(producer.workflowRunState, .done, "confirm → done")
         XCTAssertEqual(producer.status, .done)
         XCTAssertEqual(confirmed.states.first { $0.nodeId == "n-prod" }?.needsOwnerReview, false)
+        XCTAssertEqual(confirmed.artifacts.first { $0.nodeId == "n-prod" }?.reviewStatus, "approved")
         // Downstream now startable.
         let consumer = try XCTUnwrap(confirmed.nodes.first { $0.id == "n-cons" })
         XCTAssertEqual(consumer.workflowRunState, .readyToStart, "confirm unblocks downstream")
         XCTAssertEqual(consumer.status, .ready)
+    }
+
+    func testRequestNodeReviewChangesKeepsArtifactsAndDownstreamBlocked() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-request-changes", ownerId: "owner-request-changes"
+        )
+        _ = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+
+        let revised = try PlannerBoardBridge.requestNodeReviewChanges(
+            nodeId: "n-prod",
+            comment: "Add the missing risk section.",
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+
+        let producer = try XCTUnwrap(revised.nodes.first { $0.id == "n-prod" })
+        XCTAssertEqual(producer.workflowRunState, .readyToStart)
+        XCTAssertEqual(producer.status, .ready)
+        XCTAssertEqual(producer.blockedReason, "Add the missing risk section.")
+        XCTAssertEqual(revised.artifacts.first { $0.nodeId == "n-prod" }?.reviewStatus, "rejected")
+        XCTAssertEqual(revised.nodes.first { $0.id == "n-cons" }?.workflowRunState, .pending)
+    }
+
+    func testRequestNodeReviewChangesRequiresCommentAndGateWait() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-request-guard", ownerId: "owner-request-guard"
+        )
+        XCTAssertThrowsError(try PlannerBoardBridge.requestNodeReviewChanges(
+            nodeId: "n-prod", comment: "feedback", for: canvasId,
+            snapshot: snapshot, actorUserId: ownerId
+        )) { error in
+            guard case .nodeNotReviewable = error as? PlannerCoreError else {
+                return XCTFail("expected nodeNotReviewable, got \(error)")
+            }
+        }
+        _ = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+        XCTAssertThrowsError(try PlannerBoardBridge.requestNodeReviewChanges(
+            nodeId: "n-prod", comment: "   ", for: canvasId,
+            snapshot: snapshot, actorUserId: ownerId
+        )) { error in
+            guard case .invalidNodeOutput = error as? PlannerCoreError else {
+                return XCTFail("expected invalidNodeOutput, got \(error)")
+            }
+        }
     }
 
     /// (c) A no-review node (human, no gate / no handoffPolicy) submit `done` →
@@ -4279,6 +4329,50 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(result.graph.states.first { $0.nodeId == "n-prod" }?.needsOwnerReview, false)
         let consumer = try XCTUnwrap(result.graph.nodes.first { $0.id == "n-cons" })
         XCTAssertEqual(consumer.workflowRunState, .readyToStart, "downstream startable once upstream truly done")
+    }
+
+    func testHumanOutputUsesVersionPipelineAndDefaultsToDownstreamRoutes() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-human-output", ownerId: "owner-human-output", producerNeedsReview: false
+        )
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: "n-prod",
+            output: PlannerNodeOutput(
+                nodeId: "n-prod",
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Human draft", routeTo: []),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .prd,
+                    title: "Human draft",
+                    reference: "draft",
+                    payload: .object(["type": .string("text"), "text": .string("Human draft")]),
+                    routeTo: []
+                )],
+                next: .complete
+            ),
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId,
+            submittedByKind: .human,
+            submittedBy: ownerId
+        )
+
+        XCTAssertEqual(result.routes.map(\.targetNodeId), ["n-cons"])
+        XCTAssertTrue(result.graph.nodes.first { $0.id == "n-cons" }?.contextSources.contains {
+            $0.reference == "draft"
+        } == true)
+        let versions = try PlannerBoardBridge.listArtifactVersions(
+            canvasId: canvasId,
+            nodeId: "n-prod",
+            reference: "draft",
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+        let version = try XCTUnwrap(versions.first)
+        XCTAssertEqual(version.submittedByKind, .human)
+        XCTAssertEqual(version.submittedBy, ownerId)
+        XCTAssertNotNil(version.inputSnapshot)
     }
 
     /// Confirming a node that is NOT awaiting review is rejected (guards against

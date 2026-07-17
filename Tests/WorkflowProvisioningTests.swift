@@ -195,6 +195,14 @@ final class WorkflowProvisioningTests: XCTestCase {
         let retry = try approvals.request(action: .apply, proposal: proposal, actorId: "owner")
         XCTAssertEqual(first.id, retry.id)
         XCTAssertEqual(first.status, .pending)
+        let preview = try XCTUnwrap(first.proposalPreview)
+        XCTAssertEqual(preview.name, proposal.blueprint.name)
+        XCTAssertEqual(preview.version, proposal.version)
+        XCTAssertEqual(preview.steps.map(\.id), ["source", "research"])
+        XCTAssertEqual(preview.steps[1].dependsOn, ["source"])
+        XCTAssertEqual(preview.steps[1].runtime, "claude")
+        XCTAssertEqual(preview.trackerCount, 1)
+        XCTAssertEqual(preview.changeKind, "create")
         XCTAssertEqual(try approvals.list(), [first])
         XCTAssertThrowsError(try approvals.beginResolution(
             id: first.id, approved: true, actorId: "different-user"
