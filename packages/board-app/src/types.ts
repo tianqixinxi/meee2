@@ -85,6 +85,8 @@ export interface AgentRuntimeComponentStatus {
 
 export interface Meee2AgentRuntimeStatus {
   marketplacePath: string
+  marketplaceSource: string
+  marketplaceRef: string | null
   pluginPath: string
   mcpServerPath: string
   stagedMCPServerPath: string | null

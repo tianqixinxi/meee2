@@ -9055,6 +9055,15 @@ html.board-empty-omni .canvas-toolbar__panel {
   white-space: nowrap;
 }
 
+.agent-runtime-modal__path small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }

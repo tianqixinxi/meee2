@@ -21,6 +21,9 @@ export function AgentRuntimeSetupModal({
   const hasPendingInstall =
     (status.claude.available && !status.claude.configured)
     || (status.codex.available && !status.codex.configured)
+  const pluginSource = status.marketplaceRef
+    ? `${status.marketplaceSource} @ ${status.marketplaceRef}`
+    : status.marketplaceSource
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose()
@@ -37,7 +40,7 @@ export function AgentRuntimeSetupModal({
           </div>
           <div>
             <div id="agent-runtime-title" className="modal-title">Set up Meee2 Agent Runtime</div>
-            <div className="modal-subtitle">Install the local plugin/skill bridge for Claude Code and Codex.</div>
+            <div className="modal-subtitle">Install or repair the official plugin bridge for Claude Code and Codex.</div>
           </div>
         </div>
         <div className="modal-body agent-runtime-modal__body">
@@ -69,8 +72,9 @@ export function AgentRuntimeSetupModal({
             </details>
           )}
           <details className="agent-runtime-modal__path">
-            <summary>Plugin source</summary>
-            <code>{status.marketplacePath}</code>
+            <summary>Official plugin source</summary>
+            <code>{pluginSource}</code>
+            <small>Bundled fallback: {status.marketplacePath}</small>
           </details>
         </div>
         <div className="modal-footer">

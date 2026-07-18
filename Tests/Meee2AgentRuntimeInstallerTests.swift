@@ -43,4 +43,38 @@ final class Meee2AgentRuntimeInstallerTests: XCTestCase {
             false
         )
     }
+
+    func testCodexSetupCommandUsesOfficialGitMarketplaceBeforePluginAdd() {
+        let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
+            marketplaceSource: "tianqixinxi/meee2-marketplace",
+            marketplaceRef: nil
+        )
+
+        XCTAssertEqual(
+            command,
+            "codex plugin marketplace add tianqixinxi/meee2-marketplace && codex plugin add meee2@meee2-official"
+        )
+    }
+
+    func testClaudeSetupCommandUsesOfficialGitMarketplaceBeforePlugins() {
+        let command = Meee2AgentRuntimeInstaller.claudeSetupCommand()
+
+        XCTAssertEqual(
+            command,
+            "claude plugin marketplace add tianqixinxi/meee2-marketplace --scope user && claude plugin install meee2@meee2-official --scope user && claude plugin install meee2-workflow-bridge@meee2-official --scope user && claude plugin enable meee2@meee2-official --scope user && claude plugin enable meee2-workflow-bridge@meee2-official --scope user"
+        )
+    }
+
+    func testCodexSetupCommandQuotesMarketplaceSourceWithSpaces() {
+        let command = Meee2AgentRuntimeInstaller.codexSetupCommand(
+            marketplaceSource: "https://github.com/acme/meee2 marketplace.git",
+            marketplaceRef: "release channel",
+            codexCommand: "/Applications/Codex.app/Contents/Resources/codex"
+        )
+
+        XCTAssertEqual(
+            command,
+            "/Applications/Codex.app/Contents/Resources/codex plugin marketplace add 'https://github.com/acme/meee2 marketplace.git' --ref 'release channel' && /Applications/Codex.app/Contents/Resources/codex plugin add meee2@meee2-official"
+        )
+    }
 }

@@ -71,6 +71,8 @@ final class ReadinessDoctorTests: XCTestCase {
     ) -> Meee2AgentRuntimeStatus {
         Meee2AgentRuntimeStatus(
             marketplacePath: "/tmp/marketplace",
+            marketplaceSource: "tianqixinxi/meee2-marketplace",
+            marketplaceRef: nil,
             pluginPath: "/tmp/marketplace/meee2",
             mcpServerPath: "/tmp/mcp/server.js",
             stagedMCPServerPath: nil,
