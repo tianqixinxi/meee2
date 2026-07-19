@@ -101,6 +101,20 @@ const SettingsView = lazy(() => import('./components/SettingsView').then((module
 
 type SessionsWorkspaceOpenTarget = { sessionId?: string; surfaceId?: string; nonce: number }
 
+const SESSION_FLYOUT_OPEN_KEY = 'meee2.sessionFlyout.open'
+
+// flyout 默认打开：session 页的主任务是挑会话，空启动时列表应当可见。
+function readStoredSessionFlyoutOpen(): boolean {
+  if (typeof window === 'undefined') return true
+  const stored = window.localStorage.getItem(SESSION_FLYOUT_OPEN_KEY)
+  return stored == null ? true : stored === '1'
+}
+
+function writeStoredSessionFlyoutOpen(open: boolean) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(SESSION_FLYOUT_OPEN_KEY, open ? '1' : '0')
+}
+
 function readStoredPlannerPanelCollapsed(): boolean {
   if (typeof window === 'undefined') return false
   const stored = window.localStorage.getItem(PLANNER_PANEL_COLLAPSED_KEY)
@@ -440,7 +454,8 @@ export default function App() {
     boardState: boardState.state,
   })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('session')
-  const [workspaceRailDetail, setWorkspaceRailDetail] = useState<HTMLDivElement | null>(null)
+  const [sessionFlyoutHost, setSessionFlyoutHost] = useState<HTMLDivElement | null>(null)
+  const [sessionFlyoutOpen, setSessionFlyoutOpen] = useState(readStoredSessionFlyoutOpen)
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('general')
   const [sessionsWorkspaceTarget, setSessionsWorkspaceTarget] = useState<SessionsWorkspaceOpenTarget | null>(null)
   const [artifactSessionFilter, setArtifactSessionFilter] = useState<ArtifactSessionFilter | null>(null)
@@ -1243,6 +1258,26 @@ export default function App() {
     setWorkspaceMode(nextMode)
   }, [activeWorkspaceCanvasKind, canvasList?.canvases, handleSetActiveCanvas])
 
+  // Session rail 按钮兼具「切页 + 开合会话列表 flyout」两个职责：
+  // 在其他页面点击 → 进 session 页并打开 flyout；已在 session 页 → 开合 flyout。
+  // flyout 是 sticky 的：无 backdrop、选中会话/ESC 都不关，只有这里能开合。
+  const handleSessionRailClick = useCallback(() => {
+    if (workspaceMode !== 'session') {
+      handleWorkspaceModeChange('session')
+      setSessionFlyoutOpen(true)
+    } else {
+      setSessionFlyoutOpen((current) => !current)
+    }
+  }, [workspaceMode, handleWorkspaceModeChange])
+
+  const handleSessionRailHover = useCallback(() => {
+    if (workspaceMode === 'session') setSessionFlyoutOpen(true)
+  }, [workspaceMode])
+
+  useEffect(() => {
+    writeStoredSessionFlyoutOpen(sessionFlyoutOpen)
+  }, [sessionFlyoutOpen])
+
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
       .then(setUserProfile)
@@ -1296,9 +1331,20 @@ export default function App() {
           mode={workspaceMode}
           userProfile={userProfile}
           onModeChange={handleWorkspaceModeChange}
-          detailRef={setWorkspaceRailDetail}
+          onSessionClick={handleSessionRailClick}
+          onSessionHover={handleSessionRailHover}
         />
-        <div className={`board-area${workspaceMode === 'monitor' ? ' board-area--monitor' : ''}`}>
+        {workspaceMode === 'session' && sessionFlyoutOpen && (
+          <div
+            className="workspace-flyout"
+            data-testid="workspace-flyout"
+            role="complementary"
+            aria-label={t('rail.session')}
+          >
+            <div className="workspace-flyout__body" ref={setSessionFlyoutHost} />
+          </div>
+        )}
+        <div className="board-area">
           {readinessReport && !readinessReport.ready && (
             <Notice
               tone="warning"
@@ -1354,7 +1400,7 @@ export default function App() {
               onJumpToCanvas={handleJumpSessionToCanvas}
               onToast={pushToast}
               unifiedSidebar
-              sidebarContainer={workspaceRailDetail}
+              sidebarContainer={sessionFlyoutHost}
             />
           ) : workspaceMode === 'monitor' ? (
             <WorkspaceMonitor

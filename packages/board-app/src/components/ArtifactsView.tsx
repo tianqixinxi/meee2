@@ -30,6 +30,7 @@ import type {
   PlannerArtifact,
 } from '../types'
 import { ArtifactPreviewDialog } from './artifacts/ArtifactPreviewDialog'
+import { PageShell } from './PageShell'
 
 type StateFilter = ArtifactDisplayState | 'all'
 type CanvasFilter = string | 'all'
@@ -312,73 +313,69 @@ export function ArtifactsView({
   }, [onProposalCreated, reviewActionKey, t, toast])
 
   return (
-    <section className="artifacts-workspace" aria-label={t('artifacts.title')}>
-      <div className="artifacts-workspace__inner artifacts-index">
-        <header className="artifacts-workspace__header artifacts-index__header">
-          <div>
-            <h1>{t('artifacts.title')}</h1>
-            <p>
-              {loading
-                ? t('artifacts.loadingSlots')
-                : t('artifacts.summary', { slots: artifactTotal, canvases: canvasCount })}
-            </p>
-            {sessionFilter && (
-              <button
-                type="button"
-                className="artifacts-session-filter"
-                onClick={onClearSessionFilter}
-                title={t('artifacts.clearSessionFilter')}
-              >
-                <span>{t('artifacts.sessionFilter', { title: sessionFilter.title })}</span>
-                {onClearSessionFilter && <X size={13} aria-hidden />}
-              </button>
-            )}
+    <PageShell
+      ariaLabel={t('artifacts.title')}
+      title={t('artifacts.title')}
+      hint={loading
+        ? t('artifacts.loadingSlots')
+        : t('artifacts.summary', { slots: artifactTotal, canvases: canvasCount })}
+      headerExtra={sessionFilter && (
+        <button
+          type="button"
+          className="artifacts-session-filter"
+          onClick={onClearSessionFilter}
+          title={t('artifacts.clearSessionFilter')}
+        >
+          <span>{t('artifacts.sessionFilter', { title: sessionFilter.title })}</span>
+          {onClearSessionFilter && <X size={13} aria-hidden />}
+        </button>
+      )}
+      tools={(
+        <>
+          <label className="artifacts-search">
+            <Search size={14} aria-hidden />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('artifacts.searchPlaceholder')}
+            />
+          </label>
+          <div className="artifacts-index__filters" aria-label={t('artifacts.filterLabel')}>
+            <SelectFilter
+              label={t('artifacts.canvasFilter')}
+              value={canvasFilter}
+              onChange={setCanvasFilter}
+              options={[
+                { value: 'all', label: t('artifacts.filterAll') },
+                ...canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name || canvas.id })),
+              ]}
+            />
+            <SelectFilter
+              label={t('artifacts.scopeFilter')}
+              value={scopeFilter}
+              onChange={(value) => {
+                setScopeFilter(value as ScopeFilter)
+                setCanvasFilter('all')
+              }}
+              options={[
+                { value: 'all', label: t('artifacts.scopeAll') },
+                { value: 'personal', label: t('artifacts.scopePersonal') },
+                { value: 'team', label: t('artifacts.scopeTeam') },
+              ]}
+            />
+            <SelectFilter
+              label={t('artifacts.stateFilter')}
+              value={stateFilter}
+              onChange={(value) => setStateFilter(value as StateFilter)}
+              options={[
+                { value: 'all', label: t('artifacts.filterAll') },
+                ...stateOptions.map((state) => ({ value: state, label: artifactStateLabel(state, t) })),
+              ]}
+            />
           </div>
-          <div className="artifacts-workspace__tools">
-            <label className="artifacts-search">
-              <Search size={14} aria-hidden />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('artifacts.searchPlaceholder')}
-              />
-            </label>
-            <div className="artifacts-index__filters" aria-label={t('artifacts.filterLabel')}>
-              <SelectFilter
-                label={t('artifacts.canvasFilter')}
-                value={canvasFilter}
-                onChange={setCanvasFilter}
-                options={[
-                  { value: 'all', label: t('artifacts.filterAll') },
-                  ...canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name || canvas.id })),
-                ]}
-              />
-              <SelectFilter
-                label={t('artifacts.scopeFilter')}
-                value={scopeFilter}
-                onChange={(value) => {
-                  setScopeFilter(value as ScopeFilter)
-                  setCanvasFilter('all')
-                }}
-                options={[
-                  { value: 'all', label: t('artifacts.scopeAll') },
-                  { value: 'personal', label: t('artifacts.scopePersonal') },
-                  { value: 'team', label: t('artifacts.scopeTeam') },
-                ]}
-              />
-              <SelectFilter
-                label={t('artifacts.stateFilter')}
-                value={stateFilter}
-                onChange={(value) => setStateFilter(value as StateFilter)}
-                options={[
-                  { value: 'all', label: t('artifacts.filterAll') },
-                  ...stateOptions.map((state) => ({ value: state, label: artifactStateLabel(state, t) })),
-                ]}
-              />
-            </div>
-          </div>
-        </header>
-
+        </>
+      )}
+    >
         <nav className="artifacts-index__types" aria-label={t('artifacts.typeDirectory')}>
           <button
             type="button"
@@ -518,7 +515,6 @@ export function ArtifactsView({
 
           </div>
         )}
-      </div>
       {previewItem && (
         <ArtifactPreviewDialog
           key={previewItem.key}
@@ -532,7 +528,7 @@ export function ArtifactsView({
           onReviewArtifact={reviewArtifact}
         />
       )}
-    </section>
+    </PageShell>
   )
 }
 

@@ -13,8 +13,6 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Network,
-  PanelLeftClose,
-  PanelLeftOpen,
   Paperclip,
   PencilLine,
   Pin,
@@ -25,14 +23,12 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type {
-  CSSProperties,
   ClipboardEvent as ReactClipboardEvent,
   Dispatch,
   DragEvent as ReactDragEvent,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
-  PointerEvent as ReactPointerEvent,
   ReactNode,
   SetStateAction,
 } from 'react'
@@ -91,31 +87,12 @@ const HISTORY_GROUP_ID = 'history'
 const HISTORY_SECTION_ID = 'history-section'
 const HISTORY_AFTER_MS = 25 * 24 * 60 * 60 * 1000
 const TERMINAL_ATTACH_GRACE_MS = 2_000
-const SIDEBAR_WIDTH_KEY = 'meee2.sessionLauncher.sidebarWidth'
-const SIDEBAR_COLLAPSED_KEY = 'meee2.sessionLauncher.sidebarCollapsed'
 const LAST_SELECTION_KEY = 'meee2.sessionLauncher.lastSelection'
 const PROJECT_PERMISSION_MODES_KEY = 'meee2.sessionLauncher.permissionModes.v1'
 const PROJECT_FULL_ACCESS_REMEMBERED_KEY = 'meee2.sessionLauncher.rememberedFullAccess.v1'
-const LEGACY_DEFAULT_SIDEBAR_WIDTH = 324
-const DEFAULT_SIDEBAR_WIDTH = 280
-const MIN_SIDEBAR_WIDTH = 248
-const MAX_SIDEBAR_WIDTH = 520
 const ENTER_SUBMIT_ARM_MS = 1800
 const SESSION_CONTEXT_MENU_WIDTH = 190
 const SESSION_CONTEXT_MENU_HEIGHT = 152
-
-function readStoredSidebarWidth(): number {
-  if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
-  const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY)
-  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
-  if (parsed === LEGACY_DEFAULT_SIDEBAR_WIDTH) return DEFAULT_SIDEBAR_WIDTH
-  return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : DEFAULT_SIDEBAR_WIDTH
-}
-
-function readStoredSidebarCollapsed(): boolean {
-  if (typeof window === 'undefined') return false
-  return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
-}
 
 function readStoredProjectPermissionModes(): Record<string, AgentPermissionMode> {
   if (typeof window === 'undefined') return {}
@@ -150,10 +127,6 @@ function readRememberedFullAccessProjectIds(): Set<string> {
     window.localStorage.removeItem(PROJECT_FULL_ACCESS_REMEMBERED_KEY)
     return new Set()
   }
-}
-
-function clampSidebarWidth(width: number): number {
-  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)))
 }
 
 function mergeLaunchAttachments(
@@ -320,12 +293,9 @@ export function SessionLauncherView({
   const [reopeningSessionId, setReopeningSessionId] = useState<string | null>(null)
   const [locallyArchivedSessionIds, setLocallyArchivedSessionIds] = useState<Set<string>>(() => new Set())
   const [restoredSessionTargets, setRestoredSessionTargets] = useState<Record<string, RestoredTerminalTarget>>({})
-  const [sidebarWidth, setSidebarWidth] = useState(() => readStoredSidebarWidth())
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed())
   const initializedSelectionRef = useRef(initialSelection !== null)
   const initialAutoResumeSettledRef = useRef(false)
   const handledOpenTargetRef = useRef<string | null>(null)
-  const pointerSidebarResizeActiveRef = useRef(false)
   const stableSessionPlacementRef = useRef(new Map<string, 'current' | 'history'>())
   const sessionSwitchTraceRef = useRef<Record<string, { startedAt: number; traceId: string }>>({})
   const observedSessionTargetsRef = useRef(new Set<string>())
@@ -536,14 +506,6 @@ export function SessionLauncherView({
       setExpandedProjectIds(new Set([first.id]))
     }
   }, [launcherSessions, selection, sortedProjects, state])
-
-  useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
-  }, [sidebarWidth])
-
-  useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0')
-  }, [sidebarCollapsed])
 
   useEffect(() => {
     const persisted = Object.fromEntries(Object.entries(permissionModeByProjectId).filter(([projectId, mode]) => (
@@ -978,109 +940,14 @@ export function SessionLauncherView({
     }
   }, [explicitProjects, onSessionCreated, onToast, selection, t])
 
-  const handleSidebarResizeStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
-    event.preventDefault()
-    pointerSidebarResizeActiveRef.current = true
-    if (Number.isFinite(event.pointerId)) {
-      event.currentTarget.setPointerCapture?.(event.pointerId)
-    }
-    setSidebarCollapsed(false)
-    const startX = Number.isFinite(event.clientX) ? event.clientX : sidebarWidth
-    const startWidth = sidebarWidth
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      const nextX = Number.isFinite(moveEvent.clientX) ? moveEvent.clientX : startX
-      setSidebarWidth(clampSidebarWidth(startWidth + nextX - startX))
-    }
-    const onPointerUp = () => {
-      window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('pointerup', onPointerUp)
-      window.removeEventListener('pointercancel', onPointerUp)
-      document.body.classList.remove('session-launcher-sidebar-resizing')
-      pointerSidebarResizeActiveRef.current = false
-    }
-    document.body.classList.add('session-launcher-sidebar-resizing')
-    window.addEventListener('pointermove', onPointerMove)
-    window.addEventListener('pointerup', onPointerUp)
-    window.addEventListener('pointercancel', onPointerUp)
-  }, [sidebarWidth])
-
-  const handleSidebarMouseResizeStart = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
-    if (pointerSidebarResizeActiveRef.current) return
-    event.preventDefault()
-    setSidebarCollapsed(false)
-    const startX = Number.isFinite(event.clientX) ? event.clientX : sidebarWidth
-    const startWidth = sidebarWidth
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const nextX = Number.isFinite(moveEvent.clientX) ? moveEvent.clientX : startX
-      setSidebarWidth(clampSidebarWidth(startWidth + nextX - startX))
-    }
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-      document.body.classList.remove('session-launcher-sidebar-resizing')
-    }
-    document.body.classList.add('session-launcher-sidebar-resizing')
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-  }, [sidebarWidth])
-
-  const handleSidebarResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    const step = event.shiftKey ? 64 : 24
-    if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      setSidebarCollapsed(false)
-      setSidebarWidth((current) => clampSidebarWidth(current - step))
-    } else if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      setSidebarCollapsed(false)
-      setSidebarWidth((current) => clampSidebarWidth(current + step))
-    } else if (event.key === 'Home') {
-      event.preventDefault()
-      setSidebarCollapsed(false)
-      setSidebarWidth(MIN_SIDEBAR_WIDTH)
-    } else if (event.key === 'End') {
-      event.preventDefault()
-      setSidebarCollapsed(false)
-      setSidebarWidth(MAX_SIDEBAR_WIDTH)
-    }
-  }, [])
-
-  const launcherStyle = {
-    '--session-launcher-sidebar-width': `${sidebarWidth}px`,
-  } as CSSProperties
-
   return (
     <>
       <section
-        className={`session-launcher${unifiedSidebar ? ' session-launcher--unified-sidebar' : ''}${!unifiedSidebar && sidebarCollapsed ? ' session-launcher--sidebar-collapsed' : ''}`}
-        style={launcherStyle}
+        className={`session-launcher${unifiedSidebar ? ' session-launcher--unified-sidebar' : ''}${sidebarContainer ? ' session-launcher--flyout-open' : ''}`}
         aria-label={t('rail.session')}
       >
-        {!unifiedSidebar && (
-          <button
-            type="button"
-            className="session-launcher__sidebar-toggle"
-            onClick={() => setSidebarCollapsed((current) => !current)}
-            aria-label={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
-            title={sidebarCollapsed ? t('sessions.launcher.expandSidebar') : t('sessions.launcher.collapseSidebar')}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen size={15} aria-hidden /> : <PanelLeftClose size={15} aria-hidden />}
-          </button>
-        )}
         <OptionalPortal enabled={unifiedSidebar} target={sidebarContainer}>
-          <aside className="session-launcher__sidebar" aria-hidden={unifiedSidebar ? false : sidebarCollapsed}>
-            {!unifiedSidebar && (
-              <button
-                type="button"
-                className="session-launcher__sidebar-resize"
-                aria-label={t('sessions.launcher.resizeSidebar')}
-                title={t('sessions.launcher.resizeSidebar')}
-                onPointerDown={handleSidebarResizeStart}
-                onMouseDown={handleSidebarMouseResizeStart}
-                onKeyDown={handleSidebarResizeKeyDown}
-                tabIndex={sidebarCollapsed ? -1 : 0}
-              />
-            )}
+          <aside className="session-launcher__sidebar" aria-hidden={false}>
             {projectsError && <div className="session-launcher__error">{projectsError}</div>}
             <div className="session-launcher__project-list">
           {grouped.pinned.length > 0 && (

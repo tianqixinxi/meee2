@@ -1,6 +1,7 @@
 import { useI18n } from '../lib/i18n'
 import type { BoardState } from '../types'
 import { AgentIntegrationMatrix } from './AgentIntegrationMatrix'
+import { PageShell } from './PageShell'
 
 interface Props {
   state: BoardState | null
@@ -21,15 +22,12 @@ interface Props {
 export function IntegrationsView(props: Props) {
   const { t } = useI18n()
   return (
-    <section className="integrations-view" aria-label={t('integrations.kicker')}>
-      <header className="integrations-view__header">
-        <div>
-          <h1>{t('integrations.title')}</h1>
-          <p>{t('integrations.pageSubtitle')}</p>
-        </div>
-      </header>
-
+    <PageShell
+      ariaLabel={t('integrations.kicker')}
+      title={t('integrations.title')}
+      hint={t('integrations.pageSubtitle')}
+    >
       <AgentIntegrationMatrix onJumpToCanvas={props.onJumpToCanvas} />
-    </section>
+    </PageShell>
   )
 }

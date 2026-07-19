@@ -23,6 +23,8 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@meee1/board-core": "workspace:*",
     "@meee1/board-persistence-http": "workspace:*",
     "@meee1/recap-core": "workspace:*",

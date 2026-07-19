@@ -30,51 +30,53 @@ const ROLE_LABELS = {
 //   idle, thinking, tooling, active, waitingForUser, permissionRequired,
 //   compacting, completed, dead
 //
-// Claude 视觉风：色板全部降饱和，暖色调主导，和 styles.css 的 tokens 对齐。
+// 颜色全部走宿主 CSS 变量（--card-*/--role-*/--dot-*/--danger 等，
+// applyThemeProfile 在运行时注入），var() 的 fallback 保留原暖调色板，
+// 脱离宿主单独渲染时外观不变。
 function statusStyle(status, urgent) {
-  if (urgent) return { color: '#C26A6A', pulse: true }    // danger
+  if (urgent) return { color: 'var(--danger, #C26A6A)', pulse: true }    // danger
   switch (status) {
     case 'active':
-      return { color: '#7FA982', pulse: false }           // sage green
+      return { color: 'var(--success, #7FA982)', pulse: false }           // sage green
     case 'thinking':
     case 'compacting':
-      return { color: '#8BA9C2', pulse: false }           // muted info blue
+      return { color: 'var(--info, #8BA9C2)', pulse: false }           // muted info blue
     case 'tooling':
-      return { color: '#CC785C', pulse: false }           // Claude terracotta
+      return { color: 'var(--dot-tooling, #CC785C)', pulse: false } // Claude terracotta
     case 'permissionRequired':
-      return { color: '#D4A373', pulse: true }            // sand amber
+      return { color: 'var(--warning, #D4A373)', pulse: true }            // sand amber
     // waitingForUser 等同 idle → 落到 default 分支
     case 'completed':
-      return { color: '#7FA982', pulse: false }
+      return { color: 'var(--success, #7FA982)', pulse: false }
     case 'dead':
-      return { color: '#C26A6A', pulse: false }
+      return { color: 'var(--danger, #C26A6A)', pulse: false }
     case 'idle':
     default:
-      return { color: '#6B6862', pulse: false }           // text-faint
+      return { color: 'var(--card-fg-muted, #6B6862)', pulse: false }           // text-faint
   }
 }
 
 function statusBarColor(status, urgent) {
-  if (urgent) return '#C26A6A'
+  if (urgent) return 'var(--danger, #C26A6A)'
   switch (status) {
     case 'active':
     case 'thinking':
     case 'tooling':
     case 'compacting':
-      return '#22C55E'                                     // LIVE 顶条与 halo 同色
+      return 'var(--dot-running, #22C55E)'                                     // LIVE 顶条与 halo 同色
     case 'permissionRequired':
-      return '#D4A373'
+      return 'var(--warning, #D4A373)'
     case 'completed':
-      return '#7FA982'
+      return 'var(--success, #7FA982)'
     case 'dead':
-      return '#C26A6A'
+      return 'var(--danger, #C26A6A)'
     default:
       return null
   }
 }
 
 function classifyLive(status, urgent) {
-  if (urgent) return { halo: 'active', badge: 'ATTN', haloColor: '#C26A6A', dim: false }
+  if (urgent) return { halo: 'active', badge: 'ATTN', haloColor: 'var(--danger, #C26A6A)', dim: false }
   switch (status) {
     case 'active':
     case 'thinking':
@@ -82,11 +84,11 @@ function classifyLive(status, urgent) {
     case 'compacting':
       // LIVE 用饱和绿 —— 赤陶 accent 在画板一片暖褐里反而不够跳，需要跟主
       // 色形成对比才能"一眼看见 card 在跑"。
-      return { halo: 'active', badge: 'LIVE', haloColor: '#22C55E', dim: false }
+      return { halo: 'active', badge: 'LIVE', haloColor: 'var(--dot-running, #22C55E)', dim: false }
     case 'permissionRequired':
-      return { halo: 'active', badge: 'WAIT', haloColor: '#D4A373', dim: false }
+      return { halo: 'active', badge: 'WAIT', haloColor: 'var(--warning, #D4A373)', dim: false }
     case 'dead':
-      return { halo: null, badge: 'DEAD', haloColor: '#C26A6A', dim: true }
+      return { halo: null, badge: 'DEAD', haloColor: 'var(--danger, #C26A6A)', dim: true }
     case 'completed':
       return { halo: null, badge: null, haloColor: null, dim: true }
     case 'idle':
@@ -158,10 +160,10 @@ function parseToolEntry(text) {
 
 function roleBadgeColor(role) {
   switch (role) {
-    case 'user': return '#F0D5C7'       // 暖米（User 用偏亮的暖调）
-    case 'assistant': return '#E6C9A8'   // 米驼（Claude 自己的色）
-    case 'tool': return '#CC785C'        // 赤陶（tool = action = accent）
-    default: return '#A8A59B'
+    case 'user': return 'var(--role-user, #F0D5C7)'       // 暖米（User 用偏亮的暖调）
+    case 'assistant': return 'var(--role-assistant, #E6C9A8)'   // 米驼（Claude 自己的色）
+    case 'tool': return 'var(--role-tool, #CC785C)' // 赤陶（tool = action = accent）
+    default: return 'var(--card-fg-dim, #A8A59B)'
   }
 }
 
@@ -189,7 +191,7 @@ function MessageRow({ entry, isLatest }) {
   // 能完整显示 ~6 行，超出再 clip。
   const bodyStyle = isLatest
     ? {
-        color: '#EDEAE2',
+        color: 'var(--card-fg, #EDEAE2)',
         fontSize: 11,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
@@ -198,7 +200,7 @@ function MessageRow({ entry, isLatest }) {
         minWidth: 0,
       }
     : {
-        color: '#BEB9AE',
+        color: 'var(--card-fg-dim, #BEB9AE)',
         fontSize: 11,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -244,8 +246,8 @@ function MessageRow({ entry, isLatest }) {
 function EmptyState({ session }) {
   if (session.latestRecap && session.latestRecap.content) {
     return (
-      <div style={{ color: '#A8A59B', fontSize: 11, lineHeight: 1.45 }}>
-        <div style={{ color: '#8D897F', textTransform: 'uppercase', fontSize: 9, letterSpacing: 0.5, marginBottom: 3 }}>
+      <div style={{ color: 'var(--card-fg-dim, #A8A59B)', fontSize: 11, lineHeight: 1.45 }}>
+        <div style={{ color: 'var(--card-fg-dim, #8D897F)', textTransform: 'uppercase', fontSize: 9, letterSpacing: 0.5, marginBottom: 3 }}>
           Recap
         </div>
         <div style={{ display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -266,17 +268,17 @@ function EmptyState({ session }) {
   }
   return (
     <div style={{
-      color: '#8D897F',
+      color: 'var(--card-fg-dim, #8D897F)',
       fontSize: 11,
       lineHeight: 1.5,
       padding: '12px 0',
-      borderTop: '1px solid rgba(245,244,239,0.06)',
+      borderTop: '1px solid var(--card-divider, rgba(245,244,239,0.06))',
     }}>
-      <div style={{ color: '#B4B0A6', fontWeight: 550, marginBottom: 4 }}>
+      <div style={{ color: 'var(--card-fg-dim, #B4B0A6)', fontWeight: 550, marginBottom: 4 }}>
         Session ready, no activity yet
       </div>
       {agoText && (
-        <div style={{ color: '#6F6B62', fontSize: 10 }}>
+        <div style={{ color: 'var(--card-fg-muted, #6F6B62)', fontSize: 10 }}>
           Started {agoText}
         </div>
       )}
@@ -293,6 +295,16 @@ function SessionCard({ session, board, helpers }) {
   const dot = statusStyle(session.status, urgent)
   const tokens = tokenText(session.usageStats)
   const messages = session.recentMessages || []
+
+  // 动效配置（CardHost 注入的 session._animations）：默认值在 cardAnimations.ts，
+  // 模板显式消费，用户可以 per-session 覆盖。
+  const anims = session._animations || {}
+  // liveHalo.color 覆盖 LIVE halo 颜色（不区分状态，只对 active halo 生效）
+  if (live.haloColor && anims.liveHalo && anims.liveHalo.color) {
+    live.haloColor = anims.liveHalo.color
+  }
+  const arrival = anims.arrivalFadeIn || {}
+  const attention = anims.attentionRing || {}
   // 卡片只展示 user input + assistant output 这两端的"对话"，过滤掉 tool
   // call 噪音（read/write/bash 中间步对快速浏览没价值，且常把真正的回复
   // 挤出 5 条窗口）。先过滤再 slice(-5)，让任何时刻都尽量塞满 5 条对话。
@@ -345,12 +357,12 @@ function SessionCard({ session, board, helpers }) {
   // Default card is a product UI surface, not an Excalidraw shape. Keep the
   // shell flat, dark, and crisp; the canvas rectangle underneath is only an
   // interaction anchor.
-  const borderColor = live.haloColor || '#34332F'
+  const borderColor = live.haloColor || 'var(--card-border, #34332F)'
   const outerStyle = {
     position: 'relative',
     width: '100%',
     height: '100%',
-    background: 'linear-gradient(180deg, #20201D 0%, #171715 100%)',
+    background: 'var(--card-bg, linear-gradient(180deg, #20201D 0%, #171715 100%))',
     border: '1px solid ' + borderColor,
     borderRadius: 10,
     padding: '12px 14px 10px',
@@ -359,10 +371,14 @@ function SessionCard({ session, board, helpers }) {
     overflow: 'hidden',
     opacity: live.dim ? 0.84 : 1,
     boxShadow: live.halo === 'active'
-      ? '0 0 0 1px ' + live.haloColor + '44, 0 14px 34px rgba(0,0,0,0.28)'
+      ? '0 0 0 1px color-mix(in srgb, ' + live.haloColor + ' 27%, transparent), 0 14px 34px rgba(0,0,0,0.28)'
       : '0 14px 30px rgba(0,0,0,0.22)',
-    fontFamily: "-apple-system, 'Inter', BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    color: '#F5F4EF',
+    fontFamily: "var(--sans, -apple-system, 'Inter', BlinkMacSystemFont, 'Segoe UI', sans-serif)",
+    color: 'var(--card-fg, #F5F4EF)',
+    // arrivalFadeIn：新卡到达时一轮 fade+上浮（one-shot）
+    ...(arrival.enabled !== false
+      ? { animation: 'session-card-arrive ' + (arrival.durationMs || 240) + 'ms var(--ease-out, ease-out)' }
+      : {}),
   }
 
   return (
@@ -392,6 +408,10 @@ function SessionCard({ session, board, helpers }) {
           border: '1px solid ' + live.haloColor,
           padding: '1px 6px',
           borderRadius: 4,
+          // attentionRing：权限等待（WAIT/ATTN）徽标环形脉冲，催用户确认
+          ...(urgent && attention.enabled !== false
+            ? { animation: 'attention-ring ' + (attention.rateSeconds || 1.4) + 's ease-out infinite' }
+            : {}),
         }}>
           {live.badge}
         </div>
@@ -422,10 +442,10 @@ function SessionCard({ session, board, helpers }) {
         }} title={session.title}>
           {session.title}
         </span>
-        <span style={{ color: '#6B6862', fontSize: 10 }}>·</span>
+        <span style={{ color: 'var(--card-fg-muted, #6B6862)', fontSize: 10 }}>·</span>
         <span style={{
           fontSize: 9.5,
-          color: '#B4B0A6',
+          color: 'var(--card-fg-dim, #B4B0A6)',
           fontWeight: 650,
           textTransform: 'uppercase',
           letterSpacing: 0.65,
@@ -439,7 +459,7 @@ function SessionCard({ session, board, helpers }) {
           return (
             <span style={{
               fontSize: 10,
-              color: '#A8A59B',
+              color: 'var(--card-fg-dim, #A8A59B)',
               fontVariantNumeric: 'tabular-nums',
               fontFamily: "'SF Mono', Consolas, monospace",
               flexShrink: 0,
@@ -460,7 +480,7 @@ function SessionCard({ session, board, helpers }) {
 
       <div style={{
         fontSize: 10,
-        color: '#8D897F',
+        color: 'var(--card-fg-dim, #8D897F)',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
@@ -476,15 +496,15 @@ function SessionCard({ session, board, helpers }) {
           gap: 6,
           marginBottom: 6,
           padding: '4px 6px',
-          border: '1px solid rgba(100,116,139,0.35)',
+          border: '1px solid color-mix(in srgb, var(--info, #64748B) 35%, transparent)',
           borderRadius: 6,
-          background: 'rgba(15,23,42,0.34)',
-          color: '#C9D4E5',
+          background: 'color-mix(in srgb, var(--info, #0F172A) 12%, transparent)',
+          color: 'var(--info, #C9D4E5)',
           fontSize: 10,
           lineHeight: 1.2,
         }} title={coordination.group.goal}>
           <span style={{ fontWeight: 700 }}>{coordination.label}</span>
-          <span style={{ color: '#7D8DA3' }}>·</span>
+          <span style={{ color: 'var(--info, #7D8DA3)' }}>·</span>
           <span style={{
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -516,9 +536,9 @@ function SessionCard({ session, board, helpers }) {
         gap: 8,
         marginTop: 6,
         paddingTop: 6,
-        borderTop: '1px solid rgba(255,255,255,0.06)',
+        borderTop: '1px solid var(--card-divider, rgba(255,255,255,0.06))',
         fontSize: 10,
-        color: '#B4B0A6',
+        color: 'var(--card-fg-dim, #B4B0A6)',
       }}>
         <span style={{ color: dot.color, fontWeight: 600 }}>{footerStatus}</span>
         {/* 后台子 agent / task 胶囊——和主 status 正交，主 idle 时也应该可见 */}
@@ -529,12 +549,12 @@ function SessionCard({ session, board, helpers }) {
               (a.description || a.id)
             ).join(' · ')}
             style={{
-              color: '#A78BFA',
+              color: 'var(--role-tool, #A78BFA)',
               fontWeight: 600,
               padding: '1px 6px',
               borderRadius: 4,
-              background: 'rgba(167,139,250,0.10)',
-              border: '1px solid rgba(167,139,250,0.30)',
+              background: 'color-mix(in srgb, var(--role-tool, #A78BFA) 10%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--role-tool, #A78BFA) 30%, transparent)',
               fontSize: 9.5,
             }}
           >
@@ -545,7 +565,7 @@ function SessionCard({ session, board, helpers }) {
         <span style={{
           fontFamily: "'SF Mono', Consolas, monospace",
           fontSize: 9,
-          color: '#5B5853',
+          color: 'var(--card-fg-muted, #5B5853)',
         }}>
           {sidShort}
         </span>

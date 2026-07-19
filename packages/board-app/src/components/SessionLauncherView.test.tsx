@@ -386,36 +386,6 @@ describe('SessionLauncherView', () => {
     })
   })
 
-  it('resizes and fully collapses the launcher sidebar', async () => {
-    renderWithI18n(<SessionLauncherView state={makeState()} />)
-
-    await screen.findByText('我们应该在meee2-workspace中做些什么？')
-    const launcher = document.querySelector('.session-launcher') as HTMLElement
-    expect(launcher.style.getPropertyValue('--session-launcher-sidebar-width')).toBe('280px')
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: '调整会话侧边栏宽度' }), {
-      clientX: 280,
-      pointerId: 1,
-    })
-    const moveEvent = new Event('pointermove') as PointerEvent
-    Object.defineProperty(moveEvent, 'clientX', { value: 404 })
-    await act(async () => {
-      window.dispatchEvent(moveEvent)
-      window.dispatchEvent(new Event('pointerup'))
-    })
-
-    await waitFor(() => {
-      expect(launcher.style.getPropertyValue('--session-launcher-sidebar-width')).toBe('404px')
-    })
-    expect(localStorage.getItem('meee2.sessionLauncher.sidebarWidth')).toBe('404')
-
-    fireEvent.click(screen.getByRole('button', { name: '折叠会话侧边栏' }))
-
-    expect(launcher).toHaveClass('session-launcher--sidebar-collapsed')
-    expect(localStorage.getItem('meee2.sessionLauncher.sidebarCollapsed')).toBe('1')
-    expect(screen.getByRole('button', { name: '展开会话侧边栏' })).toBeInTheDocument()
-  })
-
   it('switches permission choices with the selected runtime', async () => {
     renderWithI18n(<SessionLauncherView state={makeState()} />)
 
