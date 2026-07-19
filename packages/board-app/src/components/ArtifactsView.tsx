@@ -466,7 +466,6 @@ export function ArtifactsView({
                           <button
                             type="button"
                             className="artifacts-row-button"
-                            tabIndex={-1}
                             onClick={() => setPreviewKey(item.key)}
                           >
                             <span className="artifacts-row-icon" data-group={item.groupId} aria-hidden>
