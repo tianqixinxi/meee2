@@ -1,9 +1,15 @@
 import {
   Archive,
+  Database,
   ExternalLink,
+  FileText,
+  GitPullRequest,
+  LayoutDashboard,
   Loader2,
   Search,
+  ShieldCheck,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -25,7 +31,6 @@ import type {
   ArtifactPageItem,
   ArtifactReviewStatus,
   CanvasInfo,
-  CanvasScope,
   PlanProposal,
   PlannerArtifact,
 } from '../types'
@@ -34,7 +39,6 @@ import { PageShell } from './PageShell'
 
 type StateFilter = ArtifactDisplayState | 'all'
 type CanvasFilter = string | 'all'
-type ScopeFilter = CanvasScope | 'all'
 
 export interface ArtifactSessionFilter {
   sessionId: string
@@ -57,6 +61,16 @@ const ARTIFACT_STATE_ORDER: ArtifactDisplayState[] = [
 const ARTIFACT_PAGE_SIZE = 50
 const ARTIFACT_WINDOW_SIZE = 60
 const ARTIFACT_ROW_HEIGHT = 56
+
+/* 分组图标 + 配色（与 styles.css 的 --group-color 映射一致） */
+const ARTIFACT_GROUP_ICONS: Record<string, LucideIcon> = {
+  docs: FileText,
+  boards: LayoutDashboard,
+  implementation: GitPullRequest,
+  validation: ShieldCheck,
+  'files-data': Database,
+  other: Archive,
+}
 const ARTIFACT_SEARCH_DELAY_MS = 200
 
 interface ArtifactsViewProps {
@@ -81,7 +95,6 @@ export function ArtifactsView({
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [activeGroup, setActiveGroup] = useState<ArtifactTypeGroupId | 'all'>('all')
-  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
   const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
   const [stateFilter, setStateFilter] = useState<StateFilter>('all')
   const [artifactItems, setArtifactItems] = useState<ArtifactIndexItem[]>([])
@@ -125,14 +138,12 @@ export function ArtifactsView({
       query: debouncedQuery,
       sessionId: sessionIds.length ? sessionIds.join(',') : undefined,
       project: sessionFilter?.project ?? sessionFilter?.projectName ?? undefined,
-      scope: scopeFilter,
       group: activeGroup,
     } as const
   }, [
     activeGroup,
     canvasFilter,
     debouncedQuery,
-    scopeFilter,
     sessionFilter?.project,
     sessionFilter?.projectName,
     sessionFilter?.providerResumeSessionId,
@@ -194,19 +205,14 @@ export function ArtifactsView({
     () => allItems.find((item) => item.key === previewKey) ?? null,
     [allItems, previewKey],
   )
-  const canvasOptions = useMemo(
-    () => canvases.filter((canvas) => (
-      (scopeFilter === 'all' || canvas.scope === scopeFilter)
-    )),
-    [canvases, scopeFilter],
-  )
+  const canvasOptions = canvases
   const stateOptions = ARTIFACT_STATE_ORDER
   const hasMore = artifactHasMore
 
   useEffect(() => {
     setWindowStart(0)
     setPreviewKey(null)
-  }, [activeGroup, canvasFilter, debouncedQuery, scopeFilter, sessionFilter?.sessionId, stateFilter])
+  }, [activeGroup, canvasFilter, debouncedQuery, sessionFilter?.sessionId, stateFilter])
 
   const loadMore = useCallback(() => {
     if (loadingMore || !hasMore) return
@@ -331,7 +337,7 @@ export function ArtifactsView({
         </button>
       )}
       tools={(
-        <>
+        <div className="artifacts-toolbar">
           <label className="artifacts-search">
             <Search size={14} aria-hidden />
             <input
@@ -351,19 +357,6 @@ export function ArtifactsView({
               ]}
             />
             <SelectFilter
-              label={t('artifacts.scopeFilter')}
-              value={scopeFilter}
-              onChange={(value) => {
-                setScopeFilter(value as ScopeFilter)
-                setCanvasFilter('all')
-              }}
-              options={[
-                { value: 'all', label: t('artifacts.scopeAll') },
-                { value: 'personal', label: t('artifacts.scopePersonal') },
-                { value: 'team', label: t('artifacts.scopeTeam') },
-              ]}
-            />
-            <SelectFilter
               label={t('artifacts.stateFilter')}
               value={stateFilter}
               onChange={(value) => setStateFilter(value as StateFilter)}
@@ -373,12 +366,13 @@ export function ArtifactsView({
               ]}
             />
           </div>
-        </>
+        </div>
       )}
     >
         <nav className="artifacts-index__types" aria-label={t('artifacts.typeDirectory')}>
           <button
             type="button"
+            data-group="all"
             className={`artifacts-type-button${activeGroup === 'all' ? ' is-active' : ''}`}
             onClick={() => setActiveGroup('all')}
           >
@@ -389,6 +383,7 @@ export function ArtifactsView({
             <button
               type="button"
               key={group.id}
+              data-group={group.id}
               className={`artifacts-type-button${activeGroup === group.id ? ' is-active' : ''}`}
               onClick={() => setActiveGroup(group.id)}
             >
@@ -434,7 +429,6 @@ export function ArtifactsView({
                       setQuery('')
                       setDebouncedQuery('')
                       setActiveGroup('all')
-                      setScopeFilter('all')
                       setCanvasFilter('all')
                       setStateFilter('all')
                       onClearSessionFilter?.()
@@ -466,15 +460,25 @@ export function ArtifactsView({
                     {mountedItems.map((item) => (
                       <tr
                         key={item.key}
+                        onClick={() => setPreviewKey(item.key)}
                       >
                         <td>
                           <button
                             type="button"
                             className="artifacts-row-button"
+                            tabIndex={-1}
                             onClick={() => setPreviewKey(item.key)}
                           >
-                            <span>{item.latest.title}</span>
-                            <small>{item.node?.title ?? item.latest.nodeId}</small>
+                            <span className="artifacts-row-icon" data-group={item.groupId} aria-hidden>
+                              {(() => {
+                                const GroupIcon = ARTIFACT_GROUP_ICONS[item.groupId] ?? Archive
+                                return <GroupIcon size={14} />
+                              })()}
+                            </span>
+                            <span className="artifacts-row-text">
+                              <span>{item.latest.title}</span>
+                              <small>{item.node?.title ?? item.latest.nodeId}</small>
+                            </span>
                           </button>
                         </td>
                         <td>
@@ -595,7 +599,7 @@ function ArtifactBadges({
 }) {
   return (
     <div className="artifacts-badges">
-      <span>{item.typeLabel}</span>
+      <span className="artifacts-type-label" data-group={item.groupId}>{item.typeLabel}</span>
       <span className={`artifacts-state-badge is-${item.displayState}`}>{artifactStateLabel(item.displayState, t)}</span>
       {item.latest.positionTag && item.latest.positionTag !== 'latest' && (
         <span className={`artifacts-card__position artifacts-card__position--${item.latest.positionTag}`}>
