@@ -68,6 +68,29 @@ final class ProviderSessionTitleReaderTests: XCTestCase {
         )
     }
 
+    func testCodexTranscriptTitleSkipsOversizedImageRecordBeforeUserMessage() throws {
+        let sessionId = "019ec708-b4f2-7c13-bac1-03e81b71377a"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-provider-large-transcript-title-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let transcriptURL = directory.appendingPathComponent("rollout-large-image.jsonl")
+        let oversizedImageRecord = #"{"type":"response_item","payload":{"type":"message","image":""#
+            + String(repeating: "a", count: 700 * 1024)
+            + #""}}"#
+        let userMessage = #"{"type":"event_msg","payload":{"type":"user_message","message":"[Image #1]修复图片会话的标题补全"}}"#
+        try (oversizedImageRecord + "\n" + userMessage + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+
+        XCTAssertEqual(
+            ProviderSessionTitleReader.codexTranscriptTitle(
+                sessionId: sessionId,
+                transcriptURL: transcriptURL
+            ),
+            "修复图片会话的标题补全"
+        )
+    }
+
     private func temporaryIndex(lines: [String]) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("meee2-provider-title-\(UUID().uuidString)", isDirectory: true)

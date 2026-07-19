@@ -39,11 +39,21 @@ public final class MCPConfigManager {
     /// 写进 `~/.claude/settings.json` 的 permissions.allow，让 agent 调用
     /// 这些 tool 时不再触发 PermissionRequest 弹框。
     private let mcpToolNames: [String] = [
+        "mcp__meee2__propose_workflow",
+        "mcp__meee2__propose_workflow_change",
+        "mcp__meee2__read_workflow_proposal",
+        "mcp__meee2__revise_workflow_proposal",
+        "mcp__meee2__apply_workflow_proposal",
+        "mcp__meee2__dry_run_workflow",
+        "mcp__meee2__enable_workflow",
+        "mcp__meee2__pause_workflow",
+        "mcp__meee2__get_workflow_status",
         "mcp__meee2__list_sessions",
         "mcp__meee2__read_inbox",
         "mcp__meee2__read_node_contract",
         "mcp__meee2__submit_node_output",
         "mcp__meee2__attach_artifact_to_node",
+        "mcp__meee2__propose_add_node",
         "mcp__meee2__get_artifact",
         "mcp__meee2__update_artifact",
         "mcp__meee2__update_artifact_views",
@@ -110,7 +120,15 @@ public final class MCPConfigManager {
         let serverPath = args.first ?? expectedServerPath
         let serverExists = FileManager.default.fileExists(atPath: serverPath)
         let nodeAvailable = commandAvailable(command)
-        let requiredTools = ["read_node_contract", "submit_node_output", "attach_artifact_to_node", "update_artifact_views"]
+        let requiredTools = [
+            "propose_workflow",
+            "apply_workflow_proposal",
+            "get_workflow_status",
+            "read_node_contract",
+            "submit_node_output",
+            "attach_artifact_to_node",
+            "update_artifact_views"
+        ]
 
         guard serverExists else {
             return Meee2MCPStatus(

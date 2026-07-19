@@ -34,6 +34,17 @@ export interface CardAnimations {
     enabled?: boolean
     durationMs?: number
   }
+  /** 定位引导闪光：jump/跳转定位到该卡后一轮渐隐光环（1.5s one-shot） */
+  revealGlow?: {
+    enabled?: boolean
+    /** 光环颜色；默认跟随 liveHalo.color */
+    color?: string
+  }
+  /** 权限等待（permissionRequired）徽标的环形脉冲 */
+  attentionRing?: {
+    enabled?: boolean
+    rateSeconds?: number
+  }
 }
 
 /** 默认 animations —— 跟 DEFAULT_TEMPLATE 的现状对齐，改这里不碰模板源码 */
@@ -51,6 +62,13 @@ export const DEFAULT_ANIMATIONS: CardAnimations = {
   arrivalFadeIn: {
     enabled: true,
     durationMs: 240,
+  },
+  revealGlow: {
+    enabled: true,
+  },
+  attentionRing: {
+    enabled: true,
+    rateSeconds: 1.4,
   },
 }
 
@@ -111,5 +129,7 @@ function mergeAnimations(base: CardAnimations, over: CardAnimations): CardAnimat
     liveHalo: { ...(base.liveHalo ?? {}), ...(over.liveHalo ?? {}) },
     statusDotPulse: { ...(base.statusDotPulse ?? {}), ...(over.statusDotPulse ?? {}) },
     arrivalFadeIn: { ...(base.arrivalFadeIn ?? {}), ...(over.arrivalFadeIn ?? {}) },
+    revealGlow: { ...(base.revealGlow ?? {}), ...(over.revealGlow ?? {}) },
+    attentionRing: { ...(base.attentionRing ?? {}), ...(over.attentionRing ?? {}) },
   }
 }

@@ -43,8 +43,17 @@ function readStoredMode(): ThemeMode {
 
 function applyTheme(theme: ResolvedTheme) {
   if (typeof document === 'undefined') return
-  document.documentElement.dataset.theme = theme
-  document.documentElement.style.colorScheme = theme
+  // 切换瞬间全站禁 transition 两帧：否则各元素以各自时长渐变，
+  // 主题切换看起来像"颜色爬行"（借 orca document-theme.ts 的做法）。
+  const root = document.documentElement
+  root.classList.add('theme-transition-disabled')
+  root.dataset.theme = theme
+  root.style.colorScheme = theme
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      root.classList.remove('theme-transition-disabled')
+    })
+  })
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

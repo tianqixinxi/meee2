@@ -1,8 +1,8 @@
 {
   "name": "meee2",
   "displayName": "Meee2",
-  "version": "0.1.0",
-  "description": "Meee2 Skill plus MCP tools for reading planner canvas context, orchestration profiles, node contracts, and writing structured artifacts back to the canvas.",
+  "version": "0.1.1",
+  "description": "Turn natural-language business processes into governed Meee2 workflow canvases with trackers and schedules, then execute nodes and write structured artifacts back.",
   "author": {
     "name": "Meee2"
   },

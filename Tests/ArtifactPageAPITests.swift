@@ -73,8 +73,28 @@ final class ArtifactPageAPITests: XCTestCase {
             )
         )
         XCTAssertEqual(page.total, 1)
+        XCTAssertEqual(page.availableTotal, 1)
+        XCTAssertNil(page.statusCounts["ready"])
+        XCTAssertEqual(page.statusCounts["needs-review"], 1)
         XCTAssertEqual(page.items[0].artifacts.first?.id, "pending")
         XCTAssertEqual(page.groupCounts["files-data"], 1)
+    }
+
+    func testAvailableTotalAndStatusCountsIgnoreStatusAndGroupFilters() throws {
+        let ready = makeArtifact(id: "ready", reference: "release.md", createdAt: Date(timeIntervalSince1970: 2))
+        var pending = makeArtifact(id: "pending", reference: "review.md", createdAt: Date(timeIntervalSince1970: 3))
+        pending.reviewStatus = "pending"
+        let source = ArtifactPageSource(canvas: makeCanvas(), artifacts: [ready, pending])
+
+        let page = try ArtifactPageBuilder.build(
+            sources: [source],
+            query: ArtifactPageQuery(status: "needs-review", group: "files-data")
+        )
+
+        XCTAssertEqual(page.total, 1)
+        XCTAssertEqual(page.availableTotal, 2)
+        XCTAssertEqual(page.statusCounts["ready"], 1)
+        XCTAssertEqual(page.statusCounts["needs-review"], 1)
     }
 
     func testInvalidCursorIsRejected() {

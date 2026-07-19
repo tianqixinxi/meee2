@@ -851,7 +851,7 @@ enum AssistantTools {
             let data = try JSONSerialization.data(withJSONObject: payload)
             let decoder = JSONDecoder()
             let output = try decoder.decode(PlannerNodeOutput.self, from: data)
-            var result = try PlannerBoardBridge.submitNodeOutput(
+            let result = try PlannerBoardBridge.submitNodeOutput(
                 nodeId: nodeId,
                 output: output,
                 for: canvasId,
@@ -859,7 +859,6 @@ enum AssistantTools {
                 actorUserId: PlannerPermission.currentActorId()
             )
             routePlannerOutputMessages(result.routes)
-            BoardAPI.materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
             return try .success(jsonPayload(result))
         } catch {
             return .failure(error.localizedDescription)

@@ -19,7 +19,9 @@ enum ProviderSessionTitleReader {
     private static var cachedCodexIndexes: [String: CachedCodexIndex] = [:]
     private static var cachedCodexTranscriptTitles: [String: CachedCodexTranscriptTitle] = [:]
     private static let transcriptCacheTTL: TimeInterval = 15
-    private static let transcriptReadLimit = 512 * 1024
+    private static let transcriptScanLimit = 8 * 1024 * 1024
+    private static let transcriptChunkSize = 64 * 1024
+    private static let transcriptLineLimit = 256 * 1024
 
     static func title(provider: String, providerSessionId: String?) -> String? {
         let normalizedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -125,22 +127,49 @@ enum ProviderSessionTitleReader {
             return nil
         }
         defer { try? handle.close() }
-        let data = handle.readData(ofLength: transcriptReadLimit)
-        guard let content = String(data: data, encoding: .utf8) else { return nil }
-        for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard line.contains("\"type\":\"user_message\""),
-                  let data = line.data(using: .utf8),
-                  let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  envelope["type"] as? String == "event_msg",
-                  let payload = envelope["payload"] as? [String: Any],
-                  payload["type"] as? String == "user_message",
-                  let message = payload["message"] as? String,
-                  let title = cleanedTitle(message) else {
-                continue
+        var line = Data()
+        var skippingOversizedLine = false
+        var scannedBytes = 0
+        while scannedBytes < transcriptScanLimit {
+            let readLength = min(transcriptChunkSize, transcriptScanLimit - scannedBytes)
+            let chunk = handle.readData(ofLength: readLength)
+            guard !chunk.isEmpty else { break }
+            scannedBytes += chunk.count
+            for byte in chunk {
+                if byte == 0x0A {
+                    if !skippingOversizedLine, let title = codexUserMessageTitle(from: line) {
+                        return title
+                    }
+                    line.removeAll(keepingCapacity: true)
+                    skippingOversizedLine = false
+                } else if !skippingOversizedLine {
+                    if line.count < transcriptLineLimit {
+                        line.append(byte)
+                    } else {
+                        // Image-bearing transcript records can be several MB. Their
+                        // content is not a title candidate, so discard the rest of
+                        // the record while continuing to scan later JSONL lines.
+                        line.removeAll(keepingCapacity: true)
+                        skippingOversizedLine = true
+                    }
+                }
             }
-            return title
         }
-        return nil
+        return skippingOversizedLine ? nil : codexUserMessageTitle(from: line)
+    }
+
+    private static func codexUserMessageTitle(from data: Data) -> String? {
+        guard !data.isEmpty,
+              let line = String(data: data, encoding: .utf8),
+              line.contains("\"type\":\"user_message\""),
+              let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              envelope["type"] as? String == "event_msg",
+              let payload = envelope["payload"] as? [String: Any],
+              payload["type"] as? String == "user_message",
+              let message = payload["message"] as? String else {
+            return nil
+        }
+        return cleanedTitle(message)
     }
 
     private static func codexRolloutURL(sessionId: String, sessionsRootURL: URL) -> URL? {
@@ -185,14 +214,19 @@ enum ProviderSessionTitleReader {
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !collapsed.isEmpty else { return nil }
-        let normalized = collapsed.lowercased()
+        let title = collapsed.replacingOccurrences(
+            of: #"^(?:\[Image #[0-9]+\]\s*)+"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        guard !title.isEmpty else { return nil }
+        let normalized = title.lowercased()
         guard normalized != "(untitled)",
               normalized != "untitled",
               normalized != "new thread",
               normalized != "new conversation" else {
             return nil
         }
-        return collapsed.count <= 200 ? collapsed : String(collapsed.prefix(200))
+        return title.count <= 200 ? title : String(title.prefix(200))
     }
 }

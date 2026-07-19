@@ -65,6 +65,7 @@ import {
   nextWorkAction as nextWorkActionCN,
   planStatusLabel as planStatusLabelCN,
   primaryActionLabel as primaryActionLabelCN,
+  requiredInputActionLabel,
   workStatusLabel as workStatusLabelCN,
   type NodeMode,
   type PrimaryAction,
@@ -370,8 +371,10 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
 
   // PR1 (running-session-visual) — step / session 卡片统一走 deriveDisplayStatus,
   // 让运行态(running / awaiting / failed) 在 design 和 run mode 下都可见。
-  // 其他 nodeKind(artifact / subCanvas / external)保留旧逻辑。
-  const displayStatus = (nodeKind === 'step' || nodeKind === 'session')
+  // external 也走 (workflow-bridge 的镜像节点靠 workflowRunState 表达运行中/完成,
+  // deriveDisplayStatus 对非工作节点的 done 正确显示「完成」而非「未启动」)。
+  // 其他 nodeKind(artifact / subCanvas)保留旧逻辑。
+  const displayStatus = (nodeKind === 'step' || nodeKind === 'session' || nodeKind === 'external')
     ? deriveDisplayStatus(node, data.boundSessionLive)
     : null
   const statusLabel = displayStatus
@@ -427,6 +430,9 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
   // UI-simplification §1 — primaryAction 现在是结构化枚举(PrimaryAction),
   // dispatch 走 switch(primaryAction);显示文本走 PRIMARY_ACTION_TEXT[primaryAction]。
   // 不再用英文字符串字面量比较,文案改中文后点击不会全掉到 else 分支。
+  const missingRequiredInputs = node.schema.inputs.filter((input) => !node.contextSources.some(
+    (source) => source.title.trim().toLowerCase() === input.trim().toLowerCase(),
+  ))
   const primaryAction: PrimaryAction = primaryActionLabelCN({
     mode: data.mode,
     hasSelectedDelivery: data.hasSelectedDelivery,
@@ -440,8 +446,14 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
     canChangeStatus: Boolean(data.canChangeStatus),
     canCreateSession: Boolean(data.canChangeStatus && data.onCreateSession),
     creatingSession: Boolean(data.creatingSession),
+    executorType: node.executorType,
+    missingRequiredInput: missingRequiredInputs[0],
   })
-  const primaryActionText = primaryAction === 'none' ? '' : PRIMARY_ACTION_TEXT[primaryAction]
+  const primaryActionText = primaryAction === 'none'
+    ? ''
+    : primaryAction === 'add-input'
+      ? requiredInputActionLabel(missingRequiredInputs[0])
+      : PRIMARY_ACTION_TEXT[primaryAction]
   const primaryActionDisabled = primaryAction === 'creating-session'
   const showResponsibleInfo = data.showResponsibleInfo ?? true
   const gateLabel = gateModeLabel(node)
@@ -848,6 +860,8 @@ export function PlannerNodeCard({ data, selected, height }: NodeProps<PlannerGra
                 // UI-simplification §1 — 用枚举分发,文案改中文不会让分支错位。
                 if (primaryAction === 'open-sub-canvas' && node.subCanvasId) {
                   data.onOpenSubCanvas?.(node.subCanvasId)
+                } else if (primaryAction === 'add-input') {
+                  data.onAttachDataSource?.(node.id)
                 } else if (primaryAction === 'create-session') {
                   data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
                 } else if (primaryAction === 'spawn-session') {
@@ -1630,7 +1644,7 @@ function dispatchRunnerForNode(executorType: PlannerGraphNode['data']['node']['e
 function runtimeLabelForNode(executorType: PlannerGraphNode['data']['node']['executorType']): string {
   if (executorType === 'codex') return 'Codex'
   if (executorType === 'claude') return 'Claude'
-  if (executorType === 'human') return `Default: ${spawnProviderLabel(loadSpawnProvider())}`
+  if (executorType === 'human') return 'Human'
   if (executorType === 'mock') return `Default: ${spawnProviderLabel(loadSpawnProvider())}`
   return `${executorType} / fallback ${spawnProviderLabel(loadSpawnProvider())}`
 }

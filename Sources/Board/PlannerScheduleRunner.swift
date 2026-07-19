@@ -32,8 +32,28 @@ final class PlannerScheduleRunner {
         let due = PlannerBoardBridge.store.dueScheduledNodes(now: now)
         guard !due.isEmpty else { return }
         for item in due {
+            var createdRunId: String?
             do {
-                try send(item)
+                let session = try BoardAPI.materializeScheduledPlannerNodeSession(
+                    canvasId: item.canvasId,
+                    nodeId: item.nodeId,
+                    schedulePrompt: item.prompt
+                )
+                let existingRuns = try PlannerBoardBridge.store.runs(canvasId: item.canvasId)
+                if existingRuns.last?.status != .active {
+                    let run = try PlannerBoardBridge.store.startRun(
+                        canvasId: item.canvasId,
+                        trigger: "schedule:\(item.nodeId)",
+                        title: "Scheduled · \(item.title)",
+                        summary: "Recurring workflow tick",
+                        responsibleUserId: nil,
+                        linkedArtifactRefs: []
+                    )
+                    createdRunId = run.id
+                }
+                if !session.initialPromptIncludesSchedule {
+                    try send(item, sessionId: session.sessionId)
+                }
                 _ = try PlannerBoardBridge.store.markScheduledTickSent(
                     canvasId: item.canvasId,
                     nodeId: item.nodeId,
@@ -41,12 +61,22 @@ final class PlannerScheduleRunner {
                 )
                 BoardServer.shared.broadcastStateChanged()
             } catch {
-                MWarn("[PlannerScheduleRunner] schedule tick failed canvas=\(item.canvasId) node=\(item.nodeId) sid=\(item.sessionId.prefix(8)): \(error.localizedDescription)")
+                if let createdRunId {
+                    _ = try? PlannerBoardBridge.store.abortRun(runId: createdRunId)
+                }
+                _ = try? PlannerBoardBridge.store.markScheduledTickFailed(
+                    canvasId: item.canvasId,
+                    nodeId: item.nodeId,
+                    error: error.localizedDescription,
+                    attemptedAt: now
+                )
+                let session = item.sessionId.map { String($0.prefix(8)) } ?? "unbound"
+                MWarn("[PlannerScheduleRunner] schedule tick failed canvas=\(item.canvasId) node=\(item.nodeId) sid=\(session): \(error.localizedDescription)")
             }
         }
     }
 
-    private func send(_ item: PlannerStore.DueScheduledNode) throws {
+    private func send(_ item: PlannerStore.DueScheduledNode, sessionId: String) throws {
         let content = [
             item.prompt,
             "",
@@ -55,7 +85,7 @@ final class PlannerScheduleRunner {
             "- nodeId: \(item.nodeId)",
             "- intervalSeconds: \(item.intervalSeconds)"
         ].joined(separator: "\n")
-        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: item.sessionId)
+        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sessionId)
         _ = try MessageRouter.shared.send(
             channel: channelName,
             fromAlias: "operator",

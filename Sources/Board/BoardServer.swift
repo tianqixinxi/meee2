@@ -21,6 +21,7 @@ public final class BoardServer {
     public static let legacyBindEnvVar = "MEEE2_BOARD_BIND"
     public static let devOriginsEnvVar = "MEEE2_BOARD_DEV_ORIGINS"
     public static let controlTokenHeader = "X-Meee2-Control-Token"
+    public static let humanApprovalHeader = "X-Meee2-Human-Approval"
     static let viteDevOrigins: Set<String> = [
         "http://127.0.0.1:5002",
         "http://localhost:5002"
@@ -127,6 +128,7 @@ public final class BoardServer {
                     self?.broadcastStateChanged()
                 }
                 PlannerScheduleRunner.shared.start()
+                WorkflowBridgeRunService.shared.start()
                 return
             } catch {
                 lastError = error
@@ -145,6 +147,7 @@ public final class BoardServer {
         busSubscription?.cancel()
         busSubscription = nil
         PlannerScheduleRunner.shared.stop()
+        WorkflowBridgeRunService.shared.stop()
 
         wsLock.lock()
         let sockets = wsSessions + Array(wsPendingAuthentication.keys)
@@ -476,7 +479,7 @@ public final class BoardServer {
     private static func corsHeaders(for request: HttpRequest) -> [String: String] {
         var headers: [String: String] = [
             "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, \(controlTokenHeader)",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, \(controlTokenHeader), \(humanApprovalHeader)",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin"
         ]
@@ -696,6 +699,19 @@ public final class BoardServer {
         server.POST["/api/automations"] = BoardServer.cors(BoardAPI.createAutomation)
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
         server.DELETE["/api/automations/:id"] = BoardServer.cors(BoardAPI.deleteAutomation)
+
+        // Natural-language agent entrypoint: durable workflow blueprint →
+        // explicit approval → canvas provisioning → dry-run / enable / status.
+        server.POST["/api/workflow-proposals"] = BoardServer.cors(BoardAPI.createWorkflowProposal)
+        server.GET["/api/workflow-proposals/:id"] = BoardServer.cors(BoardAPI.getWorkflowProposal)
+        server.PATCH["/api/workflow-proposals/:id"] = BoardServer.cors(BoardAPI.reviseWorkflowProposal)
+        server.POST["/api/workflow-proposals/:id/apply"] = BoardServer.cors(BoardAPI.applyWorkflowProposal)
+        server.GET["/api/workflow-approvals"] = BoardServer.cors(BoardAPI.listWorkflowApprovals)
+        server.POST["/api/workflow-approvals/:id/resolve"] = BoardServer.cors(BoardAPI.resolveWorkflowApproval)
+        server.POST["/api/workflows/:id/dry-run"] = BoardServer.cors(BoardAPI.dryRunWorkflow)
+        server.POST["/api/workflows/:id/enable"] = BoardServer.cors(BoardAPI.enableWorkflow)
+        server.POST["/api/workflows/:id/pause"] = BoardServer.cors(BoardAPI.pauseWorkflow)
+        server.GET["/api/workflows/:id/status"] = BoardServer.cors(BoardAPI.getWorkflowStatus)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
         server.POST["/api/sessions/:id/open-workspace"] = BoardServer.cors(BoardAPI.openSessionWorkspace)
         server.POST["/api/sessions/:id/inject"] = BoardServer.cors(BoardAPI.injectToSession)
@@ -749,6 +765,7 @@ public final class BoardServer {
         server.GET["/api/claude/workflows"] = BoardServer.cors(BoardAPI.listClaudeWorkflows)
         server.POST["/api/claude/workflows/import-upload"] = BoardServer.cors(BoardAPI.importUploadedClaudeWorkflow)
         server.POST["/api/claude/workflows/:id/import"] = BoardServer.cors(BoardAPI.importClaudeWorkflow)
+        server.POST["/api/workflow-bridge/runs"] = BoardServer.cors(BoardAPI.registerWorkflowBridgeRun)
         server.GET["/api/planner/monitor"] = BoardServer.cors(BoardAPI.getPlannerWorkspaceMonitor)
         server.POST["/api/planner/activity"] = BoardServer.cors(BoardAPI.updatePlannerActivity)
         server.GET["/api/planner/canvases/:id/state"] = BoardServer.cors(BoardAPI.getPlannerCanvasState)
@@ -778,6 +795,7 @@ public final class BoardServer {
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/detach-session"] = BoardServer.cors(BoardAPI.detachPlannerNodeSession)
         server.POST["/api/planner/canvases/:id/sessions/resume-closed"] = BoardServer.cors(BoardAPI.resumeClosedPlannerSessions)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/artifacts"] = BoardServer.cors(BoardAPI.attachPlannerArtifactToNode)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/inputs/files"] = BoardServer.cors(BoardAPI.uploadPlannerNodeInputFile)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/inputs"] = BoardServer.cors(BoardAPI.bindPlannerNodeInput)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/status"] = BoardServer.cors(BoardAPI.updatePlannerNodeStatus)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/gate"] = BoardServer.cors(BoardAPI.updatePlannerNodeGate)
@@ -785,6 +803,8 @@ public final class BoardServer {
         server.DELETE["/api/planner/canvases/:id/nodes/:nodeId"] = BoardServer.cors(BoardAPI.deletePlannerNode)
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/human-output"] = BoardServer.cors(BoardAPI.submitHumanPlannerNodeOutput)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/review"] = BoardServer.cors(BoardAPI.resolvePlannerNodeReview)
         // proposal 子功能 · propose_add_node:节点会话提议新增 step(产物 pending,
         // 走既有 approve/apply/reject 管线;MCP propose_add_node 调这里)。
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/propose-add-node"] = BoardServer.cors(BoardAPI.proposePlannerAddNode)

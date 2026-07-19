@@ -8,8 +8,8 @@ import Foundation
 public protocol TerminalSpawner {
     func spawn(cwd: String, command: String?) async -> SpawnResult
     /// ENG-2 / E2.4: spawn without stealing focus from the user's current app.
-    /// Used by planner auto-dispatch + multi-node burst so a series of new
-    /// sessions doesn't strip-mine the user's attention. Default impl falls
+    /// Used by explicit multi-node actions so a series of new sessions doesn't
+    /// strip-mine the user's attention. Default impl falls
     /// back to `spawn(...)` so older terminals work unchanged.
     func spawn(cwd: String, command: String?, createInBackground: Bool) async -> SpawnResult
 }
@@ -42,7 +42,7 @@ public enum SpawnResult {
 /// 优先在已有 Ghostty window 里新建 tab；没有 window 时再创建新 window。
 /// 全部走 Ghostty 原生 AppleScript，不依赖 Cmd+T / Accessibility keystroke。
 /// ENG-2 / E2.4: serialize Ghostty spawn calls so a multi-node planner burst
-/// (auto-dispatch fanning out to several downstream nodes at once) doesn't
+/// doesn't
 /// race AppleScript events. macOS Ghostty's AppleScript bridge is single-
 /// threaded — concurrent `new tab` calls drop tabs or mis-route the focused
 /// terminal id. An actor-confined queue + serial AS dispatch is enough.
@@ -82,8 +82,8 @@ public struct GhosttySpawner: TerminalSpawner {
             .replacingOccurrences(of: "\"", with: "\\\"")
 
         // ENG-2 / E2.4: `activate` raises Ghostty to the front and steals
-        // focus from whatever the user is in. For auto-dispatch / burst
-        // creation we skip it so new tabs open quietly behind the current
+        // focus from whatever the user is in. For explicit burst creation we
+        // skip it so new tabs open quietly behind the current
         // app — the user only switches to Ghostty when they want to. The
         // existing manual-spawn path (user clicks "open terminal") keeps
         // `activate` so click → focus still works.

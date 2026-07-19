@@ -1,7 +1,7 @@
 {
   "name": "meee2",
-  "version": "0.1.0",
-  "description": "Meee2 Skill plus MCP tools for reading planner canvas context, orchestration profiles, node contracts, and writing structured artifacts back to the canvas.",
+  "version": "0.1.1",
+  "description": "Turn natural-language business processes into governed Meee2 workflow canvases with trackers and schedules, then execute nodes and write structured artifacts back.",
   "author": {
     "name": "Meee2"
   },
@@ -18,8 +18,8 @@
   "mcpServers": "./.codex.mcp.json",
   "interface": {
     "displayName": "Meee2",
-    "shortDescription": "Execute Meee2 planner nodes with canvas-aware MCP",
-    "longDescription": "Adds the Meee2 Skill and MCP bridge so Codex sessions can read canvas context, orchestration profiles, planner node contracts, submit structured outputs, attach artifacts, and keep the Meee2 board UI in sync.",
+    "shortDescription": "Create and run governed Meee2 workflows",
+    "longDescription": "Adds the Meee2 Skill and MCP bridge so Codex can propose a complete workflow from natural language, materialize an approved Canvas with tracker contracts and recurring jobs, and execute planner nodes with structured artifact writeback.",
     "developerName": "Meee2",
     "category": "Productivity",
     "capabilities": [
@@ -27,7 +27,7 @@
       "Read",
       "Write"
     ],
-    "defaultPrompt": "Use Meee2 MCP to read canvas context and the current planner node contract, then submit structured artifacts back to the canvas",
+    "defaultPrompt": "Use Meee2 to turn this business process into a clear workflow proposal and open the single required approval in the Board; create the Canvas only after I approve there, and keep recurring jobs disabled until I separately approve enabling them",
     "screenshots": [],
     "brandColor": "#CC785C"
   }

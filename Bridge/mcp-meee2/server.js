@@ -21,7 +21,231 @@ let cachedAPI = null
 // Descriptions are the first thing the model sees when deciding whether to
 // call; be specific about when to use, what fromAlias means, and how
 // broadcast works.
+const WORKFLOW_STEP_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', description: 'Stable short id, e.g. source-startups.' },
+    title: { type: 'string' },
+    goal: { type: 'string', description: 'Observable completion criterion.' },
+    dependsOn: { type: 'array', items: { type: 'string' } },
+    inputs: { type: 'array', items: { type: 'string' } },
+    outputs: { type: 'array', items: { type: 'string' } },
+    runtime: { type: 'string', enum: ['claude', 'codex', 'cursor', 'openClaw', 'devin', 'human', 'mock'] },
+    ownerId: { type: 'string' },
+    reviewerIds: { type: 'array', items: { type: 'string' } },
+    approverIds: { type: 'array', items: { type: 'string' } },
+    requiresApproval: { type: 'boolean' },
+  },
+  required: [
+    'id', 'title', 'goal', 'dependsOn', 'inputs', 'outputs', 'runtime',
+    'reviewerIds', 'approverIds', 'requiresApproval',
+  ],
+}
+
+const WORKFLOW_TRACKER_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    title: { type: 'string' },
+    connector: { type: 'string', description: 'Connector id, e.g. google-sheets or lark.' },
+    reference: { type: 'string', description: 'Stable external-object reference.' },
+    tabs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          columns: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['id', 'title', 'columns'],
+      },
+    },
+    readerStepIds: { type: 'array', items: { type: 'string' } },
+    writerStepIds: { type: 'array', items: { type: 'string' } },
+    fieldPolicies: {
+      type: 'object',
+      description: 'column -> human_only | ai_suggest | ai_write',
+      additionalProperties: { type: 'string', enum: ['human_only', 'ai_suggest', 'ai_write'] },
+    },
+  },
+  required: [
+    'id', 'title', 'connector', 'reference', 'tabs', 'readerStepIds',
+    'writerStepIds', 'fieldPolicies',
+  ],
+}
+
+const WORKFLOW_SCHEDULE_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    nodeId: { type: 'string', description: 'Step id scheduled by this job.' },
+    cadence: { type: 'string', enum: ['interval', 'daily', 'monthly'] },
+    intervalMinutes: { type: 'integer', minimum: 1 },
+    timeZone: { type: 'string', description: 'IANA timezone, e.g. Asia/Shanghai.' },
+    hour: { type: 'integer', minimum: 0, maximum: 23 },
+    minute: { type: 'integer', minimum: 0, maximum: 59 },
+    dayOfMonth: { type: 'integer', minimum: 1, maximum: 31 },
+    prompt: { type: 'string', description: 'Prompt used when the scheduled node is dispatched.' },
+  },
+  required: ['id', 'nodeId', 'cadence', 'prompt'],
+}
+
+const WORKFLOW_BLUEPRINT_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    summary: { type: 'string' },
+    scope: { type: 'string', enum: ['personal', 'team'] },
+    steps: { type: 'array', minItems: 1, items: WORKFLOW_STEP_SCHEMA },
+    trackers: { type: 'array', items: WORKFLOW_TRACKER_SCHEMA },
+    schedules: { type: 'array', items: WORKFLOW_SCHEDULE_SCHEMA },
+    integrations: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Required connector ids, e.g. google-sheets, apollo, outlook-email.',
+    },
+    integrationPolicies: {
+      type: 'object',
+      description:
+        'connector id -> read_only | draft_only | write. Use draft_only for outreach/email drafting; ' +
+        'creation, sending, or external mutation still needs separate approval.',
+      additionalProperties: { type: 'string', enum: ['read_only', 'draft_only', 'write'] },
+    },
+  },
+  required: [
+    'name', 'summary', 'scope', 'steps', 'trackers', 'schedules',
+    'integrations', 'integrationPolicies',
+  ],
+}
+
 const TOOLS = [
+  {
+    name: 'propose_workflow',
+    description:
+      'Turn a user\'s natural-language business process into a durable meee2 ' +
+      'workflow proposal: Canvas steps, tracker contracts, human/AI field ' +
+      'policies, integrations, and recurring jobs. By default this saves a DRAFT ' +
+      'and immediately opens the single required approval in the meee2 Board; it ' +
+      'still creates no Canvas and performs no external writes until the human ' +
+      'approves there. Set draftOnly only when the user explicitly asks to save ' +
+      'a draft without requesting approval.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requirement: { type: 'string', description: 'The original user requirement, preserved verbatim.' },
+        blueprint: WORKFLOW_BLUEPRINT_SCHEMA,
+        idempotencyKey: { type: 'string', description: 'Stable key for retry-safe creation.' },
+        draftOnly: { type: 'boolean', description: 'Save without opening Board approval. Defaults to false.' },
+      },
+      required: ['requirement', 'blueprint'],
+    },
+  },
+  {
+    name: 'propose_workflow_change',
+    description:
+      'Create a DRAFT change proposal for an existing meee2 workflow Canvas. ' +
+      'Supply the complete desired blueprint, not a partial patch. This does ' +
+      'not mutate the Canvas; by default it immediately opens the required Board ' +
+      'approval. Set draftOnly only when the user explicitly asks to save a draft.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string' },
+        requirement: { type: 'string' },
+        blueprint: WORKFLOW_BLUEPRINT_SCHEMA,
+        idempotencyKey: { type: 'string' },
+        draftOnly: { type: 'boolean' },
+      },
+      required: ['canvasId', 'requirement', 'blueprint'],
+    },
+  },
+  {
+    name: 'read_workflow_proposal',
+    description: 'Read a workflow proposal before revising or asking the user to approve it.',
+    inputSchema: {
+      type: 'object',
+      properties: { proposalId: { type: 'string' } },
+      required: ['proposalId'],
+    },
+  },
+  {
+    name: 'revise_workflow_proposal',
+    description:
+      'Revise a DRAFT workflow proposal after user feedback. Pass expectedVersion ' +
+      'to prevent overwriting a newer revision. The revised version opens a fresh ' +
+      'Board approval unless draftOnly is true. Applied proposals are immutable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        proposalId: { type: 'string' },
+        expectedVersion: { type: 'integer', minimum: 1 },
+        requirement: { type: 'string' },
+        blueprint: WORKFLOW_BLUEPRINT_SCHEMA,
+        draftOnly: { type: 'boolean' },
+      },
+      required: ['proposalId', 'expectedVersion'],
+    },
+  },
+  {
+    name: 'apply_workflow_proposal',
+    description:
+      'Request human approval in the meee2 Board to materialize this proposal. ' +
+      'The tool never applies directly; the user must approve the durable request in meee2. ' +
+      'Normally only needed for a proposal previously saved with draftOnly=true or to retry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        proposalId: { type: 'string' },
+      },
+      required: ['proposalId'],
+    },
+  },
+  {
+    name: 'dry_run_workflow',
+    description:
+      'Create a structural dry run for a workflow Canvas. It validates run ' +
+      'readiness without dispatching agents, sending outreach, or writing external objects.',
+    inputSchema: {
+      type: 'object',
+      properties: { canvasId: { type: 'string' } },
+      required: ['canvasId'],
+    },
+  },
+  {
+    name: 'enable_workflow',
+    description:
+      'Request a fresh human approval in meee2 before enabling all recurring jobs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string' },
+      },
+      required: ['canvasId'],
+    },
+  },
+  {
+    name: 'pause_workflow',
+    description: 'Request human approval in meee2 to pause every recurring job.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        canvasId: { type: 'string' },
+      },
+      required: ['canvasId'],
+    },
+  },
+  {
+    name: 'get_workflow_status',
+    description:
+      'Get a business-level workflow summary: enabled state, step counts, ' +
+      'next scheduled run, approvals, missing integrations, and latest run.',
+    inputSchema: {
+      type: 'object',
+      properties: { canvasId: { type: 'string' } },
+      required: ['canvasId'],
+    },
+  },
   {
     name: 'list_sessions',
     description:
@@ -779,6 +1003,90 @@ async function handleUpdateArtifactViews(args) {
   )
 }
 
+async function handleProposeWorkflow(args, targetCanvasId = null) {
+  if (!args.requirement || !String(args.requirement).trim()) {
+    throw new Error('requirement is required')
+  }
+  if (!args.blueprint || typeof args.blueprint !== 'object') {
+    throw new Error('blueprint is required')
+  }
+  const proposalEnvelope = await callApi('POST', '/api/workflow-proposals', {
+    requirement: String(args.requirement).trim(),
+    blueprint: args.blueprint,
+    idempotencyKey: args.idempotencyKey,
+    targetCanvasId,
+  })
+  return await withWorkflowApproval(proposalEnvelope, args.draftOnly === true)
+}
+
+async function handleReadWorkflowProposal(args) {
+  if (!args.proposalId) throw new Error('proposalId is required')
+  return await callApi(
+    'GET',
+    `/api/workflow-proposals/${encodeURIComponent(args.proposalId)}`,
+  )
+}
+
+async function handleReviseWorkflowProposal(args) {
+  if (!args.proposalId) throw new Error('proposalId is required')
+  const proposalEnvelope = await callApi(
+    'PATCH',
+    `/api/workflow-proposals/${encodeURIComponent(args.proposalId)}`,
+    {
+      expectedVersion: args.expectedVersion,
+      requirement: args.requirement,
+      blueprint: args.blueprint,
+    },
+  )
+  return await withWorkflowApproval(proposalEnvelope, args.draftOnly === true)
+}
+
+async function withWorkflowApproval(proposalEnvelope, draftOnly) {
+  const proposalId = proposalEnvelope?.proposal?.id
+  if (draftOnly || !proposalId) return proposalEnvelope
+  const approvalEnvelope = await handleApplyWorkflowProposal({ proposalId })
+  return {
+    ...proposalEnvelope,
+    approval: approvalEnvelope.approval,
+    nextAction: 'Approve or reject this request in the meee2 Board.',
+  }
+}
+
+async function handleApplyWorkflowProposal(args) {
+  if (!args.proposalId) throw new Error('proposalId is required')
+  return await callApi(
+    'POST',
+    `/api/workflow-proposals/${encodeURIComponent(args.proposalId)}/apply`,
+    {},
+  )
+}
+
+async function handleDryRunWorkflow(args) {
+  if (!args.canvasId) throw new Error('canvasId is required')
+  return await callApi(
+    'POST',
+    `/api/workflows/${encodeURIComponent(args.canvasId)}/dry-run`,
+    {},
+  )
+}
+
+async function handleSetWorkflowEnabled(args, enabled) {
+  if (!args.canvasId) throw new Error('canvasId is required')
+  return await callApi(
+    'POST',
+    `/api/workflows/${encodeURIComponent(args.canvasId)}/${enabled ? 'enable' : 'pause'}`,
+    {},
+  )
+}
+
+async function handleGetWorkflowStatus(args) {
+  if (!args.canvasId) throw new Error('canvasId is required')
+  return await callApi(
+    'GET',
+    `/api/workflows/${encodeURIComponent(args.canvasId)}/status`,
+  )
+}
+
 // ─── server plumbing ──────────────────────────────────────────────────────
 
 // `instructions` 是 MCP 协议在 InitializeResult 里返回的 system-level hint
@@ -791,7 +1099,19 @@ const INSTRUCTIONS = [
   'If the Meee2 Skill is available, follow it. These MCP tools are the writeback',
   'interface for reading node contracts and submitting structured canvas output.',
   '',
-  'Core tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
+  'Workflow creation: translate natural-language requirements into ONE complete',
+  'blueprint and call propose_workflow. This immediately opens the one required',
+  'human approval in the meee2 Board by default, so do NOT ask for a second chat',
+  'confirmation and do NOT call apply_workflow_proposal again. Explain the business',
+  'steps, tracker, human-review fields, integrations, and schedules; hide node/canvas',
+  'internals unless the user asks. Use draftOnly=true only when they explicitly ask',
+  'to save a draft without opening approval.',
+  'Apply and enable are separate approvals: apply creates or updates the Canvas',
+  'with recurring jobs disabled; dry_run_workflow is side-effect free; only call',
+  'enable_workflow after a fresh explicit approval. Existing workflow edits use',
+  'propose_workflow_change with the complete desired blueprint.',
+  '',
+  'Core execution tools: read_node_contract, submit_node_output, attach_artifact_to_node,',
   'propose_add_node, get_artifact, update_artifact, update_artifact_views,',
   'read_inbox, list_sessions.',
   'Governance rule: propose_add_node files a PENDING proposal for a new step',
@@ -824,6 +1144,34 @@ async function dispatchToolCall(name, args = {}) {
   try {
     let result
     switch (name) {
+      case 'propose_workflow':
+        result = await handleProposeWorkflow(args)
+        break
+      case 'propose_workflow_change':
+        if (!args.canvasId) throw new Error('canvasId is required')
+        result = await handleProposeWorkflow(args, args.canvasId)
+        break
+      case 'read_workflow_proposal':
+        result = await handleReadWorkflowProposal(args)
+        break
+      case 'revise_workflow_proposal':
+        result = await handleReviseWorkflowProposal(args)
+        break
+      case 'apply_workflow_proposal':
+        result = await handleApplyWorkflowProposal(args)
+        break
+      case 'dry_run_workflow':
+        result = await handleDryRunWorkflow(args)
+        break
+      case 'enable_workflow':
+        result = await handleSetWorkflowEnabled(args, true)
+        break
+      case 'pause_workflow':
+        result = await handleSetWorkflowEnabled(args, false)
+        break
+      case 'get_workflow_status':
+        result = await handleGetWorkflowStatus(args)
+        break
       case 'list_sessions':
         result = await handleListSessions()
         break

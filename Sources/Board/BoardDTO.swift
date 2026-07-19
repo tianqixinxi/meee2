@@ -519,9 +519,11 @@ struct ArtifactPageEnvelope: Encodable {
     let items: [ArtifactPageItemDTO]
     let cursor: String?
     let total: Int
+    let availableTotal: Int
     let hasMore: Bool
     let canvasCount: Int
     let groupCounts: [String: Int]
+    let statusCounts: [String: Int]
 }
 
 // MARK: - Canvas templates (gallery / apply)
@@ -536,6 +538,9 @@ struct CanvasTemplateNodeSpecDTO: Encodable {
     /// view; non-nil ⇒ front-end should render the declared widget kind
     /// (`Widget` itself is Codable — same shape as PlanningNode.widget).
     let widget: Widget?
+    let inputs: [String]?
+    let outputs: [String]?
+    let goal: String?
 }
 
 struct CanvasTemplateDTO: Encodable {
@@ -561,6 +566,7 @@ struct CanvasTemplateDTO: Encodable {
     let renderProfile: CanvasRenderProfile?
     let renderObjects: [CanvasObject]
     let renderRelations: [CanvasRelation]
+    let guide: BoardLayoutStore.TemplateMetadata.Guide?
 }
 
 struct CanvasTemplatesEnvelope: Encodable {

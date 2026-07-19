@@ -17,6 +17,7 @@ import {
   type UserProfile,
 } from '../api'
 import { useI18n } from '../lib/i18n'
+import { PageShell } from './PageShell'
 
 interface Props {
   userProfile: UserProfile | null
@@ -81,37 +82,33 @@ export function TeamView({ userProfile }: Props) {
 
   if (!connected) {
     return (
-      <section className="team-view" aria-label={t('team.title')}>
-        <div className="team-view__inner">
-          <div className="team-view__gate">
-            <LockKeyhole size={18} aria-hidden />
-            <div>
-              <strong>{t('team.signInTitle')}</strong>
-              <p>{t('team.signInSubtitle')}</p>
-            </div>
+      <PageShell ariaLabel={t('team.title')} title={t('team.title')}>
+        <div className="team-view__gate">
+          <LockKeyhole size={18} aria-hidden />
+          <div>
+            <strong>{t('team.signInTitle')}</strong>
+            <p>{t('team.signInSubtitle')}</p>
           </div>
         </div>
-      </section>
+      </PageShell>
     )
   }
 
   return (
-    <section className="team-view" aria-label={t('team.title')}>
-      <div className="team-view__inner">
-        <div className="team-view__header">
-          <div>
-            <span>{t('team.title')}</span>
-            <h1>{currentTeam?.name || t('team.currentTeam')}</h1>
-            <p>{t('team.subtitle')}</p>
-          </div>
-          <div className="team-view__summary">
-            <UsersRound size={15} aria-hidden />
-            {membersUnavailable
-              ? t('team.summaryUnavailable', { role: currentRole ? ` · ${currentRole}` : '' })
-              : t('team.summary', { count: members.length, role: currentRole ? ` · ${currentRole}` : '' })}
-          </div>
+    <PageShell
+      ariaLabel={t('team.title')}
+      kicker={t('team.title')}
+      title={currentTeam?.name || t('team.currentTeam')}
+      hint={t('team.subtitle')}
+      tools={(
+        <div className="team-view__summary">
+          <UsersRound size={15} aria-hidden />
+          {membersUnavailable
+            ? t('team.summaryUnavailable', { role: currentRole ? ` · ${currentRole}` : '' })
+            : t('team.summary', { count: members.length, role: currentRole ? ` · ${currentRole}` : '' })}
         </div>
-
+      )}
+    >
         {error && <div className="team-view__error">{error}</div>}
 
         <div className="team-view__sections">
@@ -228,8 +225,7 @@ export function TeamView({ userProfile }: Props) {
             </section>
           )}
         </div>
-      </div>
-    </section>
+    </PageShell>
   )
 }
 

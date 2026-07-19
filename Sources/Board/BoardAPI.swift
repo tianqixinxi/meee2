@@ -854,6 +854,46 @@ enum BoardAPI {
         return AgentLaunchAttachment(path: url.path, filename: safeName, contentType: contentType)
     }
 
+    private static func savePlannerInputFile(data: Data, filename rawFilename: String, contentType: String) throws -> AgentLaunchAttachment {
+        let baseDir = StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("attachments", isDirectory: true)
+            .appendingPathComponent("planner", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        let safeName = sanitizedAttachmentFilename(rawFilename)
+        let ext = attachmentExtension(filename: safeName, contentType: contentType)
+        let stem = safeName.isEmpty ? "input" : (safeName as NSString).deletingPathExtension
+        let fileName = ext.isEmpty ? stem : "\(stem).\(ext)"
+        let url = baseDir.appendingPathComponent(fileName, isDirectory: false)
+        try data.write(to: url, options: .atomic)
+        return AgentLaunchAttachment(path: url.path, filename: safeName, contentType: contentType)
+    }
+
+    private static func isManagedPlannerInputPath(_ rawPath: String) -> Bool {
+        let candidate = URL(fileURLWithPath: rawPath).standardizedFileURL.resolvingSymlinksInPath().path
+        let root = StorageRoots.processDefault.baseDirectory
+            .appendingPathComponent("attachments", isDirectory: true)
+            .appendingPathComponent("planner", isDirectory: true)
+            .standardizedFileURL.resolvingSymlinksInPath().path
+        return candidate.hasPrefix(root + "/") && FileManager.default.fileExists(atPath: candidate)
+    }
+
+    static func plannerInputFileTypeIsSupported(filename: String, contentType: String) -> Bool {
+        let supportedExtensions: Set<String> = [
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+            "txt", "md", "markdown", "csv", "tsv", "json", "yaml", "yml", "xml", "html", "htm", "rtf",
+            "png", "jpg", "jpeg", "gif", "webp", "heic", "svg",
+            "pages", "numbers", "key"
+        ]
+        let ext = (filename as NSString).pathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if supportedExtensions.contains(ext) { return true }
+        let mime = contentType.lowercased().split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ext.isEmpty && (mime.hasPrefix("text/") || mime.hasPrefix("image/"))
+    }
+
     private static func sanitizedAttachmentFilename(_ raw: String) -> String {
         let name = (raw as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? "attachment" : name
@@ -1241,78 +1281,15 @@ enum BoardAPI {
         )
     }
 
-    static func materializeAutoDispatchedSessions(canvasId: String, result: inout PlannerNodeOutputResult) {
-        // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched downstream
-        // nodes in the background so the user's focused app stays put. The
-        // dispatch state is already persisted by the store (see
-        // PlannerBoardBridge.submitNodeOutput), this just materializes the
-        // terminal so the session actually runs.
-        guard let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty else { return }
-        var autoSpawnStarted = 0
-        var autoSpawnSkipped: [String] = []
-        var autoSpawnFailed: [String] = []
-        for autoNodeId in autoIds {
-            guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
-                autoSpawnSkipped.append("\(autoNodeId): missing node")
-                continue
-            }
-            do {
-                let spawnRequest = try recordPlannerDispatchIntent(
-                    canvasId: canvasId,
-                    node: node,
-                    cwdOverride: nil,
-                    includeInitialPromptInIntent: false
-                )
-                guard let spawnReq = spawnRequest else {
-                    autoSpawnSkipped.append("\(autoNodeId): no spawn request")
-                    continue
-                }
-                let surface = try createInternalSessionSurface(
-                    provider: spawnReq.provider,
-                    cwd: spawnReq.cwd,
-                    command: spawnReq.command,
-                    createIfMissing: true,
-                    canvasId: canvasId,
-                    nodeId: autoNodeId,
-                    initialPrompt: spawnReq.initialPrompt
-                )
-                _ = PlannerSessionRunStateBridge.observe(
-                    sessionId: surface.sessionId,
-                    purpose: spawnReq.purpose,
-                    status: .active
-                )
-                autoSpawnStarted += 1
-                NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
-            } catch {
-                autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
-                NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
-            }
-        }
-        var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
-        if !autoSpawnSkipped.isEmpty {
-            parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
-        }
-        if !autoSpawnFailed.isEmpty {
-            parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
-        }
-        result.hint = [result.hint, parts.joined(separator: " ")]
-            .compactMap { value in
-                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return trimmed.isEmpty ? nil : trimmed
-            }
-            .joined(separator: " ")
-        NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
-    }
-
     /// external-first writeback: after a gating submit, dispatch one dedicated
     /// artifact-sync session per external-object reference the agent just wrote,
     /// so the mirror snapshot catches up to the real external object. Best-effort
     /// — a sync-dispatch failure must NEVER fail the submit (the external write
     /// already landed; the worst case is a stale mirror the user can refresh
     /// manually). Reuses the same per-reference dedupe + session registry as the
-    /// manual 「同步快照」 button via `dispatchArtifactSyncSession`. Engine decided
-    /// the references (`result.reconcileReferences`); this materializes them —
-    /// the same engine-decides / BoardAPI-spawns split as auto-dispatch.
+    /// manual 「同步快照」 button via `dispatchArtifactSyncSession`. The engine
+    /// decides the references (`result.reconcileReferences`); this materializes
+    /// the dedicated sync sessions.
     static func reconcileExternalWriteMirrors(canvasId: String, references: [String]?) {
         guard let references, !references.isEmpty else { return }
         for reference in references {
@@ -2640,6 +2617,99 @@ enum BoardAPI {
         }
     }
 
+    /// A newly provisioned workflow has schedules before it has live sessions.
+    /// On the first due tick, materialize the node's configured agent session;
+    /// later ticks reuse the resulting binding through MessageRouter.
+    static func materializeScheduledPlannerNodeSession(
+        canvasId: String,
+        nodeId: String,
+        schedulePrompt: String
+    ) throws -> (sessionId: String, initialPromptIncludesSchedule: Bool) {
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let actorUserId = PlannerPermission.currentActorId()
+        let state = try PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: actorUserId
+        )
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        if let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionId.isEmpty {
+            if TerminalSessionBackendRegistry.shared.snapshot(id: sessionId)
+                .map({ !isReusableInternalSurface($0) }) ?? true {
+                let revival = try reviveNodeSessionSurface(
+                    canvasId: canvasId,
+                    node: node,
+                    deadSessionId: sessionId,
+                    explicitCwd: nil,
+                    access: state.access
+                )
+                return (revival.surface.sessionId, false)
+            }
+            return (sessionId, false)
+        }
+        let runner: PlannerDispatchRunner
+        switch node.executorType {
+        case .claude:
+            runner = .claude
+        case .codex:
+            runner = .codex
+        default:
+            throw WorkflowProvisioningError.validation(
+                "scheduled node \(nodeId) must use the claude or codex runtime"
+            )
+        }
+        let result = try PlannerBoardBridge.dispatchNode(
+            nodeId: nodeId,
+            runner: runner,
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: actorUserId
+        )
+        do {
+            guard let spawnRequest = try recordPlannerDispatchIntent(
+                canvasId: canvasId,
+                node: result.dispatchedNode,
+                cwdOverride: nil,
+                initialPromptOverride: schedulePrompt,
+                includeInitialPromptInIntent: false
+            ) else {
+                throw WorkflowProvisioningError.validation(
+                    "scheduled node \(nodeId) does not have a spawnable runner"
+                )
+            }
+            let surface = try createInternalSessionSurface(
+                provider: spawnRequest.provider,
+                cwd: spawnRequest.cwd,
+                command: spawnRequest.command,
+                createIfMissing: true,
+                canvasId: canvasId,
+                nodeId: nodeId,
+                initialPrompt: spawnRequest.initialPrompt
+            )
+            guard PlannerSessionRunStateBridge.observe(
+                sessionId: surface.sessionId,
+                purpose: spawnRequest.purpose,
+                status: .active
+            ) != nil else {
+                throw WorkflowProvisioningError.validation(
+                    "scheduled session could not be bound to node \(nodeId)"
+                )
+            }
+            return (surface.sessionId, true)
+        } catch {
+            _ = try? PlannerBoardBridge.abandonNodeSession(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actorUserId
+            )
+            throw error
+        }
+    }
+
     static func ensurePlannerNodeInternalSession(_ req: HttpRequest) -> HttpResponse {
         struct EnsureRequest: Decodable {
             let runner: PlannerDispatchRunner?
@@ -3315,28 +3385,77 @@ enum BoardAPI {
     }
 
     static func bindPlannerNodeInput(_ req: HttpRequest) -> HttpResponse {
+        struct SourceRequest: Decodable {
+            let kind: String
+            let reference: String?
+            let url: String?
+            let integrationId: String?
+            let entityKind: String?
+            let entityRef: String?
+            let title: String?
+        }
         struct BindInputRequest: Decodable {
             let input: String
-            let reference: String
+            let reference: String?
             let kind: ContextSource.Kind?
             let title: String?
+            let source: SourceRequest?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id or node id", status: 400)
         }
         guard let body = decodeJSONBody(req, as: BindInputRequest.self),
-              !body.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !body.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return errorResponse("invalid_json", "body must be {\"input\": String, \"reference\": String}", status: 400)
+              !body.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must include a non-empty input", status: 400)
         }
         let input = body.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reference = body.reference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sourceTitle = body.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyReference = body.reference?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let requestedSource = body.source
+        let resolved: (reference: String, kind: ContextSource.Kind, title: String)
+        switch requestedSource?.kind.lowercased() {
+        case "url":
+            let url = requestedSource?.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let components = URLComponents(string: url),
+                  components.scheme == "http" || components.scheme == "https",
+                  components.host?.isEmpty == false else {
+                return errorResponse("invalid_input_source", "URL inputs must use http or https", status: 400)
+            }
+            resolved = (url, .web, input)
+        case "integration":
+            let integrationId = requestedSource?.integrationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let entityKind = requestedSource?.entityKind?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "resource"
+            let entityRef = requestedSource?.entityRef?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !integrationId.isEmpty, !entityRef.isEmpty else {
+                return errorResponse("invalid_input_source", "integration inputs require integrationId and entityRef", status: 400)
+            }
+            resolved = (
+                "integration:\(integrationId):\(entityKind):\(entityRef)",
+                .artifact,
+                input
+            )
+        case "file":
+            let reference = requestedSource?.reference?.trimmingCharacters(in: .whitespacesAndNewlines) ?? legacyReference
+            guard isManagedPlannerInputPath(reference) else {
+                return errorResponse("invalid_input_source", "file reference is not a managed planner input", status: 400)
+            }
+            resolved = (reference, .document, input)
+        case .some(let unsupported):
+            return errorResponse("invalid_input_source", "unsupported input source kind: \(unsupported)", status: 400)
+        case nil:
+            guard !legacyReference.isEmpty else {
+                return errorResponse("invalid_json", "body must include reference or source", status: 400)
+            }
+            resolved = (
+                legacyReference,
+                body.kind ?? inferContextSourceKind(reference: legacyReference, title: input),
+                input
+            )
+        }
         let source = ContextSource(
-            kind: body.kind ?? inferContextSourceKind(reference: reference, title: input),
-            title: sourceTitle?.isEmpty == false ? sourceTitle! : input,
-            reference: reference
+            kind: resolved.kind,
+            title: resolved.title.isEmpty ? input : resolved.title,
+            reference: resolved.reference
         )
         do {
             let state = try PlannerBoardBridge.bindNodeInput(
@@ -3354,6 +3473,73 @@ enum BoardAPI {
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    static func uploadPlannerNodeInputFile(_ req: HttpRequest) -> HttpResponse {
+        struct UploadRequest: Decodable {
+            let input: String
+            let filename: String
+            let contentType: String?
+            let dataBase64: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UploadRequest.self),
+              !body.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !body.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !body.dataBase64.isEmpty else {
+            return errorResponse("invalid_json", "body must include input, filename, and dataBase64", status: 400)
+        }
+        if body.dataBase64.count > AttachmentsAPI.maxBytes * 2 {
+            return errorResponse("too_large", "input file exceeds \(AttachmentsAPI.maxBytes) bytes", status: 413)
+        }
+        guard let data = Data(base64Encoded: body.dataBase64, options: .ignoreUnknownCharacters) else {
+            return errorResponse("bad_request", "dataBase64 is not valid base64", status: 400)
+        }
+        guard data.count <= AttachmentsAPI.maxBytes else {
+            return errorResponse("too_large", "input file exceeds \(AttachmentsAPI.maxBytes) bytes", status: 413)
+        }
+        let contentType = body.contentType ?? "application/octet-stream"
+        guard plannerInputFileTypeIsSupported(filename: body.filename, contentType: contentType) else {
+            return errorResponse("unsupported_file_type", "supported inputs include PDF, Office, text, CSV, and image files", status: 415)
+        }
+        var savedPath: String?
+        do {
+            let saved = try savePlannerInputFile(
+                data: data,
+                filename: body.filename,
+                contentType: contentType
+            )
+            savedPath = saved.path
+            let state = try PlannerBoardBridge.bindNodeInput(
+                nodeId: nodeId,
+                input: body.input.trimmingCharacters(in: .whitespacesAndNewlines),
+                source: ContextSource(
+                    kind: .document,
+                    title: body.input.trimmingCharacters(in: .whitespacesAndNewlines),
+                    reference: saved.path
+                ),
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            removeUnboundPlannerInput(at: savedPath)
+            return mapPlannerCoreError(err)
+        } catch {
+            removeUnboundPlannerInput(at: savedPath)
+            return errorResponse("input_upload_failed", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func removeUnboundPlannerInput(at path: String?) {
+        guard let path, !path.isEmpty else { return }
+        let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+        try? FileManager.default.removeItem(at: directory)
     }
 
     static func updatePlannerNodeStatus(_ req: HttpRequest) -> HttpResponse {
@@ -3496,6 +3682,17 @@ enum BoardAPI {
     }
 
     static func submitPlannerNodeOutput(_ req: HttpRequest) -> HttpResponse {
+        submitPlannerNodeOutput(req, submittedByKind: .agent)
+    }
+
+    static func submitHumanPlannerNodeOutput(_ req: HttpRequest) -> HttpResponse {
+        submitPlannerNodeOutput(req, submittedByKind: .human)
+    }
+
+    private static func submitPlannerNodeOutput(
+        _ req: HttpRequest,
+        submittedByKind: PlannerArtifactVersionSubmitterKind
+    ) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id or node id", status: 400)
@@ -3560,7 +3757,9 @@ enum BoardAPI {
                 output: output,
                 for: canvasId,
                 snapshot: preSnapshot,
-                actorUserId: PlannerPermission.currentActorId()
+                actorUserId: PlannerPermission.currentActorId(),
+                submittedByKind: submittedByKind,
+                submittedBy: submittedByKind == .human ? PlannerPermission.currentActorId() : nil
             )
             // Auto-done rule (decision locked 2026-05-28): if the node was
             // `ready` before this submit and the resulting attempt landed in
@@ -3586,7 +3785,6 @@ enum BoardAPI {
                 }
             }
             routePlannerOutputMessages(result.routes)
-            materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
             reconcileExternalWriteMirrors(canvasId: canvasId, references: result.reconcileReferences)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
@@ -3594,6 +3792,95 @@ enum BoardAPI {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func resolvePlannerNodeReview(_ req: HttpRequest) -> HttpResponse {
+        struct ReviewRequest: Decodable {
+            let decision: String
+            let comment: String?
+            let correctedOutput: PlannerNodeOutput?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: ReviewRequest.self) else {
+            return errorResponse("invalid_json", "body must include decision", status: 400)
+        }
+        let actorId = PlannerPermission.currentActorId()
+        let reviewSnapshot = body.correctedOutput == nil
+            ? nil
+            : PlannerBoardBridge.store.snapshotRecord(canvasId: canvasId)
+        var correctedSubmission: PlannerNodeOutputResult?
+        do {
+            let state: PlannerGraphState
+            switch body.decision {
+            case "approve":
+                if var corrected = body.correctedOutput {
+                    corrected.nodeId = nodeId
+                    corrected.forceNewVersion = true
+                    corrected.status = .needsReview
+                    corrected.next = .needsOwnerReview
+                    correctedSubmission = try PlannerBoardBridge.submitNodeOutput(
+                        nodeId: nodeId,
+                        output: corrected,
+                        for: canvasId,
+                        snapshot: BoardLayoutStore.shared.snapshot(),
+                        actorUserId: actorId,
+                        submittedByKind: .human,
+                        submittedBy: actorId
+                    )
+                }
+                state = try PlannerBoardBridge.confirmNodeReview(
+                    nodeId: nodeId,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: actorId
+                )
+            case "request_changes":
+                let comment = body.comment?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !comment.isEmpty else {
+                    return errorResponse("review_comment_required", "comment is required when requesting changes", status: 400)
+                }
+                state = try PlannerBoardBridge.requestNodeReviewChanges(
+                    nodeId: nodeId,
+                    comment: comment,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: actorId
+                )
+                if let sessionId = state.nodes.first(where: { $0.id == nodeId })?.sessionId,
+                   !sessionId.isEmpty {
+                    deliverReviewFeedback(comment, sessionId: sessionId)
+                }
+            default:
+                return errorResponse("invalid_review_decision", "decision must be approve or request_changes", status: 400)
+            }
+            if let correctedSubmission {
+                routePlannerOutputMessages(correctedSubmission.routes)
+                reconcileExternalWriteMirrors(
+                    canvasId: canvasId,
+                    references: correctedSubmission.reconcileReferences
+                )
+            }
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(graphEnvelope(state))
+        } catch let err as PlannerCoreError {
+            restorePlannerReviewSnapshot(reviewSnapshot)
+            return mapPlannerCoreError(err)
+        } catch {
+            restorePlannerReviewSnapshot(reviewSnapshot)
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func restorePlannerReviewSnapshot(_ snapshot: PlannerStore.CanvasRecord?) {
+        guard let snapshot else { return }
+        do {
+            try PlannerBoardBridge.store.restoreCanvasRecord(snapshot)
+        } catch {
+            MError("[PlannerReview] failed to roll back corrected review: \(error.localizedDescription)")
         }
     }
 
@@ -3645,7 +3932,7 @@ enum BoardAPI {
                         .string("下一行动: Ada")
                     ])
                 ])
-                var result = try submitPokerSystemState(
+                let result = try submitPokerSystemState(
                     canvasId: canvasId,
                     dealerNodeId: dealerNodeId,
                     summary: "Rules Orchestrator started Poker Table",
@@ -3653,7 +3940,6 @@ enum BoardAPI {
                     actionLog: actionLog,
                     actorUserId: actor
                 )
-                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
                 BoardServer.shared.broadcastStateChanged()
                 return jsonResponse(result, status: 201, reason: "Created")
             case "pause-auto", "resume-auto", "step":
@@ -3685,7 +3971,7 @@ enum BoardAPI {
                     ]))
                     summary = "Rules Orchestrator \(status)"
                 }
-                var result = try submitPokerSystemState(
+                let result = try submitPokerSystemState(
                     canvasId: canvasId,
                     dealerNodeId: dealerNodeId,
                     summary: summary,
@@ -3693,7 +3979,6 @@ enum BoardAPI {
                     actionLog: .object(["actionLog": patch.objectValue?["actionLog"] ?? .array([])]),
                     actorUserId: actor
                 )
-                materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
                 BoardServer.shared.broadcastStateChanged()
                 return jsonResponse(result, status: 201, reason: "Created")
             default:
@@ -5373,6 +5658,10 @@ enum BoardAPI {
              .dataSourceNotFound, .edgeNotFound, .monitorCardNotFound,
              .artifactNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .nodeNotFound:
+            return errorResponse("node_not_found", err.localizedDescription, status: 404)
+        case .nodeNotReviewable:
+            return errorResponse("node_not_reviewable", err.localizedDescription, status: 409)
         case .monitorSpecReplaceGuard:
             return errorResponse("monitor_spec_replace_guard", err.localizedDescription, status: 409)
         case .plannerStateUnreadable:
@@ -5387,7 +5676,6 @@ enum BoardAPI {
              .invalidPlannerProposalJSON,
              .missingNodeForAdd,
              .missingNodeId,
-             .nodeNotFound,
              .updateNodeNoFields,
              .crossCanvasNodeReference,
              .unknownNodeKind,
@@ -5534,6 +5822,18 @@ enum BoardAPI {
                 lines.append("- \(output)")
             }
         }
+        if let policy = node.workflowPolicy {
+            lines.append("")
+            lines.append("Enforced integration policy:")
+            lines.append("- external_write_mode: \(policy.externalWriteMode.rawValue)")
+            for (connector, mode) in policy.integrationPolicies.sorted(by: { $0.key < $1.key }) {
+                lines.append("- \(connector): \(mode)")
+            }
+            lines.append("- read_only forbids mutations; draft_only forbids send/apply actions; human_only fields must not appear in agent output.")
+            if policy.externalWriteMode != .directWrite {
+                lines.append("- Submit only workflow-draft:// artifacts for owner review; never write the protected external tracker directly.")
+            }
+        }
         let inputBindings = node.contextSources.filter { source in
             node.schema.inputs.contains { $0.caseInsensitiveCompare(source.title) == .orderedSame }
         }
@@ -5574,6 +5874,21 @@ enum BoardAPI {
             } catch {
                 MWarn("[PlannerOutput] route to session \(sessionId.prefix(8)) failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    private static func deliverReviewFeedback(_ comment: String, sessionId: String) {
+        do {
+            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sessionId)
+            _ = try MessageRouter.shared.send(
+                channel: channelName,
+                fromAlias: "operator",
+                toAlias: "session",
+                content: "Owner requested changes before approving this node:\n\n\(comment)\n\nRevise the work and submit_node_output again.",
+                injectedByHuman: true
+            )
+        } catch {
+            MWarn("[PlannerReview] feedback delivery failed sid=\(sessionId.prefix(8)): \(error.localizedDescription)")
         }
     }
 
@@ -6300,6 +6615,271 @@ enum BoardAPI {
         } catch {
             return errorResponse("automation_store_error", error.localizedDescription, status: 500)
         }
+    }
+
+    // MARK: - Workflow provisioning
+
+    private struct WorkflowProposalCreateRequest: Decodable {
+        let requirement: String
+        let blueprint: WorkflowBlueprint
+        let idempotencyKey: String?
+        let targetCanvasId: String?
+    }
+
+    private struct WorkflowProposalReviseRequest: Decodable {
+        let requirement: String?
+        let blueprint: WorkflowBlueprint?
+        let expectedVersion: Int?
+    }
+
+    private struct WorkflowApprovalResolveRequest: Decodable {
+        let approved: Bool
+    }
+
+    static func createWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let body = decodeJSONBody(req, as: WorkflowProposalCreateRequest.self) else {
+            return errorResponse(
+                "invalid_json",
+                "body must include requirement and a structured workflow blueprint",
+                status: 400
+            )
+        }
+        do {
+            let proposal = try WorkflowProposalStore.shared.create(
+                requirement: body.requirement,
+                blueprint: body.blueprint,
+                idempotencyKey: body.idempotencyKey,
+                targetCanvasId: body.targetCanvasId
+            )
+            return jsonResponse(WorkflowProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func getWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow proposal id", status: 400)
+        }
+        do {
+            guard let proposal = try WorkflowProposalStore.shared.get(id: id) else {
+                return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+            }
+            return jsonResponse(WorkflowProposalEnvelope(proposal: proposal))
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func reviseWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow proposal id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: WorkflowProposalReviseRequest.self) else {
+            return errorResponse("invalid_json", "body must include requirement or blueprint", status: 400)
+        }
+        guard body.requirement != nil || body.blueprint != nil else {
+            return errorResponse("bad_request", "nothing to revise", status: 400)
+        }
+        do {
+            let proposal = try WorkflowProposalStore.shared.revise(
+                id: id,
+                requirement: body.requirement,
+                blueprint: body.blueprint,
+                expectedVersion: body.expectedVersion
+            )
+            return jsonResponse(WorkflowProposalEnvelope(proposal: proposal))
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func applyWorkflowProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow proposal id", status: 400)
+        }
+        do {
+            guard let proposal = try WorkflowProposalStore.shared.get(id: id) else {
+                return errorResponse("not_found", "workflow proposal not found: \(id)", status: 404)
+            }
+            let actorId = PlannerPermission.currentActorId() ?? "local-owner"
+            let approval = try WorkflowApprovalStore.shared.request(
+                action: .apply,
+                proposal: proposal,
+                canvasId: proposal.targetCanvasId,
+                actorId: actorId
+            )
+            return jsonResponse(WorkflowApprovalEnvelope(approval: approval), status: 202, reason: "Accepted")
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func listWorkflowApprovals(_ req: HttpRequest) -> HttpResponse {
+        do {
+            return jsonResponse(WorkflowApprovalListEnvelope(
+                approvals: try WorkflowApprovalStore.shared.list(
+                    includeResolved: false,
+                    actorId: PlannerPermission.currentActorId() ?? "local-owner"
+                )
+            ))
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func resolveWorkflowApproval(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing workflow approval id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: WorkflowApprovalResolveRequest.self) else {
+            return errorResponse("invalid_json", "body must include approved", status: 400)
+        }
+        let humanApproval = req.headers.first {
+            $0.key.caseInsensitiveCompare(BoardServer.humanApprovalHeader) == .orderedSame
+        }?.value
+        guard humanApproval == "board-ui" else {
+            return errorResponse(
+                "human_approval_required",
+                "workflow approvals must be resolved from the meee2 Board UI",
+                status: 403
+            )
+        }
+        let actorId = PlannerPermission.currentActorId() ?? "local-owner"
+        do {
+            let pending = try WorkflowApprovalStore.shared.beginResolution(
+                id: id, approved: body.approved, actorId: actorId
+            )
+            guard body.approved else {
+                return jsonResponse(WorkflowApprovalResolutionEnvelope(
+                    approval: pending, applyResult: nil, workflowStatus: nil
+                ))
+            }
+            do {
+                let applyResult: WorkflowApplyEnvelope?
+                let workflowStatus: WorkflowStatusEnvelope?
+                switch pending.action {
+                case .apply:
+                    guard let proposalId = pending.proposalId,
+                          let proposal = try WorkflowProposalStore.shared.get(id: proposalId),
+                          proposal.version == pending.proposalVersion else {
+                        throw WorkflowProvisioningError.approvalInvalid(
+                            "workflow proposal changed after approval was requested"
+                        )
+                    }
+                    applyResult = try WorkflowProvisioner.applyApproved(
+                        proposal: proposal, actorId: actorId
+                    )
+                    workflowStatus = nil
+                case .enable, .pause:
+                    guard let canvasId = pending.canvasId else {
+                        throw WorkflowProvisioningError.approvalInvalid("workflow approval has no canvas")
+                    }
+                    applyResult = nil
+                    workflowStatus = try WorkflowProvisioner.setEnabledApproved(
+                        canvasId: canvasId,
+                        enabled: pending.action == .enable,
+                        actorId: actorId
+                    )
+                }
+                let finished = try WorkflowApprovalStore.shared.finish(id: id)
+                return jsonResponse(WorkflowApprovalResolutionEnvelope(
+                    approval: finished,
+                    applyResult: applyResult,
+                    workflowStatus: workflowStatus
+                ))
+            } catch {
+                _ = try? WorkflowApprovalStore.shared.finish(id: id, error: error)
+                throw error
+            }
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func dryRunWorkflow(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            return jsonResponse(try WorkflowProvisioner.dryRun(canvasId: canvasId))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func enableWorkflow(_ req: HttpRequest) -> HttpResponse {
+        setWorkflowEnabled(req, enabled: true)
+    }
+
+    static func pauseWorkflow(_ req: HttpRequest) -> HttpResponse {
+        setWorkflowEnabled(req, enabled: false)
+    }
+
+    private static func setWorkflowEnabled(_ req: HttpRequest, enabled: Bool) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let actorId = PlannerPermission.currentActorId() ?? "local-owner"
+            let plannerActorId = PlannerPermission.currentActorId()
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: plannerActorId
+            )
+            guard state.access.role == .owner else {
+                throw PlannerCoreError.permissionDenied(
+                    action: enabled ? "request workflow enable" : "request workflow pause",
+                    role: state.access.role
+                )
+            }
+            let approval = try WorkflowApprovalStore.shared.request(
+                action: enabled ? .enable : .pause,
+                canvasId: canvasId,
+                actorId: actorId
+            )
+            return jsonResponse(WorkflowApprovalEnvelope(approval: approval), status: 202, reason: "Accepted")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    static func getWorkflowStatus(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            return jsonResponse(try WorkflowProvisioner.status(canvasId: canvasId))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return mapWorkflowProvisioningError(error)
+        }
+    }
+
+    private static func mapWorkflowProvisioningError(_ error: Error) -> HttpResponse {
+        if let error = error as? WorkflowProvisioningError {
+            switch error {
+            case .notFound:
+                return errorResponse("not_found", error.localizedDescription, status: 404)
+            case .validation:
+                return errorResponse("validation_error", error.localizedDescription, status: 400)
+            case .immutableProposal:
+                return errorResponse("proposal_immutable", error.localizedDescription, status: 409)
+            case .approvalRequired:
+                return errorResponse("approval_required", error.localizedDescription, status: 409)
+            case .approvalInvalid:
+                return errorResponse("approval_invalid", error.localizedDescription, status: 409)
+            case .storeCorrupted:
+                return errorResponse("workflow_store_corrupted", error.localizedDescription, status: 500)
+            }
+        }
+        return errorResponse("workflow_provisioning_error", error.localizedDescription, status: 500)
     }
 
     // MARK: - Sessions
@@ -7929,7 +8509,8 @@ enum BoardAPI {
             sceneSpec: nil,
             renderProfile: nil,
             renderObjects: [],
-            renderRelations: []
+            renderRelations: [],
+            guide: derivedTemplateGuide(template)
         )
     }
 
@@ -7950,6 +8531,11 @@ enum BoardAPI {
         let metadata = templateMetadata(for: canvas)
         let canEdit = ownerId == actor.userId
         let count = PlannerBoardBridge.store.reusableNodeCount(canvasId: canvas.id)
+        let reusableNodes = (try? PlannerBoardBridge.graphState(
+            for: canvas.id,
+            snapshot: BoardLayoutStore.shared.snapshot(),
+            actorUserId: actor.userId
+        ).nodes) ?? []
         return CanvasTemplateDTO(
             id: canvas.id,
             name: canvas.name,
@@ -7968,11 +8554,24 @@ enum BoardAPI {
             canReplace: canEdit,
             defaultNodesCount: count,
             updatedAt: metadata.updatedAt,
-            defaultNodes: [],
+            defaultNodes: reusableNodes.map { node in
+                CanvasTemplateNodeSpecDTO(
+                    title: node.title,
+                    description: node.schema.goal,
+                    status: node.status.rawValue,
+                    doerId: node.doerId,
+                    positionHint: nil,
+                    widget: node.widget,
+                    inputs: node.schema.inputs,
+                    outputs: node.schema.outputs,
+                    goal: node.schema.goal
+                )
+            },
             sceneSpec: nil,
             renderProfile: nil,
             renderObjects: [],
-            renderRelations: []
+            renderRelations: [],
+            guide: metadata.guide
         )
     }
 
@@ -7983,7 +8582,32 @@ enum BoardAPI {
             status: spec.status,
             doerId: spec.doerId,
             positionHint: spec.positionHint,
-            widget: spec.widget
+            widget: spec.widget,
+            inputs: spec.inputs,
+            outputs: spec.outputs,
+            goal: spec.goal
+        )
+    }
+
+    private static func derivedTemplateGuide(_ template: CanvasTemplate) -> BoardLayoutStore.TemplateMetadata.Guide {
+        let requiredInputs = template.defaultNodes.flatMap { node in
+            (node.inputs ?? []).map { input in
+                BoardLayoutStore.TemplateMetadata.GuideInput(label: input, nodeTitle: node.title)
+            }
+        }
+        let outputValues = template.defaultNodes.reduce(into: [String]()) { values, node in
+            values.append(contentsOf: node.outputs ?? [])
+        }
+        let outputs = Array(NSOrderedSet(array: outputValues)) as? [String] ?? []
+        return BoardLayoutStore.TemplateMetadata.Guide(
+            useCase: template.description,
+            requiredInputs: requiredInputs,
+            expectedOutputs: outputs,
+            quickStart: [
+                "Create a canvas from this template.",
+                requiredInputs.isEmpty ? "Review each node's goal and owner." : "Add the required inputs to the highlighted nodes.",
+                "Start the first ready node and review the resulting artifacts."
+            ]
         )
     }
 
@@ -8085,6 +8709,7 @@ enum BoardAPI {
         let tags: [String]?
         let icon: String?
         let defaultCanvasKind: String?
+        let guide: BoardLayoutStore.TemplateMetadata.Guide?
     }
 
     private struct TemplateApplyRequest: Decodable {
@@ -8101,6 +8726,7 @@ enum BoardAPI {
         let tags: [String]?
         let icon: String?
         let defaultCanvasKind: String?
+        let guide: BoardLayoutStore.TemplateMetadata.Guide?
     }
 
     /// POST /api/templates/:id/apply — body `{ name, scope }`.
@@ -8300,7 +8926,8 @@ enum BoardAPI {
                 sceneSpec: nil,
                 renderProfile: nil,
                 renderObjects: [],
-                renderRelations: []
+                renderRelations: [],
+                guide: nil
             )
         }
     }
@@ -8399,7 +9026,8 @@ enum BoardAPI {
             version: 1,
             createdFromCanvasId: sourceCanvasId,
             updatedBy: actor.userId,
-            updatedAt: Date()
+            updatedAt: Date(),
+            guide: body.guide
         )
         do {
             let created = try BoardLayoutStore.shared.createCanvas(
@@ -8476,6 +9104,7 @@ enum BoardAPI {
             metadata.icon = body.icon.map { normalizedTemplateIcon($0) } ?? metadata.icon
             if body.tags != nil { metadata.tags = normalizedTemplateTags(body.tags) }
             metadata.defaultCanvasKind = canvasKind(from: body.defaultCanvasKind, fallback: metadata.defaultCanvasKind)
+            if body.guide != nil { metadata.guide = body.guide }
             metadata.version += 1
             metadata.replacedFromCanvasId = sourceCanvasId
             metadata.updatedBy = editable.actor.userId
@@ -8518,6 +9147,7 @@ enum BoardAPI {
             metadata.icon = body.icon.map { normalizedTemplateIcon($0) } ?? metadata.icon
             if body.tags != nil { metadata.tags = normalizedTemplateTags(body.tags) }
             metadata.defaultCanvasKind = canvasKind(from: body.defaultCanvasKind, fallback: metadata.defaultCanvasKind)
+            if body.guide != nil { metadata.guide = body.guide }
             metadata.updatedBy = editable.actor.userId
             metadata.updatedAt = Date()
             let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines)

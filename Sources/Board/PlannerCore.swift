@@ -495,6 +495,102 @@ struct PlannerNodeSchedule: Codable, Equatable {
     var prompt: String
     var lastSentAt: Date?
     var nextRunAt: Date?
+    /// Business cadence. nil keeps legacy interval behavior.
+    var cadence: PlannerScheduleCadence?
+    var timeZoneIdentifier: String?
+    var hour: Int?
+    var minute: Int?
+    var dayOfMonth: Int?
+    var lastAttemptAt: Date?
+    var lastError: String?
+    var consecutiveFailures: Int?
+    var retryAt: Date?
+
+    init(
+        enabled: Bool,
+        intervalSeconds: Int,
+        prompt: String,
+        lastSentAt: Date? = nil,
+        nextRunAt: Date? = nil,
+        cadence: PlannerScheduleCadence? = nil,
+        timeZoneIdentifier: String? = nil,
+        hour: Int? = nil,
+        minute: Int? = nil,
+        dayOfMonth: Int? = nil,
+        lastAttemptAt: Date? = nil,
+        lastError: String? = nil,
+        consecutiveFailures: Int? = nil,
+        retryAt: Date? = nil
+    ) {
+        self.enabled = enabled
+        self.intervalSeconds = intervalSeconds
+        self.prompt = prompt
+        self.lastSentAt = lastSentAt
+        self.nextRunAt = nextRunAt
+        self.cadence = cadence
+        self.timeZoneIdentifier = timeZoneIdentifier
+        self.hour = hour
+        self.minute = minute
+        self.dayOfMonth = dayOfMonth
+        self.lastAttemptAt = lastAttemptAt
+        self.lastError = lastError
+        self.consecutiveFailures = consecutiveFailures
+        self.retryAt = retryAt
+    }
+
+    func nextOccurrence(after date: Date) -> Date {
+        switch cadence ?? .interval {
+        case .interval:
+            return date.addingTimeInterval(TimeInterval(max(60, intervalSeconds)))
+        case .daily:
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = resolvedTimeZone
+            let components = DateComponents(
+                hour: min(23, max(0, hour ?? 9)),
+                minute: min(59, max(0, minute ?? 0))
+            )
+            return calendar.nextDate(
+                after: date,
+                matching: components,
+                matchingPolicy: .nextTime,
+                repeatedTimePolicy: .first,
+                direction: .forward
+            ) ?? date.addingTimeInterval(86_400)
+        case .monthly:
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = resolvedTimeZone
+            let targetDay = min(31, max(1, dayOfMonth ?? 1))
+            let targetHour = min(23, max(0, hour ?? 9))
+            let targetMinute = min(59, max(0, minute ?? 0))
+            var monthStart = calendar.date(
+                from: calendar.dateComponents([.year, .month], from: date)
+            ) ?? date
+            for _ in 0..<14 {
+                let range = calendar.range(of: .day, in: .month, for: monthStart)
+                let clampedDay = min(targetDay, range?.count ?? targetDay)
+                var components = calendar.dateComponents([.year, .month], from: monthStart)
+                components.day = clampedDay
+                components.hour = targetHour
+                components.minute = targetMinute
+                components.second = 0
+                if let candidate = calendar.date(from: components), candidate > date {
+                    return candidate
+                }
+                monthStart = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart.addingTimeInterval(2_678_400)
+            }
+            return date.addingTimeInterval(2_678_400)
+        }
+    }
+
+    private var resolvedTimeZone: TimeZone {
+        timeZoneIdentifier.flatMap(TimeZone.init(identifier:)) ?? .current
+    }
+}
+
+enum PlannerScheduleCadence: String, Codable, Equatable {
+    case interval
+    case daily
+    case monthly
 }
 
 struct PlannerNodeGate: Codable, Equatable {
@@ -1034,6 +1130,42 @@ struct UpstreamFreshness: Codable, Equatable {
     var staleUpstreams: [StaleUpstream]
 }
 
+enum WorkflowExternalWriteMode: String, Codable, Equatable {
+    case directWrite = "direct_write"
+    case draftOnly = "draft_only"
+    case prohibited
+}
+
+struct WorkflowTrackerContract: Codable, Equatable {
+    var id: String
+    var connector: String
+    var reference: String
+    var tabColumns: [String: [String]]
+    var fieldPolicies: [String: String]
+    var canRead: Bool
+    var canWrite: Bool
+}
+
+struct WorkflowNodePolicy: Codable, Equatable {
+    var trackers: [WorkflowTrackerContract]
+    var integrationPolicies: [String: String]
+
+    var externalWriteMode: WorkflowExternalWriteMode {
+        let writers = trackers.filter(\.canWrite)
+        guard !writers.isEmpty else { return .prohibited }
+        if writers.contains(where: { integrationPolicies[$0.connector] != "write" }) {
+            return integrationPolicies.values.contains("draft_only") ? .draftOnly : .prohibited
+        }
+        if writers.contains(where: { $0.fieldPolicies.values.contains("human_only") }) {
+            return .prohibited
+        }
+        if writers.contains(where: { $0.fieldPolicies.values.contains("ai_suggest") }) {
+            return .draftOnly
+        }
+        return .directWrite
+    }
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -1108,6 +1240,9 @@ struct PlanningNode: Codable, Equatable {
     /// Teams — 多人增量贡献配置(2026-06-11)。nil = closed(不收贡献)。
     /// 随 team canvas state 同步;贡献账本在云端,见 `NodeContributionConfig`。
     var contribution: NodeContributionConfig?
+    /// Structured, enforceable workflow policy. Unlike the human-readable
+    /// goal/context text, this survives dispatch and is validated on output.
+    var workflowPolicy: WorkflowNodePolicy?
 
     /// Derived upstream-staleness signal — set ONLY by `canvasState`'s read
     /// projection (`injectUpstreamFreshness`). Optional ⇒ implicit nil default,
@@ -1166,7 +1301,8 @@ struct PlanningNode: Codable, Equatable {
         artifactDataSource: String? = nil,
         artifactSource: ArtifactSource? = nil,
         stateSchema: NodeStateSchema? = nil,
-        contribution: NodeContributionConfig? = nil
+        contribution: NodeContributionConfig? = nil,
+        workflowPolicy: WorkflowNodePolicy? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -1202,6 +1338,7 @@ struct PlanningNode: Codable, Equatable {
         self.artifactSource = artifactSource
         self.stateSchema = stateSchema
         self.contribution = contribution
+        self.workflowPolicy = workflowPolicy
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -1230,6 +1367,7 @@ struct PlanningNode: Codable, Equatable {
         case stateSchema
         // Teams — 多人增量贡献(2026-06-11). nil = closed.
         case contribution
+        case workflowPolicy
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -1276,6 +1414,7 @@ struct PlanningNode: Codable, Equatable {
         artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
         stateSchema = try container.decodeIfPresent(NodeStateSchema.self, forKey: .stateSchema)
         contribution = try container.decodeIfPresent(NodeContributionConfig.self, forKey: .contribution)
+        workflowPolicy = try container.decodeIfPresent(WorkflowNodePolicy.self, forKey: .workflowPolicy)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1314,6 +1453,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
         try container.encodeIfPresent(stateSchema, forKey: .stateSchema)
         try container.encodeIfPresent(contribution, forKey: .contribution)
+        try container.encodeIfPresent(workflowPolicy, forKey: .workflowPolicy)
         // Emit the unified source (resolved from legacy if unset) so the
         // board-app reads one canonical `artifactSource`. Legacy
         // `artifactDataSource` is still emitted above for one-release compat.
@@ -1506,6 +1646,7 @@ struct PlanChange: Codable, Equatable {
     /// shape `artifactConfig.dataSource` (board-app sends that on updateNode)
     /// so old clients keep working — see init(from:).
     var artifactSource: ArtifactSource?
+    var workflowPolicy: WorkflowNodePolicy?
 
     // MARK: Canvas runtime 5-atom payloads (PR6+7)
     //
@@ -1566,7 +1707,7 @@ struct PlanChange: Codable, Equatable {
         case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
         case reviewerIds, approverIds, handoffPolicy, widget
-        case artifactDataSource, artifactSource
+        case artifactDataSource, artifactSource, workflowPolicy
         // Legacy nested wire shape `artifactConfig: { dataSource: { mode } }`
         // (board-app sends this on updateNode). Decoded into artifactDataSource
         // for one-release compat.
@@ -1615,6 +1756,7 @@ struct PlanChange: Codable, Equatable {
         artifact: PlanArtifactDraft? = nil,
         artifactDataSource: String? = nil,
         artifactSource: ArtifactSource? = nil,
+        workflowPolicy: WorkflowNodePolicy? = nil,
         dataSourceRecord: DataSourceRecord? = nil,
         sourceId: String? = nil,
         dataSourcePatch: BoardJSONValue? = nil,
@@ -1694,6 +1836,7 @@ struct PlanChange: Codable, Equatable {
         self.artifact = artifact
         self.artifactDataSource = artifactDataSource
         self.artifactSource = artifactSource
+        self.workflowPolicy = workflowPolicy
     }
 
     init(from decoder: Decoder) throws {
@@ -1746,6 +1889,7 @@ struct PlanChange: Codable, Equatable {
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifact = try container.decodeIfPresent(PlanArtifactDraft.self, forKey: .artifact)
         artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
+        workflowPolicy = try container.decodeIfPresent(WorkflowNodePolicy.self, forKey: .workflowPolicy)
         // Legacy two-mode: prefer the flat `artifactDataSource` string; else
         // pull `mode` out of the nested `artifactConfig.dataSource` wire shape
         // the board-app still sends on updateNode (decode-compat, one release).
@@ -1823,6 +1967,7 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(artifact, forKey: .artifact)
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
         try container.encodeIfPresent(artifactSource, forKey: .artifactSource)
+        try container.encodeIfPresent(workflowPolicy, forKey: .workflowPolicy)
 
         // MARK: 5-atom governance payloads. `source` / `layout` / `patch` are
         // shared keys — encode the governance variant only when the node-lane
@@ -2323,11 +2468,33 @@ struct NodeContractOutput: Codable, Equatable {
     var cardinality: NodeContractCardinality
     var payloadKind: NodeContractPayloadKind
     var externalWriteTarget: NodeContractExternalWriteTarget?
+    var externalWriteMode: WorkflowExternalWriteMode?
+    var fieldPolicies: [String: String]?
+    var integrationPolicies: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case cardinality
         case payloadKind = "payload_kind"
         case externalWriteTarget = "external_write_target"
+        case externalWriteMode = "external_write_mode"
+        case fieldPolicies = "field_policies"
+        case integrationPolicies = "integration_policies"
+    }
+
+    init(
+        cardinality: NodeContractCardinality,
+        payloadKind: NodeContractPayloadKind,
+        externalWriteTarget: NodeContractExternalWriteTarget?,
+        externalWriteMode: WorkflowExternalWriteMode? = nil,
+        fieldPolicies: [String: String]? = nil,
+        integrationPolicies: [String: String]? = nil
+    ) {
+        self.cardinality = cardinality
+        self.payloadKind = payloadKind
+        self.externalWriteTarget = externalWriteTarget
+        self.externalWriteMode = externalWriteMode
+        self.fieldPolicies = fieldPolicies
+        self.integrationPolicies = integrationPolicies
     }
 }
 
@@ -2644,7 +2811,16 @@ extension NodeContractV2 {
         let output = NodeContractOutput(
             cardinality: cardinality,
             payloadKind: .artifactRef,
-            externalWriteTarget: externalWriteTarget
+            externalWriteTarget: (node.workflowPolicy == nil
+                || node.workflowPolicy?.externalWriteMode == .directWrite)
+                ? externalWriteTarget : nil,
+            externalWriteMode: node.workflowPolicy?.externalWriteMode,
+            fieldPolicies: node.workflowPolicy.map { policy in
+                policy.trackers.reduce(into: [String: String]()) { result, tracker in
+                    tracker.fieldPolicies.forEach { result[$0.key] = $0.value }
+                }
+            },
+            integrationPolicies: node.workflowPolicy?.integrationPolicies
         )
 
         let v2 = NodeContractV2(
@@ -2717,16 +2893,11 @@ struct PlannerNodeOutputResult: Codable, Equatable {
     var versionId: String?
     /// ENG-2 / E2.1: 1-based version index within `(canvasId, nodeId)`.
     var versionIndex: Int?
-    /// ENG-2 / E2.2: downstream nodes that flipped to readyToStart and are
-    /// marked auto-mode — BoardAPI auto-dispatches them so users see "session
-    /// creating…" without a manual click. UI surfaces the same node ids so it
-    /// can render the affordance immediately on the optimistic path.
-    var autoDispatchedNodeIds: [String]?
     /// external-first writeback: external-object references (e.g.
     /// `gsheet://venture-tracker/Pipeline`) whose mirror should be reconciled
     /// after THIS (gating) submit. Computed engine-side; BoardAPI materializes
-    /// each into a dedicated artifact-sync session — same split as
-    /// `autoDispatchedNodeIds` (engine decides, BoardAPI spawns). Only populated
+    /// each into a dedicated artifact-sync session: the engine identifies the
+    /// references and BoardAPI spawns the sync sessions. Only populated
     /// on a downstream-gating `.done` submit; nil/empty otherwise.
     var reconcileReferences: [String]?
 }
@@ -2871,6 +3042,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     /// A change carries a change `kind` outside the known PlanChange.Kind set.
     case unknownChangeKind(String)
     case invalidNodeOutput(String)
+    case nodeNotReviewable(String)
     case activeSessionExists(nodeId: String)
     /// Direct artifact read/write addressed an artifact (by id or reference)
     /// that doesn't exist on the canvas.
@@ -2928,6 +3100,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "Meee2 AI proposal uses unknown change kind: \(kind)"
         case .invalidNodeOutput(let hint):
             return hint
+        case .nodeNotReviewable(let id):
+            return "planning node is not awaiting review: \(id)"
         case .activeSessionExists(let nodeId):
             return "node \(nodeId) already has an active session; complete or split the node before starting another"
         case .artifactNotFound(let selector):
@@ -3624,6 +3798,9 @@ final class PlannerCoreService {
                 if let widget = change.widget {
                     updatedNodes[index].widget = widget
                 }
+                if let workflowPolicy = change.workflowPolicy {
+                    updatedNodes[index].workflowPolicy = workflowPolicy
+                }
                 // Artifact-node data-source mode (2026-05-28). Direct field
                 // takes precedence; nested artifact-draft.dataSource is the
                 // fallback lane (e.g. dataSource riding on an attach).
@@ -4054,7 +4231,7 @@ final class PlannerStore {
         let canvasId: String
         let nodeId: String
         let title: String
-        let sessionId: String
+        let sessionId: String?
         let prompt: String
         let intervalSeconds: Int
     }
@@ -6471,6 +6648,99 @@ final class PlannerStore {
         return artifacts.filter { normalizeArtifactReference($0.reference) == normalized }
     }
 
+    /// workflow-bridge · 往已有画布追加节点。外部 workflow 的 agent 镜像节点在
+    /// journal `started` 事件到达时才存在（agent 数量运行时才可知），而
+    /// `seedNodesIfEmpty` 只管空画布，所以需要这条追加通道。
+    ///
+    /// 幂等：已存在的 id 直接跳过（relay 修脚本重跑会产生重复 started）。
+    /// 直连路径（不走 proposal review）——只供镜像外部执行的服务调用，
+    /// 人工加节点仍走 proposal 流程。
+    @discardableResult
+    func appendNodes(canvasId: String, nodes: [PlanningNode]) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            let existing = Set(record.nodes.map(\.id))
+            let fresh = nodes.filter { !existing.contains($0.id) }
+            guard !fresh.isEmpty else { return record }
+            for node in fresh where node.canvasId != canvasId {
+                throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: node.canvasId)
+            }
+            record.nodes.append(contentsOf: fresh)
+            reconcileEdgesAndDependencies(&record)
+            for node in fresh {
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .nodeCreated,
+                    nodeId: node.id,
+                    summary: node.title
+                ))
+            }
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    /// workflow-bridge · 直写镜像节点的运行态/生命周期状态。
+    /// `updateNodeStatus` 有 `.step`-only 守卫（人工状态机），而镜像节点是
+    /// `.external` 且没有绑定会话（`applyRunStateForSession` 按 sessionId 找节点，
+    /// 用不上），所以要这条专用通道。`latch: true` 盖 `outputSubmittedAt`，
+    /// 复用 `reconcileRunStateAgainstLiveSessions` 的闩锁语义：终态不再被
+    /// "会话消失" 的 reconcile 降级。
+    @discardableResult
+    func applyWorkflowNodeState(
+        canvasId: String,
+        nodeId: String,
+        runState: PlannerWorkflowRunState?,
+        status: PlanningNodeStatus? = nil,
+        blockedReason: String? = nil,
+        title: String? = nil,
+        latch: Bool = false
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let idx = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            var node = record.nodes[idx]
+            var changed = false
+            if let title, !title.isEmpty, node.title != title {
+                node.title = title
+                changed = true
+            }
+            if let runState, node.workflowRunState != runState {
+                node.workflowRunState = runState
+                changed = true
+            }
+            if let status, node.status != status {
+                node.status = status
+                changed = true
+            }
+            if let blockedReason, node.blockedReason != blockedReason {
+                node.blockedReason = blockedReason
+                changed = true
+            } else if blockedReason == nil, let status, status != .blocked, node.blockedReason != nil {
+                node.blockedReason = nil
+                changed = true
+            }
+            if latch, node.outputSubmittedAt == nil {
+                node.outputSubmittedAt = Date()
+                changed = true
+            }
+            guard changed else { return record }
+            record.nodes[idx] = node
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "\(node.title) -> \(runState?.rawValue ?? status?.rawValue ?? "updated")"
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
     func updateNodeStatus(
         canvasId: String,
         nodeId: String,
@@ -6670,9 +6940,11 @@ final class PlannerStore {
                 return record
             }
             guard runState == .gateWait else {
-                throw PlannerCoreError.invalidNodeOutput(
-                    "Only a node awaiting review (gate-wait) can be confirmed."
-                )
+                throw PlannerCoreError.nodeNotReviewable(nodeId)
+            }
+            for artifactIndex in record.artifacts.indices where
+                record.artifacts[artifactIndex].nodeId == nodeId {
+                record.artifacts[artifactIndex].reviewStatus = "approved"
             }
             record.nodes[nodeIndex].status = .done
             record.nodes[nodeIndex].workflowRunState = .done
@@ -6717,6 +6989,54 @@ final class PlannerStore {
         }
     }
 
+    /// Sends an awaiting-review node back for another pass without losing the
+    /// submitted artifacts. A bound session can continue in-place; otherwise
+    /// the node becomes startable again. Downstream nodes remain blocked.
+    func requestNodeReviewChanges(
+        canvasId: String,
+        nodeId: String,
+        comment: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            guard record.nodes[nodeIndex].workflowRunState == .gateWait else {
+                throw PlannerCoreError.nodeNotReviewable(nodeId)
+            }
+            let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw PlannerCoreError.invalidNodeOutput("Review feedback is required when requesting changes.")
+            }
+            let hasSession = record.nodes[nodeIndex].sessionId?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            record.nodes[nodeIndex].status = .ready
+            record.nodes[nodeIndex].workflowRunState = hasSession ? .awaitingInput : .readyToStart
+            record.nodes[nodeIndex].blockedReason = trimmed
+            record.nodes[nodeIndex].outputSubmittedAt = nil
+            for artifactIndex in record.artifacts.indices where
+                record.artifacts[artifactIndex].nodeId == nodeId {
+                record.artifacts[artifactIndex].reviewStatus = "rejected"
+            }
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = hasSession ? .awaitingInput : .readyToStart
+                state.finishedAt = nil
+                Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: hasSession)
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Changes requested: \(trimmed)"
+            ))
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
     func updateNodeSchedule(
         canvasId: String,
         nodeId: String,
@@ -6740,7 +7060,7 @@ final class PlannerStore {
                     value.prompt = Self.defaultSchedulePrompt(for: record.nodes[nodeIndex])
                 }
                 if value.enabled {
-                    value.nextRunAt = value.nextRunAt ?? Date().addingTimeInterval(TimeInterval(value.intervalSeconds))
+                    value.nextRunAt = value.nextRunAt ?? value.nextOccurrence(after: Date())
                 } else {
                     value.nextRunAt = nil
                 }
@@ -6770,16 +7090,18 @@ final class PlannerStore {
                     guard let schedule = node.schedule,
                           schedule.enabled,
                           schedule.intervalSeconds >= 60,
-                          (node.nodeKind ?? .step) == .step,
-                          let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                          !sessionId.isEmpty else { continue }
-                    let nextRunAt = schedule.nextRunAt ?? schedule.lastSentAt?.addingTimeInterval(TimeInterval(schedule.intervalSeconds)) ?? now
+                          (node.nodeKind ?? .step) == .step else { continue }
+                    let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let nextRunAt = schedule.retryAt
+                        ?? schedule.nextRunAt
+                        ?? schedule.lastSentAt.map { schedule.nextOccurrence(after: $0) }
+                        ?? now
                     guard nextRunAt <= now else { continue }
                     due.append(DueScheduledNode(
                         canvasId: canvasId,
                         nodeId: node.id,
                         title: node.title,
-                        sessionId: sessionId,
+                        sessionId: sessionId?.isEmpty == false ? sessionId : nil,
                         prompt: schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             ? Self.defaultSchedulePrompt(for: node)
                             : schedule.prompt,
@@ -6806,9 +7128,16 @@ final class PlannerStore {
             }
             schedule.intervalSeconds = max(60, schedule.intervalSeconds)
             schedule.lastSentAt = sentAt
-            schedule.nextRunAt = sentAt.addingTimeInterval(TimeInterval(schedule.intervalSeconds))
+            schedule.lastAttemptAt = sentAt
+            schedule.lastError = nil
+            schedule.consecutiveFailures = 0
+            schedule.retryAt = nil
+            schedule.nextRunAt = schedule.nextOccurrence(after: sentAt)
             record.nodes[nodeIndex].schedule = schedule
-            record.nodes[nodeIndex].workflowRunState = .readyToStart
+            // The message has been delivered to a verified live session. Keep
+            // the node visibly running until the session bridge or an explicit
+            // submit_node_output moves it forward.
+            record.nodes[nodeIndex].workflowRunState = .running
             record.nodes[nodeIndex].status = .ready
             record.nodes[nodeIndex].blockedReason = nil
             record.events.append(event(
@@ -6818,11 +7147,45 @@ final class PlannerStore {
                 summary: "Scheduled tick queued for \(record.nodes[nodeIndex].title)"
             ))
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
-                state.runState = .readyToStart
+                state.runState = .running
                 state.startedAt = sentAt
                 state.finishedAt = nil
             }
             recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    func markScheduledTickFailed(
+        canvasId: String,
+        nodeId: String,
+        error: String,
+        attemptedAt: Date = Date()
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }),
+                  var schedule = record.nodes[nodeIndex].schedule,
+                  schedule.enabled else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let failures = min(10, (schedule.consecutiveFailures ?? 0) + 1)
+            let retrySeconds = min(15 * Int(pow(2.0, Double(failures - 1))), 15 * 60)
+            schedule.lastAttemptAt = attemptedAt
+            schedule.lastError = String(error.prefix(1_000))
+            schedule.consecutiveFailures = failures
+            schedule.retryAt = attemptedAt.addingTimeInterval(TimeInterval(retrySeconds))
+            record.nodes[nodeIndex].schedule = schedule
+            record.nodes[nodeIndex].workflowRunState = .failed
+            record.nodes[nodeIndex].blockedReason = schedule.lastError
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Scheduled tick failed; retry in \(retrySeconds)s"
+            ))
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -6876,6 +7239,33 @@ final class PlannerStore {
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
+        }
+    }
+
+    /// Provisioning transaction support. Workflow creation spans the layout
+    /// and planner stores, so callers need an exact compensating operation if
+    /// a later durable write fails.
+    func removeCanvasRecord(canvasId: String) throws {
+        try withLock {
+            document.canvases.removeValue(forKey: canvasId)
+            eventLogSignatures.removeValue(forKey: canvasId)
+            let directory = canvasDirectory(canvasId: canvasId)
+            if fileManager.fileExists(atPath: directory.path) {
+                try fileManager.removeItem(at: directory)
+            }
+            try saveIndex()
+            SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+        }
+    }
+
+    func snapshotRecord(canvasId: String) -> CanvasRecord? {
+        withLock { document.canvases[canvasId] }
+    }
+
+    func restoreCanvasRecord(_ record: CanvasRecord) throws {
+        try withLock {
+            document.canvases[record.canvas.id] = record
+            try save(canvasId: record.canvas.id)
         }
     }
 
@@ -6991,8 +7381,8 @@ final class PlannerStore {
     /// Fan-in gate: is EVERY `dependsOnNodeIds` of `node` in a done state?
     ///
     /// A node with multiple upstreams (e.g. the orchestration 集成 node that
-    /// dependsOn 前端/后端/重构) must not auto-start when only the producer that
-    /// just routed to it is done — all of its upstreams must be done first.
+    /// dependsOn 前端/后端/重构) must not become ready when only the producer
+    /// that just routed to it is done — all of its upstreams must be done first.
     /// `gateWait`/`failed`/`running` upstreams do NOT count as done, mirroring
     /// the per-route `producerIsDone` check (a parked「待确认」producer is not
     /// done until `confirmNodeReview`). A node with no deps is trivially ready.
@@ -7013,8 +7403,7 @@ final class PlannerStore {
     ) throws -> (
         record: CanvasRecord,
         routes: [PlannerOutputRoute],
-        version: NodeVersion?,
-        autoDispatchCandidates: [PlanningNode]
+        version: NodeVersion?
     ) {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
@@ -7043,6 +7432,30 @@ final class PlannerStore {
             }
 
             var current = record.nodes[sourceIndex]
+            if let policy = current.workflowPolicy,
+               policy.externalWriteMode != .directWrite {
+                let protectedRefs = Set(policy.trackers.filter(\.canWrite).map(\.reference))
+                if let writtenRef = output.artifacts
+                    .map({ $0.reference.trimmingCharacters(in: .whitespacesAndNewlines) })
+                    .first(where: { protectedRefs.contains($0) }) {
+                    throw PlannerCoreError.invalidNodeOutput(
+                        "External write to \(writtenRef) is not authorized by this node contract (mode: \(policy.externalWriteMode.rawValue)). Submit a workflow-draft artifact for human review instead."
+                    )
+                }
+                let humanOnlyFields = Set(policy.trackers.flatMap { tracker in
+                    tracker.fieldPolicies.compactMap { $0.value == "human_only" ? $0.key : nil }
+                })
+                for artifact in output.artifacts {
+                    let submittedFields = Set(
+                        artifact.payload?.objectValue?["fields"]?.objectValue.map { Array($0.keys) } ?? []
+                    )
+                    if let forbidden = submittedFields.intersection(humanOnlyFields).sorted().first {
+                        throw PlannerCoreError.invalidNodeOutput(
+                            "Field '\(forbidden)' is human_only and cannot be submitted by an agent."
+                        )
+                    }
+                }
+            }
             switch output.status {
             case .done:
                 current.blockedReason = nil
@@ -7279,7 +7692,7 @@ final class PlannerStore {
                 // (e.g. 集成 dependsOn 前端/后端/重构), the producer that just
                 // routed here being done is NOT enough — flipping to
                 // readyToStart now would let the FIRST branch to finish
-                // auto-start 集成 before the other branches produced their
+                // expose 集成 as ready before the other branches produced their
                 // outputs. Require EVERY dependsOnNodeIds to be done. A
                 // single-dep (linear ENG-2) chain is unaffected: its one dep is
                 // the producer, so `allDependenciesDone` ≡ `producerIsDone`.
@@ -7372,25 +7785,7 @@ final class PlannerStore {
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
 
-            // ENG-2 / E2.2: auto-dispatch candidates — downstream nodes that
-            // (a) just flipped to readyToStart, (b) have no live session, and
-            // (c) declare auto execution mode. The BoardAPI layer is
-            // responsible for materializing the session (spawn terminal etc).
-            // This list intentionally excludes human-mode nodes (those wait on
-            // a human dispatch click).
-            let candidates: [PlanningNode] = record.nodes.filter { node in
-                guard routeTargets.contains(node.id) else { return false }
-                guard node.workflowRunState == .readyToStart else { return false }
-                // FAN-IN gate (P1): never auto-dispatch a node until ALL of its
-                // upstreams are done. Belt-and-suspenders with the readyToStart
-                // flip above — a node must not auto-spawn a session on the first
-                // upstream's completion.
-                guard allDependenciesDone(node, in: record) else { return false }
-                let hasSession = (node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                if hasSession { return false }
-                return node.executionMode == .auto
-            }
-            return (record, routes, version, candidates)
+            return (record, routes, version)
         }
     }
 
@@ -7623,63 +8018,6 @@ final class PlannerStore {
                 nodeId: nodeId,
                 summary: "Updated layout for \(record.nodes[index].title)"
             ))
-            document.canvases[canvasId] = record
-            try save(canvasId: canvasId)
-            return record
-        }
-    }
-
-    /// Execution-layer mutation: bind an existing session onto a node DIRECTLY,
-    /// no proposal / owner gate. Sets `sessionId`, mirrors it onto
-    /// `chatThreadId`, marks the node as session-sourced and moves it to
-    /// `running`. Permission is enforced by the caller (`requireNodeUpdate`).
-    /// PR6+7 · §5.2 auto-advance attempt writer. When a node is auto-dispatched
-    /// because an upstream node completed, record the attempt through the single
-    /// writer with an `.autoWorkflow` origin carrying the upstream edge + attempt
-    /// reference and a computed causalKey. Best-effort: no-op if there is no
-    /// active run (manual canvases / preview) so it never blocks the dispatch.
-    @discardableResult
-    func recordAutoAdvanceAttempt(
-        canvasId: String,
-        nodeId: String,
-        fromNodeId: String
-    ) throws -> CanvasRecord {
-        try withLock {
-            var record = try requireRecord(canvasId: canvasId)
-            guard activeRunIndex(in: record) != nil else { return record }
-            let upstreamAttemptIndex = (activeRunNodeState(in: record, nodeId: fromNodeId)?
-                .attempts.last?.index) ?? 0
-            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
-                let attemptIndex = state.attempts.count
-                let lamport = self.nextLamportSeq(canvasId: canvasId)
-                let causalKey = Self.causalKey(
-                    canvasId: canvasId,
-                    nodeId: nodeId,
-                    attemptIndex: attemptIndex,
-                    lamportSeq: lamport
-                )
-                let origin = TriggerOrigin.autoWorkflow(
-                    upstreamEdgeRef: TriggerOrigin.AutoWorkflowEdgeRef(
-                        canvasId: canvasId,
-                        fromNodeId: fromNodeId,
-                        toNodeId: nodeId
-                    ),
-                    upstreamAttemptId: UpstreamAttemptRef(
-                        canvasId: canvasId,
-                        nodeId: fromNodeId,
-                        attemptIndex: upstreamAttemptIndex,
-                        causalKey: causalKey
-                    )
-                )
-                // Append directly (lamport already consumed above to feed the
-                // causalKey) rather than re-entering appendAttempt's own bump.
-                state.attempts.append(NodeAttempt(
-                    index: attemptIndex,
-                    runState: .dispatched,
-                    origin: origin
-                ))
-            }
-            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -9261,6 +9599,22 @@ enum PlannerBoardBridge {
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
+    static func requestNodeReviewChanges(
+        nodeId: String,
+        comment: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.requestNodeReviewChanges(canvasId: canvasId, nodeId: nodeId, comment: comment)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
     static func updateNodeSchedule(
         nodeId: String,
         schedule: PlannerNodeSchedule?,
@@ -9366,7 +9720,26 @@ enum PlannerBoardBridge {
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         let workspacePath = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
         var normalizedOutput = output
-        normalizedOutput.artifacts = try output.artifacts.map { artifact in
+        let hasExplicitRoute = !(normalizedOutput.message?.routeTo.isEmpty ?? true)
+            || normalizedOutput.artifacts.contains { !$0.routeTo.isEmpty }
+        if submittedByKind == .human && !hasExplicitRoute {
+            let downstream = state.nodes
+                .filter { ($0.dependsOnNodeIds ?? []).contains(nodeId) }
+                .map(\.id)
+                .sorted()
+            if !downstream.isEmpty {
+                if normalizedOutput.message != nil {
+                    normalizedOutput.message?.routeTo = downstream
+                }
+                normalizedOutput.artifacts = normalizedOutput.artifacts.map { artifact in
+                    var next = artifact
+                    next.routeTo = downstream
+                    return next
+                }
+            }
+        }
+        let routedArtifacts = normalizedOutput.artifacts
+        normalizedOutput.artifacts = try routedArtifacts.map { artifact in
             let reference = artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
             let artifactId = "artifact-\(canvasId)-\(nodeId)-\(stableArtifactSuffix(reference))"
             let payload = try PlannerArtifactStorage.normalizePayload(
@@ -9393,41 +9766,6 @@ enum PlannerBoardBridge {
                         == outputArtifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         })
-        // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
-        // bridge layer so the engine path stays pure (BoardAPI is the place
-        // that actually spawns terminals — see `recordPlannerDispatchIntent`
-        // + `startTerminalSession`). We only auto-dispatch here at the store
-        // level — the BoardAPI handler observes `autoDispatchedNodeIds` and
-        // kicks off the terminal spawn in the background so the response
-        // can return inside the spec's 500ms budget.
-        var autoIds: [String] = []
-        for candidate in submitted.autoDispatchCandidates {
-            do {
-                _ = try store.dispatchNode(
-                    canvasId: canvasId,
-                    nodeId: candidate.id,
-                    dispatch: PlannerNodeDispatch(
-                        runner: .claude,
-                        skill: nil,
-                        actor: candidate.doerId,
-                        command: nil,
-                        fallbackRunner: nil
-                    )
-                )
-                // PR6+7 · §5.2: an auto-dispatch is a workflow-driven attempt.
-                // Record it through the single attempt writer with an
-                // `.autoWorkflow` origin (upstream = the node that just
-                // submitted). Best-effort — never block the dispatch.
-                _ = try? store.recordAutoAdvanceAttempt(
-                    canvasId: canvasId,
-                    nodeId: candidate.id,
-                    fromNodeId: nodeId
-                )
-                autoIds.append(candidate.id)
-            } catch {
-                MLog("[ENG-2][auto-dispatch] skip node=\(candidate.id) reason=\(error.localizedDescription)")
-            }
-        }
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         let requirementHint = graph.nodes
             .first(where: { $0.id == nodeId })
@@ -9464,7 +9802,6 @@ enum PlannerBoardBridge {
             hint: requirementHint,
             versionId: submitted.version?.id,
             versionIndex: submitted.version?.versionIndex,
-            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds,
             reconcileReferences: reconcileRefs.isEmpty ? nil : reconcileRefs
         )
     }

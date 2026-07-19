@@ -64,6 +64,8 @@ import type {
   SessionArtifactsEnvelope,
   SessionEnvironmentSnapshot,
   ArtifactPageEnvelope,
+  WorkflowApprovalRecord,
+  WorkflowApprovalResolution,
 } from './types'
 import type { ThemeProfile } from './lib/themeProfile'
 import { readLlmSettings } from './lib/llmSettings'
@@ -488,6 +490,22 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+export async function fetchWorkflowApprovals(): Promise<WorkflowApprovalRecord[]> {
+  const result = await jsonRequest<{ approvals: WorkflowApprovalRecord[] }>('/api/workflow-approvals')
+  return result.approvals
+}
+
+export async function resolveWorkflowApproval(
+  approvalId: string,
+  approved: boolean,
+): Promise<WorkflowApprovalResolution> {
+  return jsonRequest(`/api/workflow-approvals/${encodeURIComponent(approvalId)}/resolve`, {
+    method: 'POST',
+    headers: { 'X-Meee2-Human-Approval': 'board-ui' },
+    body: JSON.stringify({ approved }),
+  })
+}
+
 export function fetchSessionIntakeDiagnostics(): Promise<SessionIntakeDiagnostics> {
   return jsonRequest<SessionIntakeDiagnostics>('/api/sessions/intake-diagnostics')
 }
@@ -723,6 +741,16 @@ export interface CanvasTemplateNodeSpec {
   doerId?: string | null
   positionHint?: Record<string, number> | null
   widget?: unknown
+  inputs?: string[] | null
+  outputs?: string[] | null
+  goal?: string | null
+}
+
+export interface CanvasTemplateGuide {
+  useCase: string
+  requiredInputs: Array<{ label: string; nodeTitle?: string | null }>
+  expectedOutputs: string[]
+  quickStart: string[]
 }
 
 export type CanvasTemplateSource = 'official' | 'team' | 'private' | 'canvas-script'
@@ -756,6 +784,7 @@ export interface CanvasTemplate {
   renderProfile?: CanvasRenderProfile | null
   renderObjects?: CanvasObject[]
   renderRelations?: CanvasRelation[]
+  guide?: CanvasTemplateGuide | null
 }
 
 export interface CanvasTemplateCatalog {
@@ -843,6 +872,7 @@ export interface TemplateMetadataInput {
   tags?: string[]
   icon?: string
   defaultCanvasKind?: CanvasKind
+  guide?: CanvasTemplateGuide
 }
 
 export function createTemplateFromCanvas(input: TemplateMetadataInput & { canvasId: string }): Promise<CanvasList> {
@@ -1810,6 +1840,32 @@ export function submitPlannerNodeOutput(
   )
 }
 
+export function submitHumanPlannerNodeOutput(
+  canvasId: string,
+  nodeId: string,
+  output: PlannerNodeOutput,
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/human-output`,
+    { method: 'POST', body: JSON.stringify(output) },
+  )
+}
+
+export function resolvePlannerNodeReview(
+  canvasId: string,
+  nodeId: string,
+  input: {
+    decision: 'approve' | 'request_changes'
+    comment?: string
+    correctedOutput?: PlannerNodeOutput
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/review`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+}
+
 export function runCanvasSceneAction(
   canvasId: string,
   input: {
@@ -2031,9 +2087,13 @@ export function bindPlannerNodeInput(
   nodeId: string,
   input: {
     input: string
-    reference: string
+    reference?: string
     kind?: ContextSourceKind
     title?: string
+    source?:
+      | { kind: 'url'; url: string; title?: string }
+      | { kind: 'integration'; integrationId: string; entityKind?: string; entityRef: string; title?: string }
+      | { kind: 'file'; reference: string; title?: string }
   },
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
@@ -2041,6 +2101,27 @@ export function bindPlannerNodeInput(
     {
       method: 'PATCH',
       body: JSON.stringify(input),
+    },
+  )
+}
+
+export async function uploadPlannerNodeInputFile(
+  canvasId: string,
+  nodeId: string,
+  input: string,
+  file: File,
+): Promise<PlannerGraphState> {
+  const dataBase64 = await fileToBase64(file)
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/inputs/files`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        input,
+        filename: file.name || 'input',
+        contentType: file.type || 'application/octet-stream',
+        dataBase64,
+      }),
     },
   )
 }
@@ -2544,7 +2625,7 @@ export const DEFAULT_TERMINAL_PROFILE: TerminalProfile = {
   useThemeColors: true,
   backgroundColor: '#101214',
   foregroundColor: '#F4F7FB',
-  accentColor: '#4DA6FF',
+  accentColor: '#FF7A3D',
 }
 
 export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
@@ -2557,14 +2638,14 @@ export function fetchAppSettings(): Promise<AppSettings> {
         schemaVersion: 1,
         presetId: 'codex',
         light: {
-          accentColor: '#339CFF',
+          accentColor: '#E85E26',
           backgroundColor: '#FFFFFF',
           sidebarColor: '#FFFFFF',
           foregroundColor: '#1A1C1F',
           contrast: 45,
         },
         dark: {
-          accentColor: '#4DA6FF',
+          accentColor: '#FF7A3D',
           backgroundColor: '#101214',
           sidebarColor: '#171B20',
           foregroundColor: '#F4F7FB',

@@ -5,6 +5,8 @@ import { I18nProvider } from './lib/i18n'
 import { ThemeProvider } from './lib/theme'
 import { installControlPlaneFetch } from './controlPlane'
 import { isHostedLlmProvider, readLlmSettings, writeLlmSettings } from './lib/llmSettings'
+import '@fontsource-variable/inter'
+import '@fontsource-variable/jetbrains-mono'
 import './styles.css'
 
 installControlPlaneFetch()

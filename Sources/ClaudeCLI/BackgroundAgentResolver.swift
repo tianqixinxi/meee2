@@ -2,13 +2,14 @@ import Foundation
 
 /// 一个当前正在"后台跑"的 Claude Code 子 agent / task 的描述。
 ///
-/// 三种来源：
+/// 四种来源：
 ///   - `Agent` tool 带 `run_in_background: true` → kind = "agent"
 ///   - `Monitor` tool（总是后台）                → kind = "monitor"
 ///   - `Bash` tool 带 `run_in_background: true`  → kind = "bash"
+///   - `Workflow` tool（总是后台）               → kind = "workflow"
 public struct BackgroundAgent: Codable, Sendable, Hashable {
     public let id: String              // Claude 返回的 agentId / taskId
-    public let kind: String            // "agent" | "monitor" | "bash"
+    public let kind: String            // "agent" | "monitor" | "bash" | "workflow"
     public let description: String?    // tool input 里的 description
     public let startedAt: Date?        // tool_result 所在 transcript entry 的 timestamp
 
@@ -113,6 +114,9 @@ public enum BackgroundAgentResolver {
         var running: [String: BackgroundAgent] = [:]
         // 完成的 taskId（来自 <task-notification>…<status>completed</status>）
         var completed: Set<String> = []
+        // 最新一条 turn_duration 的 pendingWorkflowCount（workflow 完成的次级信号，
+        // 兜 <task-notification> 被 2MB tail 窗口冲掉的场景）。只认字段显式存在。
+        var lastPendingWorkflow: (ts: Date?, count: Int)?
 
         for rawLine in tail.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let lineData = rawLine.data(using: .utf8),
@@ -123,6 +127,12 @@ public enum BackgroundAgentResolver {
             let type = obj["type"] as? String
             let tsStr = (obj["timestamp"] as? String) ?? ""
             let ts: Date? = isoWithFrac.date(from: tsStr) ?? isoBase.date(from: tsStr)
+
+            if type == "system",
+               (obj["subtype"] as? String) == "turn_duration",
+               let pwc = obj["pendingWorkflowCount"] as? Int {
+                lastPendingWorkflow = (ts, pwc)   // transcript 按时间序，直接覆盖取最新
+            }
 
             guard let msg = obj["message"] as? [String: Any] else { continue }
 
@@ -146,6 +156,11 @@ public enum BackgroundAgentResolver {
                         if (input["run_in_background"] as? Bool) == true {
                             startedByToolUseId[toolId] = ("bash", desc)
                         }
+                    case "Workflow":
+                        // Workflow 恒后台（工具本身就是 returns-immediately 语义）。
+                        // desc 初值取 named workflow 的 name；scriptPath/script 形式
+                        // 由 tool_result 的 "Summary:" 行覆盖。
+                        startedByToolUseId[toolId] = ("workflow", input["name"] as? String)
                     default:
                         break
                     }
@@ -167,10 +182,16 @@ public enum BackgroundAgentResolver {
                                 // 约定从 transcriptPath + taskId 推导（Monitor 经常不附带）。
                                 let outputPath = extractOutputPath(from: text)
                                     ?? derivedOutputPath(kind: started.kind, id: taskId, transcriptPath: path)
+                                var description = started.description
+                                if started.kind == "workflow" {
+                                    // Workflow 启动确认自带一行 "Summary: <meta.description>"
+                                    description = firstCapture(in: text, pattern: #"Summary:\s*(.+)"#)
+                                        ?? description
+                                }
                                 running[taskId] = BackgroundAgent(
                                     id: taskId,
                                     kind: started.kind,
-                                    description: started.description,
+                                    description: description,
                                     startedAt: ts,
                                     outputPath: outputPath
                                 )
@@ -188,6 +209,16 @@ public enum BackgroundAgentResolver {
                 } else if let contentStr = msg["content"] as? String {
                     // content 是纯字符串的情况（老格式 / task-notification 注回路径）
                     collectCompletedTasks(from: contentStr, into: &completed)
+                }
+            }
+        }
+
+        // workflow 完成的次级信号：最新 turn_duration 的 pendingWorkflowCount==0
+        // 且晚于该 workflow 的启动 → 引擎已无挂起 workflow，视为 completed。
+        if let last = lastPendingWorkflow, last.count == 0, let lastTs = last.ts {
+            for agent in running.values where agent.kind == "workflow" {
+                if let started = agent.startedAt, started < lastTs {
+                    completed.insert(agent.id)
                 }
             }
         }
@@ -244,6 +275,9 @@ public enum BackgroundAgentResolver {
     private static func extractOutputPath(from text: String) -> String? {
         if let p = firstCapture(in: text, pattern: #"output_file:\s*(\S+)"#) { return p }
         if let p = firstCapture(in: text, pattern: #"Output is being written to:\s*(\S+)"#) { return p }
+        // Workflow 启动确认给的是 run 目录（journal.jsonl / agent-*.jsonl 所在），
+        // 判活按目录处理（见 isOutputFresh）。
+        if let p = firstCapture(in: text, pattern: #"Transcript dir:\s*(\S+)"#) { return p }
         return nil
     }
 
@@ -284,6 +318,9 @@ public enum BackgroundAgentResolver {
         case "bash":
             // "Command running in background with ID: b2yt7t2ag."
             return firstCapture(in: text, pattern: #"background with ID:\s*([A-Za-z0-9_-]+)"#)
+        case "workflow":
+            // "Workflow launched in background. Task ID: wcobpctg8"
+            return firstCapture(in: text, pattern: #"Workflow launched in background\. Task ID:\s*([A-Za-z0-9_-]+)"#)
         default:
             return nil
         }
@@ -323,7 +360,8 @@ public enum BackgroundAgentResolver {
     private static let maxAgeByKind: [String: TimeInterval] = [
         "monitor": 30 * 60,
         "bash": 60 * 60,
-        "agent": 120 * 60
+        "agent": 120 * 60,
+        "workflow": 120 * 60
     ]
 
     private static func isStillYoung(_ agent: BackgroundAgent) -> Bool {
@@ -342,11 +380,17 @@ public enum BackgroundAgentResolver {
     private static let maxIdleByKind: [String: TimeInterval] = [
         "bash": 5 * 60,
         "monitor": 5 * 60,
-        "agent": 10 * 60
+        "agent": 10 * 60,
+        "workflow": 10 * 60
     ]
 
     private static func isOutputFresh(_ agent: BackgroundAgent) -> Bool {
         guard let path = agent.outputPath, !path.isEmpty else { return true }
+        // workflow 的 outputPath 是 run 目录：journal.jsonl 在两个 agent 事件之间
+        // 可以长期静默，agent-*.jsonl 才是逐 token 的心跳，取整组的 max(mtime)。
+        if agent.kind == "workflow" {
+            return isWorkflowRunDirFresh(agent, dir: path)
+        }
         // 文件不存在 → 没法判活，让它通过（避免把刚启动、output_file 还没建好的误杀）
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let mtime = attrs[.modificationDate] as? Date else {
@@ -356,6 +400,33 @@ public enum BackgroundAgentResolver {
         let idle = Date().timeIntervalSince(mtime)
         if idle >= idleCap {
             NSLog("[BackgroundAgentResolver] pruning \(agent.kind)/\(agent.id.prefix(10)) — output quiescent for \(Int(idle))s (path=\(path))")
+            return false
+        }
+        return true
+    }
+
+    private static func isWorkflowRunDirFresh(_ agent: BackgroundAgent, dir: String) -> Bool {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        // 目录还没建出来（workflow 刚启动）→ 放行，交给 maxAgeByKind 兜底
+        guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { return true }
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return true }
+
+        var latest: Date?
+        for name in entries where name == "journal.jsonl" || (name.hasPrefix("agent-") && name.hasSuffix(".jsonl")) {
+            let full = (dir as NSString).appendingPathComponent(name)
+            if let attrs = try? fm.attributesOfItem(atPath: full),
+               let mtime = attrs[.modificationDate] as? Date {
+                if latest == nil || mtime > latest! { latest = mtime }
+            }
+        }
+        // 目录在但一个 jsonl 都没有 → 引擎还没写盘，放行
+        guard let last = latest else { return true }
+
+        let idleCap = maxIdleByKind["workflow"] ?? 10 * 60
+        let idle = Date().timeIntervalSince(last)
+        if idle >= idleCap {
+            NSLog("[BackgroundAgentResolver] pruning workflow/\(agent.id.prefix(10)) — run dir quiescent for \(Int(idle))s (dir=\(dir))")
             return false
         }
         return true

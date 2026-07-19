@@ -803,6 +803,42 @@ export interface ContextSource {
   reference: string
 }
 
+export type WorkflowApprovalAction = 'apply' | 'enable' | 'pause'
+export type WorkflowApprovalStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'superseded' | 'failed'
+
+export interface WorkflowApprovalRecord {
+  id: string
+  action: WorkflowApprovalAction
+  proposalId?: string | null
+  proposalVersion?: number | null
+  canvasId?: string | null
+  actorId: string
+  status: WorkflowApprovalStatus
+  error?: string | null
+  createdAt: string
+  resolvedAt?: string | null
+  proposalPreview?: {
+    name: string
+    summary: string
+    version: number
+    steps: Array<{ id: string; title: string; dependsOn: string[]; runtime: string; requiresApproval: boolean }>
+    trackerCount: number
+    schedules: string[]
+    changeKind: 'create' | 'update' | string
+  } | null
+}
+
+export interface WorkflowApprovalResolution {
+  approval: WorkflowApprovalRecord
+  applyResult?: {
+    canvasId: string
+    created: boolean
+  } | null
+  workflowStatus?: {
+    canvasId: string
+  } | null
+}
+
 export type ExecutionMode = 'auto' | 'human'
 export type ExecutorType =
   | 'claude'
@@ -853,6 +889,15 @@ export interface PlannerNodeSchedule {
   prompt: string
   lastSentAt?: string | number | null
   nextRunAt?: string | number | null
+  cadence?: 'interval' | 'daily' | 'monthly' | null
+  timeZoneIdentifier?: string | null
+  hour?: number | null
+  minute?: number | null
+  dayOfMonth?: number | null
+  lastAttemptAt?: string | number | null
+  lastError?: string | null
+  consecutiveFailures?: number | null
+  retryAt?: string | number | null
 }
 
 export interface PlannerNodeGate {
@@ -1002,9 +1047,11 @@ export interface ArtifactPageEnvelope {
   items: ArtifactPageItem[]
   cursor?: string | null
   total: number
+  availableTotal?: number
   hasMore: boolean
   canvasCount: number
   groupCounts: Record<string, number>
+  statusCounts?: Record<string, number>
 }
 
 /** `integration`:integration payload 的投影体(view-schema 渲染 — Sheets 格子 /
@@ -1160,6 +1207,7 @@ export interface PlannerNodeOutput {
   message?: PlannerNodeOutputMessage | null
   artifacts: PlannerNodeOutputArtifact[]
   next: PlannerNodeOutputNext
+  force_new_version?: boolean
 }
 
 export interface PlannerRouteTarget {
@@ -1235,6 +1283,9 @@ export interface NodeContractOutput {
   cardinality: NodeContractCardinality
   payload_kind: NodeContractPayloadKind
   external_write_target?: NodeContractExternalWriteTarget | null
+  external_write_mode?: 'direct_write' | 'draft_only' | 'prohibited' | null
+  field_policies?: Record<string, 'human_only' | 'ai_suggest' | 'ai_write'> | null
+  integration_policies?: Record<string, 'read_only' | 'draft_only' | 'write'> | null
 }
 
 export interface NodeContractV2 {
@@ -1442,6 +1493,18 @@ export interface PlanningNode {
   subCanvasId?: string | null
   nodeKind?: PlanningNodeKind | null
   layout?: PlannerNodeLayout | null
+  workflowPolicy?: {
+    trackers: Array<{
+      id: string
+      connector: string
+      reference: string
+      tabColumns: Record<string, string[]>
+      fieldPolicies: Record<string, string>
+      canRead: boolean
+      canWrite: boolean
+    }>
+    integrationPolicies: Record<string, string>
+  } | null
   trigger?: PlannerNodeTrigger | null
   schedule?: PlannerNodeSchedule | null
   gate?: PlannerNodeGate | null

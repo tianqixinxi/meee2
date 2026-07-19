@@ -30,6 +30,7 @@ import type {
   PlannerArtifact,
 } from '../types'
 import { ArtifactPreviewDialog } from './artifacts/ArtifactPreviewDialog'
+import { PageShell } from './PageShell'
 
 type StateFilter = ArtifactDisplayState | 'all'
 type CanvasFilter = string | 'all'
@@ -82,9 +83,10 @@ export function ArtifactsView({
   const [activeGroup, setActiveGroup] = useState<ArtifactTypeGroupId | 'all'>('all')
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
   const [canvasFilter, setCanvasFilter] = useState<CanvasFilter>('all')
-  const [stateFilter, setStateFilter] = useState<StateFilter>('ready')
+  const [stateFilter, setStateFilter] = useState<StateFilter>('all')
   const [artifactItems, setArtifactItems] = useState<ArtifactIndexItem[]>([])
   const [artifactTotal, setArtifactTotal] = useState(0)
+  const [availableTotal, setAvailableTotal] = useState(0)
   const [canvasCount, setCanvasCount] = useState(0)
   const [counts, setCounts] = useState(() => artifactGroupCounts([]))
   const [artifactCursor, setArtifactCursor] = useState<string | null>(null)
@@ -153,6 +155,7 @@ export function ArtifactsView({
         if (cancelled || pageRequestSequenceRef.current !== sequence) return
         setArtifactItems(pageItemsToIndex(page.items))
         setArtifactTotal(page.total)
+        setAvailableTotal(page.availableTotal ?? page.total)
         setCanvasCount(page.canvasCount)
         setCounts(normalizedGroupCounts(page.groupCounts))
         setArtifactCursor(page.cursor ?? null)
@@ -310,73 +313,69 @@ export function ArtifactsView({
   }, [onProposalCreated, reviewActionKey, t, toast])
 
   return (
-    <section className="artifacts-workspace" aria-label={t('artifacts.title')}>
-      <div className="artifacts-workspace__inner artifacts-index">
-        <header className="artifacts-workspace__header artifacts-index__header">
-          <div>
-            <h1>{t('artifacts.title')}</h1>
-            <p>
-              {loading
-                ? t('artifacts.loadingSlots')
-                : t('artifacts.summary', { slots: artifactTotal, canvases: canvasCount })}
-            </p>
-            {sessionFilter && (
-              <button
-                type="button"
-                className="artifacts-session-filter"
-                onClick={onClearSessionFilter}
-                title={t('artifacts.clearSessionFilter')}
-              >
-                <span>{t('artifacts.sessionFilter', { title: sessionFilter.title })}</span>
-                {onClearSessionFilter && <X size={13} aria-hidden />}
-              </button>
-            )}
+    <PageShell
+      ariaLabel={t('artifacts.title')}
+      title={t('artifacts.title')}
+      hint={loading
+        ? t('artifacts.loadingSlots')
+        : t('artifacts.summary', { slots: artifactTotal, canvases: canvasCount })}
+      headerExtra={sessionFilter && (
+        <button
+          type="button"
+          className="artifacts-session-filter"
+          onClick={onClearSessionFilter}
+          title={t('artifacts.clearSessionFilter')}
+        >
+          <span>{t('artifacts.sessionFilter', { title: sessionFilter.title })}</span>
+          {onClearSessionFilter && <X size={13} aria-hidden />}
+        </button>
+      )}
+      tools={(
+        <>
+          <label className="artifacts-search">
+            <Search size={14} aria-hidden />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('artifacts.searchPlaceholder')}
+            />
+          </label>
+          <div className="artifacts-index__filters" aria-label={t('artifacts.filterLabel')}>
+            <SelectFilter
+              label={t('artifacts.canvasFilter')}
+              value={canvasFilter}
+              onChange={setCanvasFilter}
+              options={[
+                { value: 'all', label: t('artifacts.filterAll') },
+                ...canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name || canvas.id })),
+              ]}
+            />
+            <SelectFilter
+              label={t('artifacts.scopeFilter')}
+              value={scopeFilter}
+              onChange={(value) => {
+                setScopeFilter(value as ScopeFilter)
+                setCanvasFilter('all')
+              }}
+              options={[
+                { value: 'all', label: t('artifacts.scopeAll') },
+                { value: 'personal', label: t('artifacts.scopePersonal') },
+                { value: 'team', label: t('artifacts.scopeTeam') },
+              ]}
+            />
+            <SelectFilter
+              label={t('artifacts.stateFilter')}
+              value={stateFilter}
+              onChange={(value) => setStateFilter(value as StateFilter)}
+              options={[
+                { value: 'all', label: t('artifacts.filterAll') },
+                ...stateOptions.map((state) => ({ value: state, label: artifactStateLabel(state, t) })),
+              ]}
+            />
           </div>
-          <div className="artifacts-workspace__tools">
-            <label className="artifacts-search">
-              <Search size={14} aria-hidden />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('artifacts.searchPlaceholder')}
-              />
-            </label>
-            <div className="artifacts-index__filters" aria-label={t('artifacts.filterLabel')}>
-              <SelectFilter
-                label={t('artifacts.canvasFilter')}
-                value={canvasFilter}
-                onChange={setCanvasFilter}
-                options={[
-                  { value: 'all', label: t('artifacts.filterAll') },
-                  ...canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name || canvas.id })),
-                ]}
-              />
-              <SelectFilter
-                label={t('artifacts.scopeFilter')}
-                value={scopeFilter}
-                onChange={(value) => {
-                  setScopeFilter(value as ScopeFilter)
-                  setCanvasFilter('all')
-                }}
-                options={[
-                  { value: 'all', label: t('artifacts.scopeAll') },
-                  { value: 'personal', label: t('artifacts.scopePersonal') },
-                  { value: 'team', label: t('artifacts.scopeTeam') },
-                ]}
-              />
-              <SelectFilter
-                label={t('artifacts.stateFilter')}
-                value={stateFilter}
-                onChange={(value) => setStateFilter(value as StateFilter)}
-                options={[
-                  { value: 'all', label: t('artifacts.filterAll') },
-                  ...stateOptions.map((state) => ({ value: state, label: artifactStateLabel(state, t) })),
-                ]}
-              />
-            </div>
-          </div>
-        </header>
-
+        </>
+      )}
+    >
         <nav className="artifacts-index__types" aria-label={t('artifacts.typeDirectory')}>
           <button
             type="button"
@@ -426,12 +425,29 @@ export function ArtifactsView({
                 setWindowStart(Math.min(maxStart, Math.max(0, estimatedStart)))
               }}
             >
-              {allItems.length === 0 ? (
+              {allItems.length === 0 && !error ? (
                 <div className="artifacts-empty">
                   <Archive size={15} aria-hidden />
-                  <span>{t('artifacts.empty')}</span>
+                  <span>{availableTotal > 0 ? t('artifacts.filteredEmpty') : t('artifacts.neverProduced')}</span>
+                  {availableTotal > 0 ? (
+                    <button type="button" className="ghost" onClick={() => {
+                      setQuery('')
+                      setDebouncedQuery('')
+                      setActiveGroup('all')
+                      setScopeFilter('all')
+                      setCanvasFilter('all')
+                      setStateFilter('all')
+                      onClearSessionFilter?.()
+                    }}>
+                      {t('artifacts.clearFilters')}
+                    </button>
+                  ) : activeCanvasId ? (
+                    <button type="button" className="ghost" onClick={() => onOpenCanvas(activeCanvasId)}>
+                      {t('artifacts.openCanvasButton')}
+                    </button>
+                  ) : null}
                 </div>
-              ) : (
+              ) : allItems.length > 0 ? (
                 <table className="artifacts-table">
                   <thead>
                     <tr>
@@ -482,7 +498,7 @@ export function ArtifactsView({
                     )}
                   </tbody>
                 </table>
-              )}
+              ) : null}
               {hasMore && (
                 <div className="artifacts-index__pagination" role="status" aria-live="polite">
                   <button
@@ -499,7 +515,6 @@ export function ArtifactsView({
 
           </div>
         )}
-      </div>
       {previewItem && (
         <ArtifactPreviewDialog
           key={previewItem.key}
@@ -513,7 +528,7 @@ export function ArtifactsView({
           onReviewArtifact={reviewArtifact}
         />
       )}
-    </section>
+    </PageShell>
   )
 }
 

@@ -34,7 +34,7 @@ struct ArtifactPageQuery {
     init(
         cursor: String? = nil,
         limit: Int = 50,
-        status: String = "ready",
+        status: String = "all",
         canvasId: String? = nil,
         query: String? = nil,
         sessionIds: Set<String> = [],
@@ -67,7 +67,7 @@ struct ArtifactPageQuery {
         self.init(
             cursor: value("cursor"),
             limit: Int(value("limit") ?? "") ?? 50,
-            status: value("status") ?? "ready",
+            status: value("status") ?? "all",
             canvasId: value("canvasId"),
             query: value("query"),
             sessionIds: Set(rawSessionIds),
@@ -138,6 +138,13 @@ enum ArtifactPageBuilder {
             return record.displayStatus == query.status
                 || record.item.artifacts.first?.status.lowercased() == query.status
         }
+        var statusCounts: [String: Int] = [:]
+        for record in baseFiltered {
+            statusCounts[record.displayStatus, default: 0] += 1
+            if record.item.artifacts.first?.status.lowercased() == "promoted" {
+                statusCounts["promoted", default: 0] += 1
+            }
+        }
         var groupCounts = emptyGroupCounts()
         for record in statusFiltered {
             groupCounts[record.group, default: 0] += 1
@@ -155,9 +162,11 @@ enum ArtifactPageBuilder {
             items: page.map(\.item),
             cursor: hasMore ? encodedOffset(end) : nil,
             total: filtered.count,
+            availableTotal: baseFiltered.count,
             hasMore: hasMore,
             canvasCount: Set(filtered.map { $0.item.canvas.id }).count,
-            groupCounts: groupCounts
+            groupCounts: groupCounts,
+            statusCounts: statusCounts
         )
     }
 

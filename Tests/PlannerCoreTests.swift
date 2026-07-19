@@ -4256,10 +4256,60 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(producer.workflowRunState, .done, "confirm → done")
         XCTAssertEqual(producer.status, .done)
         XCTAssertEqual(confirmed.states.first { $0.nodeId == "n-prod" }?.needsOwnerReview, false)
+        XCTAssertEqual(confirmed.artifacts.first { $0.nodeId == "n-prod" }?.reviewStatus, "approved")
         // Downstream now startable.
         let consumer = try XCTUnwrap(confirmed.nodes.first { $0.id == "n-cons" })
         XCTAssertEqual(consumer.workflowRunState, .readyToStart, "confirm unblocks downstream")
         XCTAssertEqual(consumer.status, .ready)
+    }
+
+    func testRequestNodeReviewChangesKeepsArtifactsAndDownstreamBlocked() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-request-changes", ownerId: "owner-request-changes"
+        )
+        _ = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+
+        let revised = try PlannerBoardBridge.requestNodeReviewChanges(
+            nodeId: "n-prod",
+            comment: "Add the missing risk section.",
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+
+        let producer = try XCTUnwrap(revised.nodes.first { $0.id == "n-prod" })
+        XCTAssertEqual(producer.workflowRunState, .readyToStart)
+        XCTAssertEqual(producer.status, .ready)
+        XCTAssertEqual(producer.blockedReason, "Add the missing risk section.")
+        XCTAssertEqual(revised.artifacts.first { $0.nodeId == "n-prod" }?.reviewStatus, "rejected")
+        XCTAssertEqual(revised.nodes.first { $0.id == "n-cons" }?.workflowRunState, .pending)
+    }
+
+    func testRequestNodeReviewChangesRequiresCommentAndGateWait() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-request-guard", ownerId: "owner-request-guard"
+        )
+        XCTAssertThrowsError(try PlannerBoardBridge.requestNodeReviewChanges(
+            nodeId: "n-prod", comment: "feedback", for: canvasId,
+            snapshot: snapshot, actorUserId: ownerId
+        )) { error in
+            guard case .nodeNotReviewable = error as? PlannerCoreError else {
+                return XCTFail("expected nodeNotReviewable, got \(error)")
+            }
+        }
+        _ = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+        XCTAssertThrowsError(try PlannerBoardBridge.requestNodeReviewChanges(
+            nodeId: "n-prod", comment: "   ", for: canvasId,
+            snapshot: snapshot, actorUserId: ownerId
+        )) { error in
+            guard case .invalidNodeOutput = error as? PlannerCoreError else {
+                return XCTFail("expected invalidNodeOutput, got \(error)")
+            }
+        }
     }
 
     /// (c) A no-review node (human, no gate / no handoffPolicy) submit `done` →
@@ -4279,6 +4329,50 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(result.graph.states.first { $0.nodeId == "n-prod" }?.needsOwnerReview, false)
         let consumer = try XCTUnwrap(result.graph.nodes.first { $0.id == "n-cons" })
         XCTAssertEqual(consumer.workflowRunState, .readyToStart, "downstream startable once upstream truly done")
+    }
+
+    func testHumanOutputUsesVersionPipelineAndDefaultsToDownstreamRoutes() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-human-output", ownerId: "owner-human-output", producerNeedsReview: false
+        )
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: "n-prod",
+            output: PlannerNodeOutput(
+                nodeId: "n-prod",
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Human draft", routeTo: []),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .prd,
+                    title: "Human draft",
+                    reference: "draft",
+                    payload: .object(["type": .string("text"), "text": .string("Human draft")]),
+                    routeTo: []
+                )],
+                next: .complete
+            ),
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: ownerId,
+            submittedByKind: .human,
+            submittedBy: ownerId
+        )
+
+        XCTAssertEqual(result.routes.map(\.targetNodeId), ["n-cons"])
+        XCTAssertTrue(result.graph.nodes.first { $0.id == "n-cons" }?.contextSources.contains {
+            $0.reference == "draft"
+        } == true)
+        let versions = try PlannerBoardBridge.listArtifactVersions(
+            canvasId: canvasId,
+            nodeId: "n-prod",
+            reference: "draft",
+            snapshot: snapshot,
+            actorUserId: ownerId
+        )
+        let version = try XCTUnwrap(versions.first)
+        XCTAssertEqual(version.submittedByKind, .human)
+        XCTAssertEqual(version.submittedBy, ownerId)
+        XCTAssertNotNil(version.inputSnapshot)
     }
 
     /// Confirming a node that is NOT awaiting review is rejected (guards against
@@ -5392,9 +5486,9 @@ final class PlannerCoreTests: XCTestCase {
         )
         let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
         let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
-        // markScheduledTickSent queues a tick but does not dispatch — the
-        // separate dispatch path is what flips to .dispatched/.working.
-        XCTAssertEqual(node.workflowRunState, .readyToStart)
+        // The scheduler has already dispatched the tick to a live session, so
+        // the run must stay active until output or failure is recorded.
+        XCTAssertEqual(node.workflowRunState, .running)
         XCTAssertEqual(node.status, .ready)
         XCTAssertEqual(node.schedule?.lastSentAt, now)
         XCTAssertEqual(node.schedule?.nextRunAt, now.addingTimeInterval(60))
@@ -6121,9 +6215,9 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(result.promptPreamble.contains("should not show"))
     }
 
-    /// E2.2: submitting output to an upstream node auto-dispatches downstream
-    /// auto-mode nodes that flip to readyToStart.
-    func testSubmitNodeOutputAutoDispatchesDownstreamAutoNode() throws {
+    /// Submitting output makes an eligible downstream node ready, but leaves
+    /// starting its session to an explicit user action.
+    func testSubmitNodeOutputLeavesDownstreamReadyForManualStart() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         // Force the downstream node into auto execution mode + clear gate so
@@ -6148,18 +6242,18 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
 
-        XCTAssertEqual(result.autoDispatchedNodeIds, [downstreamId])
         let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == downstreamId })
-        XCTAssertEqual(downstream.workflowRunState, .dispatched)
+        XCTAssertEqual(downstream.workflowRunState, .readyToStart)
+        XCTAssertNil(downstream.sessionId)
     }
 
-    /// P1 (PR #109) — fan-in auto-dispatch must wait for ALL upstreams.
+    /// A fan-in node must wait for ALL upstreams before becoming startable.
     ///
     /// D dependsOn [A, B, C], all auto/claude (mirrors the coding-orchestration
     /// 集成 node fanning in from 前端/后端/重构). Completing A (routed to D) must
-    /// NOT make D an auto-dispatch candidate; A+B still not; only after C (all
-    /// three done) does D flip to readyToStart and become a candidate.
-    func testFanInAutoDispatchWaitsForAllUpstreams() throws {
+    /// NOT make D ready; A+B still does not; only after C (all three done) does
+    /// D flip to readyToStart, without starting a session automatically.
+    func testFanInReadinessWaitsForAllUpstreams() throws {
         let canvasId = "canvas-fanin"
         let canvas = PlanningCanvas(
             id: canvasId, ownerId: "owner-a", title: "Fan-in Canvas",
@@ -6182,8 +6276,8 @@ final class PlannerCoreTests: XCTestCase {
         let d = node("fanin-d", deps: ["fanin-a", "fanin-b", "fanin-c"])
         _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [a, b, c, d])
 
-        func submit(_ producerId: String) throws -> [PlanningNode] {
-            try PlannerBoardBridge.store.submitNodeOutput(
+        func submit(_ producerId: String) throws -> PlanningNode {
+            _ = try PlannerBoardBridge.store.submitNodeOutput(
                 canvasId: canvasId,
                 nodeId: producerId,
                 output: PlannerNodeOutput(
@@ -6193,18 +6287,20 @@ final class PlannerCoreTests: XCTestCase {
                     artifacts: [],
                     next: .complete
                 )
-            ).autoDispatchCandidates
+            )
+            let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+            return try XCTUnwrap(record.nodes.first { $0.id == "fanin-d" })
         }
 
-        // After A: D has 2 unfinished upstreams (B, C) → NOT a candidate.
+        // After A: D has 2 unfinished upstreams (B, C) → not ready.
         let afterA = try submit("fanin-a")
-        XCTAssertFalse(afterA.contains { $0.id == "fanin-d" },
-                       "D must not auto-dispatch after only A is done")
+        XCTAssertNotEqual(afterA.workflowRunState, .readyToStart,
+                          "D must not become ready after only A is done")
 
-        // After A+B: D still has 1 unfinished upstream (C) → NOT a candidate.
+        // After A+B: D still has 1 unfinished upstream (C) → not ready.
         let afterB = try submit("fanin-b")
-        XCTAssertFalse(afterB.contains { $0.id == "fanin-d" },
-                       "D must not auto-dispatch after only A+B are done")
+        XCTAssertNotEqual(afterB.workflowRunState, .readyToStart,
+                          "D must not become ready after only A+B are done")
 
         // D must also still be un-flipped (not readyToStart) at this point.
         let midRecord = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
@@ -6212,15 +6308,16 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNotEqual(midD.workflowRunState, .readyToStart,
                           "D must not be flipped to readyToStart until all upstreams are done")
 
-        // After C: all three upstreams done → D becomes a candidate.
+        // After C: all three upstreams done → D is ready, but not dispatched.
         let afterC = try submit("fanin-c")
-        XCTAssertTrue(afterC.contains { $0.id == "fanin-d" },
-                      "D must auto-dispatch only after ALL three upstreams (A,B,C) are done")
+        XCTAssertEqual(afterC.workflowRunState, .readyToStart,
+                       "D must become ready only after ALL three upstreams are done")
+        XCTAssertNil(afterC.sessionId)
     }
 
-    /// Guard: the linear single-dep ENG-2 chain is unaffected — a node with one
-    /// upstream still auto-dispatches the moment that upstream completes.
-    func testLinearSingleDepAutoDispatchUnaffected() throws {
+    /// A linear single-dependency node becomes ready as soon as its upstream
+    /// completes, but still requires a manual start.
+    func testLinearSingleDepBecomesReadyWithoutDispatch() throws {
         let canvasId = "canvas-linear-fanin"
         let canvas = PlanningCanvas(
             id: canvasId, ownerId: "owner-a", title: "Linear Canvas",
@@ -6241,7 +6338,7 @@ final class PlannerCoreTests: XCTestCase {
         )
         _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [a, b])
 
-        let candidates = try PlannerBoardBridge.store.submitNodeOutput(
+        _ = try PlannerBoardBridge.store.submitNodeOutput(
             canvasId: canvasId,
             nodeId: "lin-a",
             output: PlannerNodeOutput(
@@ -6251,10 +6348,12 @@ final class PlannerCoreTests: XCTestCase {
                 artifacts: [],
                 next: .complete
             )
-        ).autoDispatchCandidates
+        )
 
-        XCTAssertTrue(candidates.contains { $0.id == "lin-b" },
-                      "single-dep chain must still auto-dispatch B the moment A completes")
+        let record = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+        let downstream = try XCTUnwrap(record.nodes.first { $0.id == "lin-b" })
+        XCTAssertEqual(downstream.workflowRunState, .readyToStart)
+        XCTAssertNil(downstream.sessionId)
     }
 
     /// Bonus deliverable: refineSessionPrompt builds a no-schema-mutation
