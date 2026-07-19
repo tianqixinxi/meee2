@@ -657,22 +657,22 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     })
   })
 
-  it('filters artifacts by personal and team scope', async () => {
+  it('filters artifacts by canvas', async () => {
     renderView()
 
     await screen.findAllByText('Release PRD')
-    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+    fireEvent.change(screen.getByLabelText(/Canvas/), { target: { value: 'team-canvas' } })
 
     await waitFor(() => {
       expect(screen.getAllByText('Team Review Notes').length).toBeGreaterThan(0)
       expect(screen.queryByText('Release PRD')).not.toBeInTheDocument()
     })
 
-    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'personal' } })
+    fireEvent.change(screen.getByLabelText(/Canvas/), { target: { value: 'all' } })
 
     await waitFor(() => {
       expect(screen.getAllByText('Release PRD').length).toBeGreaterThan(0)
-      expect(screen.queryByText('Team Review Notes')).not.toBeInTheDocument()
+      expect(screen.getAllByText('Team Review Notes').length).toBeGreaterThan(0)
     })
   })
 
@@ -722,7 +722,7 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     renderView()
 
     await screen.findAllByText('Release PRD')
-    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+    fireEvent.change(screen.getByLabelText(/Canvas/), { target: { value: 'team-canvas' } })
     fireEvent.click(await screen.findByRole('button', { name: /Boards 1/ }))
 
     fireEvent.click(await screen.findByRole('button', { name: /Legacy Kanban Payload/ }))
@@ -745,7 +745,7 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     renderView()
 
     await screen.findAllByText('Release PRD')
-    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+    fireEvent.change(screen.getByLabelText(/Canvas/), { target: { value: 'team-canvas' } })
     fireEvent.click(await screen.findByRole('button', { name: /Boards 1/ }))
     fireEvent.click(await screen.findByRole('button', { name: /Legacy Kanban Payload/ }))
 
@@ -759,7 +759,7 @@ SHOULD_NOT_APPEAR_IN_DETAIL`,
     renderView()
 
     await screen.findAllByText('Release PRD')
-    fireEvent.change(screen.getByLabelText(/Scope/), { target: { value: 'team' } })
+    fireEvent.change(screen.getByLabelText(/Canvas/), { target: { value: 'team-canvas' } })
 
     expect(screen.queryByText(/SHOULD_NOT_APPEAR_IN_DETAIL/)).not.toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: /Team Review Notes/ }))
