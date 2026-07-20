@@ -38,11 +38,12 @@ function truncate(s: string, n: number): string {
 }
 
 function roleColor(role: string): string {
+  // 走宿主 token（var + fallback）：卡片跟随主题/profile，独立渲染用原色
   switch (role) {
-    case 'user': return '#60A5FA'
-    case 'assistant': return '#22C55E'
-    case 'tool': return '#F59E0B'
-    default: return '#94A3B8'
+    case 'user': return 'var(--role-user, #60A5FA)'
+    case 'assistant': return 'var(--role-assistant, #22C55E)'
+    case 'tool': return 'var(--role-tool, #F59E0B)'
+    default: return 'var(--card-fg-dim, #94A3B8)'
   }
 }
 

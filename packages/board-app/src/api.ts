@@ -2625,7 +2625,7 @@ export const DEFAULT_TERMINAL_PROFILE: TerminalProfile = {
   useThemeColors: true,
   backgroundColor: '#101214',
   foregroundColor: '#F4F7FB',
-  accentColor: '#4DA6FF',
+  accentColor: '#FF7A3D',
 }
 
 export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
@@ -2638,14 +2638,14 @@ export function fetchAppSettings(): Promise<AppSettings> {
         schemaVersion: 1,
         presetId: 'codex',
         light: {
-          accentColor: '#339CFF',
+          accentColor: '#E85E26',
           backgroundColor: '#FFFFFF',
           sidebarColor: '#FFFFFF',
           foregroundColor: '#1A1C1F',
           contrast: 45,
         },
         dark: {
-          accentColor: '#4DA6FF',
+          accentColor: '#FF7A3D',
           backgroundColor: '#101214',
           sidebarColor: '#171B20',
           foregroundColor: '#F4F7FB',

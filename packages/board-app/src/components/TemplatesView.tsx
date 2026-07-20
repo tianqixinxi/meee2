@@ -28,6 +28,7 @@ import {
   useState,
 } from 'react'
 import type { CanvasScope } from '../types'
+import { PageShell } from './PageShell'
 import {
   fetchClaudeWorkflows,
   fetchTeamMembers,
@@ -345,32 +346,30 @@ export function TemplatesView({
   }
 
   return (
-    <section className="templates-workspace" aria-label="Templates">
-      <div className="templates-workspace__inner">
-        <header className="templates-workspace__header">
-          <div>
-            <h1>Templates</h1>
-            <p className="templates-workspace__hint">Start with a proven canvas, then make it your own.</p>
-          </div>
-          <div className="templates-workspace__tools">
-            <label className="templates-search">
-              <Search size={14} aria-hidden />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search templates" />
-            </label>
-            <button
-              type="button"
-              className="ghost templates-import-button"
-              onClick={() => {
-                setWorkflowLibraryOpen(true)
-                if (!workflowList) refreshWorkflows()
-              }}
-            >
-              <FolderInput size={14} aria-hidden />
-              Import
-            </button>
-          </div>
-        </header>
-
+    <PageShell
+      ariaLabel="Templates"
+      title="Templates"
+      hint="Start with a proven canvas, then make it your own."
+      tools={(
+        <>
+          <label className="templates-search">
+            <Search size={14} aria-hidden />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search templates" />
+          </label>
+          <button
+            type="button"
+            className="ghost templates-import-button"
+            onClick={() => {
+              setWorkflowLibraryOpen(true)
+              if (!workflowList) refreshWorkflows()
+            }}
+          >
+            <FolderInput size={14} aria-hidden />
+            Import
+          </button>
+        </>
+      )}
+    >
         <section className="template-gallery" aria-label="Template catalog">
           <div className="template-gallery__header">
             <div className="template-gallery__tabs" role="tablist">
@@ -451,8 +450,6 @@ export function TemplatesView({
             </div>
           )}
         </section>
-
-      </div>
 
       {workflowLibraryOpen && (
         <TemplateModal
@@ -581,7 +578,7 @@ export function TemplatesView({
           <ModalFooter onCancel={() => setWorkflowImportTarget(null)} onSubmit={submitWorkflowImport} submitLabel={workflowImporting ? 'Importing...' : 'Import workflow'} disabled={workflowImporting || !workflowNameDraft.trim()} />
         </TemplateModal>
       )}
-    </section>
+    </PageShell>
   )
 }
 

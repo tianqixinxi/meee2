@@ -1376,6 +1376,15 @@ function PlannerGraphInner({
     }
   }, [emptyCanvasMode])
 
+  // 节点 inspector 抽屉实际打开时才让 terminal overlay 为其留位（见 styles.css
+  // .session-terminal-overlay__panel 的 right 分支），避免为不存在的抽屉永久让位。
+  useEffect(() => {
+    document.documentElement.classList.toggle('board-node-inspector-open', nodeModalOpen)
+    return () => {
+      document.documentElement.classList.remove('board-node-inspector-open')
+    }
+  }, [nodeModalOpen])
+
   const loadedPlannerCanvasId = plannerState?.canvas.id
   useEffect(() => {
     if (!loadedPlannerCanvasId || loadedPlannerCanvasId !== canvasId || graph.nodes.length === 0) return undefined

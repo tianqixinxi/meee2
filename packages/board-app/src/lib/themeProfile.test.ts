@@ -28,7 +28,7 @@ describe('themeProfile', () => {
     const codex = presetThemeProfile('codex')
     codex.light.accentColor = '#000000'
 
-    expect(presetThemeProfile('codex').light.accentColor).toBe('#339CFF')
+    expect(presetThemeProfile('codex').light.accentColor).toBe('#E85E26')
   })
 
   it('round-trips imported JSON', () => {
@@ -57,7 +57,7 @@ describe('themeProfile', () => {
       },
     }
 
-    expect(activeThemeBranch(profile, 'light').accentColor).toBe('#339CFF')
+    expect(activeThemeBranch(profile, 'light').accentColor).toBe('#E85E26')
     expect({ ...profile, presetId: 'custom' as const }.light.accentColor).toBe('#112233')
   })
 
@@ -65,17 +65,27 @@ describe('themeProfile', () => {
     const profile = presetThemeProfile('codex')
 
     applyThemeProfile(profile, 'light')
-    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#339CFF')
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#E85E26')
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#FFFFFF')
     expect(document.documentElement.style.getPropertyValue('--sidebar-bg')).toBe('#FFFFFF')
-    expect(document.documentElement.style.getPropertyValue('--rail-accent')).toBe('#339CFF')
+    expect(document.documentElement.style.getPropertyValue('--rail-accent')).toBe('#E85E26')
     expect(document.documentElement.style.getPropertyValue('--bg-rail-gradient')).toContain('rgba')
+    expect(document.documentElement.style.getPropertyValue('--success')).toBe('#567F5E')
+    expect(document.documentElement.style.getPropertyValue('--card-bg')).toBe('#FFFFFF')
+    expect(document.documentElement.style.getPropertyValue('--dot-urgent')).toBe('#DC2626')
+    expect(document.documentElement.style.getPropertyValue('--modal-backdrop')).toContain('linear-gradient')
+    expect(document.documentElement.style.getPropertyValue('--modal-footer-bg')).toContain('rgba')
 
     applyThemeProfile(profile, 'dark')
-    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#4DA6FF')
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#FF7A3D')
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#101214')
     expect(document.documentElement.style.getPropertyValue('--sidebar-bg')).toBe('#171B20')
-    expect(document.documentElement.style.getPropertyValue('--rail-accent')).toBe('#4DA6FF')
+    expect(document.documentElement.style.getPropertyValue('--rail-accent')).toBe('#FF7A3D')
+    expect(document.documentElement.style.getPropertyValue('--success')).toBe('#7FA982')
+    expect(document.documentElement.style.getPropertyValue('--card-bg')).toBe('#1E1E1E')
+    expect(document.documentElement.style.getPropertyValue('--dot-urgent')).toBe('#EF4444')
+    expect(document.documentElement.style.getPropertyValue('--modal-backdrop')).toContain('linear-gradient')
+    expect(document.documentElement.style.getPropertyValue('--modal-footer-bg')).toContain('rgba')
   })
 
   it('accepts older v1 imports without a sidebar color', () => {
