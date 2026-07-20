@@ -1,0 +1,13 @@
+{
+  "schema_version": 4,
+  "revision": 9,
+  "session_id": "frozen-v4",
+  "project": "fixture-project",
+  "cwd": "/tmp/fixture-project",
+  "provider_resume_session_id": "019f517c-23ac-7e41-a953-aeab95671d11",
+  "started_at": "2026-07-11T14:00:00Z",
+  "last_activity": "2026-07-11T14:01:00Z",
+  "status": "idle",
+  "generated_title": "自动生成的标题",
+  "tasks": []
+}

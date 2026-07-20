@@ -15,6 +15,7 @@ final class SessionDataTests: XCTestCase {
             lastActivity: Date(timeIntervalSince1970: 1713100100),
             status: .active,
             currentTool: "Bash",
+            customTitle: "用户命名的会话",
             generatedTitle: "梳理对话标题来源"
         )
 
@@ -27,6 +28,7 @@ final class SessionDataTests: XCTestCase {
         XCTAssertEqual(decoded.pid, 5678)
         XCTAssertEqual(decoded.status, .active)
         XCTAssertEqual(decoded.currentTool, "Bash")
+        XCTAssertEqual(decoded.customTitle, "用户命名的会话")
         XCTAssertEqual(decoded.generatedTitle, "梳理对话标题来源")
     }
 
@@ -95,6 +97,7 @@ final class SessionDataTests: XCTestCase {
         XCTAssertNil(data.usageStats)
         XCTAssertNil(data.lastMessage)
         XCTAssertNil(data.pendingPermissionTool)
+        XCTAssertNil(data.customTitle)
     }
 
     // MARK: - Progress
@@ -240,5 +243,20 @@ final class SessionDataTests: XCTestCase {
         XCTAssertEqual(migrated.revision, 7)
         XCTAssertEqual(migrated.currentTask, "研究对话标题来源")
         XCTAssertNil(migrated.generatedTitle)
+    }
+
+    func testFrozenV4FixtureMigratesWithoutInventingCustomTitle() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/SessionData/v4.json")
+        let decoded = try JSONDecoder().decode(SessionData.self, from: Data(contentsOf: fixture))
+        XCTAssertEqual(decoded.schemaVersion, 4)
+        XCTAssertEqual(decoded.generatedTitle, "自动生成的标题")
+        XCTAssertNil(decoded.customTitle)
+
+        let migrated = SessionDataMigrations.apply(to: decoded, from: decoded.schemaVersion)
+        XCTAssertEqual(migrated.schemaVersion, SessionData.currentSchemaVersion)
+        XCTAssertEqual(migrated.generatedTitle, "自动生成的标题")
+        XCTAssertNil(migrated.customTitle)
     }
 }

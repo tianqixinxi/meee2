@@ -2,6 +2,7 @@ import {
   Archive,
   AlertCircle,
   ArrowUp,
+  Bot,
   ChevronDown,
   CheckCircle2,
   Edit3,
@@ -18,6 +19,8 @@ import {
   PencilLine,
   Pin,
   PinOff,
+  Sparkles,
+  SquareTerminal,
   Trash2,
   X,
 } from 'lucide-react'
@@ -25,6 +28,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom'
 import type {
   ClipboardEvent as ReactClipboardEvent,
+  CSSProperties,
   Dispatch,
   DragEvent as ReactDragEvent,
   FormEvent,
@@ -43,6 +47,7 @@ import {
   pickSessionProjectDirectory,
   pickSessionLaunchAttachments,
   renameSessionProject,
+  renameSessionTitle,
   reopenLauncherSession,
   revealSessionProjectInFinder,
   syncNativeSessionsWorkspace,
@@ -288,6 +293,7 @@ export function SessionLauncherView({
   const [renameValue, setRenameValue] = useState('')
   const [renameSessionValue, setRenameSessionValue] = useState('')
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [forgettingProjectId, setForgettingProjectId] = useState<string | null>(null)
   const [revealingProjectId, setRevealingProjectId] = useState<string | null>(null)
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null)
@@ -893,7 +899,7 @@ export function SessionLauncherView({
     setRenameSessionValue(sessionDisplayTitle(session, titleOverrides))
   }, [titleOverrides])
 
-  const handleRenameSession = useCallback((event: FormEvent<HTMLFormElement>) => {
+  const handleRenameSession = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!renameSession) return
     const title = renameSessionValue.trim()
@@ -901,11 +907,23 @@ export function SessionLauncherView({
       onToast?.('error', t('sessions.launcher.sessionNameRequired'))
       return
     }
-    saveTitleOverride(renameSession.id, title)
-    setTitleOverrides(loadTitleOverrides())
-    setRenameSession(null)
-    setRenameSessionValue('')
-    onToast?.('success', t('sessions.launcher.sessionRenamed', { title }))
+    setRenamingSessionId(renameSession.id)
+    try {
+      await renameSessionTitle(renameSession.id, title)
+      // Keep the existing browser override as an immediate compatibility
+      // cache. The authoritative title now lives in SessionData on disk.
+      saveTitleOverride(renameSession.id, title)
+      setTitleOverrides(loadTitleOverrides())
+      setRenameSession(null)
+      setRenameSessionValue('')
+      onToast?.('success', t('sessions.launcher.sessionRenamed', { title }))
+    } catch (error) {
+      onToast?.('error', error instanceof Error && error.message
+        ? error.message
+        : t('sessions.launcher.renameSessionFailed'))
+    } finally {
+      setRenamingSessionId(null)
+    }
   }, [onToast, renameSession, renameSessionValue, t])
 
   const handleArchiveSession = useCallback(async (session: Session) => {
@@ -1110,6 +1128,7 @@ export function SessionLauncherView({
             onResume={() => selectedSession && reopenLauncherSessionForSession(selectedSession)}
             onRetryAttach={handleRetrySessionAttachment}
             onOpenExternal={() => selectedSession && void handleOpenExternalTerminal(selectedSession)}
+            onRename={() => selectedSession && openRenameSession(selectedSession)}
             switchStartedAt={sessionSwitchTraceRef.current[selection.sessionId]?.startedAt}
             switchTraceId={sessionSwitchTraceRef.current[selection.sessionId]?.traceId}
           />
@@ -1235,6 +1254,7 @@ export function SessionLauncherView({
         session={renameSession}
         title={sessionDisplayTitle(renameSession, titleOverrides)}
         value={renameSessionValue}
+        busy={renamingSessionId === renameSession.id}
         onValueChange={setRenameSessionValue}
         onCancel={() => {
           setRenameSession(null)
@@ -1466,6 +1486,7 @@ function RenameSessionModal({
   session,
   title,
   value,
+  busy,
   onValueChange,
   onCancel,
   onSubmit,
@@ -1473,6 +1494,7 @@ function RenameSessionModal({
   session: Session
   title: string
   value: string
+  busy: boolean
   onValueChange: (value: string) => void
   onCancel: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
@@ -1500,8 +1522,9 @@ function RenameSessionModal({
           />
         </label>
         <footer>
-          <button type="button" className="ghost" onClick={onCancel}>{t('common.cancel')}</button>
-          <button type="submit" disabled={trimmed.length === 0}>
+          <button type="button" className="ghost" onClick={onCancel} disabled={busy}>{t('common.cancel')}</button>
+          <button type="submit" disabled={busy || trimmed.length === 0}>
+            {busy ? <Loader2 size={14} className="spin" /> : null}
             <span>{t('sessions.launcher.rename')}</span>
           </button>
         </footer>
@@ -2197,6 +2220,7 @@ function SessionLauncherTerminal({
   onResume,
   onRetryAttach,
   onOpenExternal,
+  onRename,
   switchStartedAt,
   switchTraceId,
 }: {
@@ -2211,6 +2235,7 @@ function SessionLauncherTerminal({
   onResume?: () => void
   onRetryAttach?: () => void
   onOpenExternal?: () => void
+  onRename?: () => void
   switchStartedAt?: number
   switchTraceId?: string
 }) {
@@ -2325,6 +2350,14 @@ function SessionLauncherTerminal({
     }
   }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId])
 
+  useLayoutEffect(() => {
+    // The native terminal is a sibling NSView above the WebView. Force its
+    // rectangle to follow the grid change immediately when Context toggles;
+    // relying only on ResizeObserver can leave the old native frame in place.
+    lastRectRef.current = null
+    syncTerminal('layout', true)
+  }, [contextOpen, syncTerminal])
+
   useEffect(() => {
     return () => {
       syncNativeSessionsWorkspace({
@@ -2341,7 +2374,6 @@ function SessionLauncherTerminal({
 
   const title = session ? sessionDisplayTitle(session, titleOverrides) : t('sessions.launcher.startingSession')
   const runtime = sessionRuntimeLabel(session)
-  const project = sessionProjectLabel(session)
   const fallbackRunningSession = usingRestoredSurface && session
     ? { ...session, status: 'running', surfaceStatus: 'running' }
     : session
@@ -2352,12 +2384,19 @@ function SessionLauncherTerminal({
     <div className="session-launcher-terminal">
       <header className="session-launcher-terminal__header">
         <div className="session-launcher-terminal__identity">
+          <SessionRuntimeIcon session={session} label={runtime} />
           <strong title={title}>{title}</strong>
-          <span title={session?.project || undefined}>
-            {runtime ? <b>{runtime}</b> : null}
-            {runtime && project ? <i aria-hidden>·</i> : null}
-            {project || t('sessions.launcher.waitingForTerminalSurface')}
-          </span>
+          {session && onRename ? (
+            <button
+              type="button"
+              className="session-launcher-terminal__rename"
+              aria-label={t('sessions.launcher.renameSessionNamed', { title })}
+              title={t('sessions.launcher.renameSession')}
+              onClick={onRename}
+            >
+              <PencilLine size={12} aria-hidden />
+            </button>
+          ) : null}
         </div>
         <div className="session-launcher-terminal__actions">
           <em className={`session-launcher-terminal__status is-${status.tone}`}>{status.label}</em>
@@ -2431,6 +2470,30 @@ function SessionLauncherTerminal({
         ) : null}
       </div>
     </div>
+  )
+}
+
+function SessionRuntimeIcon({ session, label }: { session: Session | null; label: string }) {
+  if (!session || !label) return null
+  const normalized = `${session.pluginId ?? ''} ${label}`.toLowerCase()
+  const Icon = normalized.includes('codex')
+    ? SquareTerminal
+    : normalized.includes('claude')
+      ? Sparkles
+      : Bot
+  const style = session.pluginColor
+    ? ({ '--session-runtime-color': session.pluginColor } as CSSProperties)
+    : undefined
+  return (
+    <span
+      className="session-launcher-terminal__runtime-icon"
+      style={style}
+      title={label || undefined}
+      aria-label={label || undefined}
+      role="img"
+    >
+      <Icon size={13} aria-hidden />
+    </span>
   )
 }
 
@@ -2619,14 +2682,6 @@ function compactSessionAge(session: Session): string {
 function sessionRuntimeLabel(session: Session | null): string {
   const label = session?.pluginDisplayName || session?.pluginId || ''
   return label.replace(/^com\.meee2\.plugin\./, '').trim()
-}
-
-function sessionProjectLabel(session: Session | null): string {
-  const raw = session?.project?.trim() ?? ''
-  if (!raw) return ''
-  const normalized = raw.replace(/\/+$/, '')
-  const parts = normalized.split('/').filter(Boolean)
-  return parts[parts.length - 1] || normalized
 }
 
 function sessionTerminalStatus(

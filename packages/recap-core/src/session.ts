@@ -157,7 +157,7 @@ function isNoisyTitle(value: string): boolean {
   const normalized = value.trim().toLowerCase()
   if (!normalized) return true
   if (/^https?:\/\//.test(normalized)) return true
-  if (/^(codex|claude code|claude)$/i.test(value)) return true
+  if (/^(session|new session|untitled|codex|claude code|claude)$/i.test(value)) return true
   if (/^(codex|claude code|claude)\s+-\s+[^/\\]+$/i.test(value)) return true
   if (/^node\s+(?:node-)?[a-z0-9][a-z0-9-]{10,}(?:-transcript)?$/i.test(value)) return true
   if (/^(final response summary|summary|recap)\b/i.test(value)) return true

@@ -1133,7 +1133,11 @@ enum BoardDTOBuilder {
             provider: providerKey(pluginId: session.pluginId),
             providerSessionId: realSessionId
         )
-        let displayTitle = desktopMeta?.title ?? providerTitle ?? sessionData?.generatedTitle ?? session.title
+        let displayTitle = sessionData?.customTitle
+            ?? desktopMeta?.title
+            ?? providerTitle
+            ?? sessionData?.generatedTitle
+            ?? session.title
 
         // model 优先用 desktop metadata（"claude-opus-4-7[1m]"），fallback 到
         // transcript 推断（usageStats.model 可能是 "claude-opus-4-6"）
@@ -1371,7 +1375,7 @@ enum BoardDTOBuilder {
             terminalKind: "internal"
         )
 
-        let providerTitle = ProviderSessionTitleReader.title(
+        let providerTitle = sessionData.customTitle ?? ProviderSessionTitleReader.title(
             provider: provider,
             providerSessionId: providerResumeId
         ) ?? sessionData.generatedTitle
@@ -1463,7 +1467,7 @@ enum BoardDTOBuilder {
             terminalInfo: terminalInfo,
             terminalKind: "internal"
         )
-        let providerTitle = ProviderSessionTitleReader.title(
+        let providerTitle = sessionData?.customTitle ?? ProviderSessionTitleReader.title(
             provider: surface.provider,
             providerSessionId: providerResumeId
         ) ?? sessionData?.generatedTitle
@@ -1560,9 +1564,10 @@ enum BoardDTOBuilder {
                 ?? validProviderResumeSessionId(cli.providerResumeSessionId)
                 ?? validProviderResumeSessionId(cli.sessionId)
         )
+        let customTitle = SessionStore.shared.get(surface.id)?.customTitle ?? cli.customTitle
         return SessionDTO(
             id: surface.id,
-            title: providerTitle ?? surface.title,
+            title: customTitle ?? providerTitle ?? surface.title,
             project: surface.project,
             pluginId: surface.pluginId,
             pluginDisplayName: surface.pluginDisplayName,

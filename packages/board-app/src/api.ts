@@ -993,6 +993,16 @@ export function renameSessionProject(id: string, input: SessionProjectUpdateInpu
   })
 }
 
+export function renameSessionTitle(id: string, title: string): Promise<{ ok: boolean; sessionId: string; title: string }> {
+  return jsonRequest<{ ok: boolean; sessionId: string; title: string }>(
+    `/api/sessions/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    },
+  )
+}
+
 export function revealSessionProjectInFinder(id: string): Promise<{ ok: boolean; path: string }> {
   return jsonRequest<{ ok: boolean; path: string }>(`/api/session-projects/${encodeURIComponent(id)}/reveal`, {
     method: 'POST',

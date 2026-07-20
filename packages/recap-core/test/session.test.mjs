@@ -80,4 +80,13 @@ const now = '2026-06-19T12:00:00.000Z'
   assert.equal(title.source, 'initial_prompt')
 }
 
+{
+  const title = deriveDisplaySessionTitle({
+    providerTitle: 'Session',
+    fallbackTitle: 'meee2',
+  })
+  assert.equal(title.text, 'meee2')
+  assert.equal(title.source, 'fallback')
+}
+
 console.log('session recap tests passed')

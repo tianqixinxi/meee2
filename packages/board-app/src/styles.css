@@ -13704,8 +13704,8 @@ button.template-gallery__tag {
 .session-launcher-terminal__identity {
   display: flex;
   flex: 1 1 auto;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -13722,27 +13722,43 @@ button.template-gallery__tag {
   font-weight: 650;
 }
 
-.session-launcher-terminal__header span {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  min-width: 0;
-  gap: 6px;
-  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 58%, transparent);
-  font-size: var(--text-xs);
-}
-
-.session-launcher-terminal__header span b,
-.session-launcher-terminal__header span i {
+.session-launcher-terminal__runtime-icon {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
-  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 78%, transparent);
-  font-style: normal;
-  font-weight: 650;
+  place-items: center;
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--session-runtime-color, var(--native-terminal-fg, var(--text))) 28%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--session-runtime-color, var(--native-terminal-fg, var(--text))) 12%, transparent);
+  color: var(--session-runtime-color, var(--native-terminal-fg, var(--text)));
 }
 
-.session-launcher-terminal__header span i {
-  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 34%, transparent);
-  font-weight: 500;
+.session-launcher-terminal__rename {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 48%, transparent);
+  opacity: 0;
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.session-launcher-terminal__identity:hover .session-launcher-terminal__rename,
+.session-launcher-terminal__rename:focus-visible {
+  opacity: 1;
+}
+
+.session-launcher-terminal__rename:hover,
+.session-launcher-terminal__rename:focus-visible {
+  background: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 8%, transparent);
+  color: var(--native-terminal-fg, var(--text));
 }
 
 .session-launcher-terminal__actions {
