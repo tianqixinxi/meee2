@@ -11,7 +11,9 @@ const api = vi.hoisted(() => ({
   createProjectSession: vi.fn(),
   createSessionProject: vi.fn(),
   createTemporarySession: vi.fn(),
+  fetchSessionArtifacts: vi.fn(),
   fetchSessionEnvironment: vi.fn(),
+  fetchTranscript: vi.fn(),
   forgetSessionProject: vi.fn(),
   pickSessionLaunchAttachments: vi.fn(),
   pickSessionProjectDirectory: vi.fn(),
@@ -103,12 +105,19 @@ describe('SessionLauncherView', () => {
     storeProjectSelection()
     api.fetchSessionProjects.mockResolvedValue({ projects: [project] })
     api.activateSession.mockResolvedValue(true)
+    api.fetchSessionArtifacts.mockResolvedValue({
+      sessionId: 'session-a',
+      artifacts: [],
+      totalCount: 0,
+    })
+    api.fetchTranscript.mockResolvedValue({ sessionId: 'session-a', entries: [] })
     api.fetchSessionEnvironment.mockResolvedValue({
       sessionId: 'session-a',
       cwd: '/Users/kai/Code/meee2-workspace',
       isGit: true,
       changes: { files: 2, additions: 14, deletions: 3 },
       branch: 'codex/session-environment',
+      files: [],
       outputs: [{
         path: '/Users/kai/Code/meee2-workspace/output/result.md',
         relativePath: 'output/result.md',

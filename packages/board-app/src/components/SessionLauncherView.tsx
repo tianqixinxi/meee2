@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   Network,
   Paperclip,
+  PanelRight,
   PencilLine,
   Pin,
   PinOff,
@@ -56,7 +57,7 @@ import { useI18n, type TranslationKey } from '../lib/i18n'
 import { spawnProviderLabel } from '../preferences'
 import { loadPinnedSet, loadTitleOverrides, saveTitleOverride, togglePinned } from '../sessionOverrides'
 import type { AgentPermissionMode, BoardState, Session, SessionLaunchAttachment, SessionProject, SpawnProvider } from '../types'
-import { SessionEnvironmentPanel } from './SessionEnvironmentPanel'
+import { SessionContextPanel } from './SessionContextPanel'
 
 interface Props {
   state: BoardState | null
@@ -2221,6 +2222,9 @@ function SessionLauncherTerminal({
   const switchStartedAtRef = useRef<number>(Date.now())
   const [showRecovery, setShowRecovery] = useState(false)
   const [showRecoveryDetails, setShowRecoveryDetails] = useState(false)
+  const [contextOpen, setContextOpen] = useState(() => (
+    typeof window === 'undefined' || window.innerWidth > 900
+  ))
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
   const targetSurfaceId = liveTarget.surfaceId ?? (usingRestoredSurface ? suppliedSurfaceId : undefined)
@@ -2357,9 +2361,21 @@ function SessionLauncherTerminal({
         </div>
         <div className="session-launcher-terminal__actions">
           <em className={`session-launcher-terminal__status is-${status.tone}`}>{status.label}</em>
+          {session ? (
+            <button
+              type="button"
+              className="session-launcher-terminal__context-toggle"
+              aria-label={t('sessions.context.toggle')}
+              aria-expanded={contextOpen}
+              title={t('sessions.context.toggle')}
+              onClick={() => setContextOpen((value) => !value)}
+            >
+              <PanelRight size={15} aria-hidden />
+            </button>
+          ) : null}
         </div>
       </header>
-      <div className="session-launcher-terminal__content">
+      <div className={`session-launcher-terminal__content${contextOpen && session ? ' is-context-open' : ''}`}>
         {canOpenNativeTerminal ? (
           <div
             ref={hostRef}
@@ -2402,16 +2418,14 @@ function SessionLauncherTerminal({
             ) : null}
           </div>
         )}
-        {session ? (
+        {session && contextOpen ? (
           <aside
             className="session-launcher-terminal__environment-dock"
             aria-label={t('sessions.environment.title')}
           >
-            <SessionEnvironmentPanel
+            <SessionContextPanel
               key={session.id}
-              sessionId={session.id}
-              refreshKey={session.lastActivity}
-              refreshStatus={session.status}
+              session={session}
             />
           </aside>
         ) : null}

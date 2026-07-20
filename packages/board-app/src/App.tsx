@@ -1345,7 +1345,7 @@ export default function App() {
           </div>
         )}
         <div className="board-area">
-          {readinessReport && !readinessReport.ready && (
+          {readinessReport && !readinessReport.ready && !sessionTerminalTarget && (
             <Notice
               tone="warning"
               placement="canvas"

@@ -11,12 +11,25 @@ struct SessionWorkspaceOutputFile: Encodable, Equatable {
     let relativePath: String
 }
 
+struct SessionWorkspaceStatusEntry: Equatable {
+    let relativePath: String
+    let status: String
+}
+
+struct SessionWorkspaceChangedFile: Encodable, Equatable {
+    let relativePath: String
+    let status: String
+    let additions: Int?
+    let deletions: Int?
+}
+
 struct SessionWorkspaceSnapshot: Encodable, Equatable {
     let sessionId: String
     let cwd: String
     let isGit: Bool
     let changes: SessionWorkspaceChangeSummary?
     let branch: String?
+    let files: [SessionWorkspaceChangedFile]
     let outputs: [SessionWorkspaceOutputFile]
 }
 
@@ -56,6 +69,7 @@ enum SessionWorkspaceInspector {
                 isGit: false,
                 changes: nil,
                 branch: nil,
+                files: [],
                 outputs: []
             )
         }
@@ -69,6 +83,7 @@ enum SessionWorkspaceInspector {
                 runGit(cwd: root, arguments: ["diff", "--cached", "--numstat", "--"]) ?? ""
             ].joined(separator: "\n")
         let totals = parseNumstat(numstat)
+        let numstatByPath = parseNumstatByPath(numstat)
         let branch = resolvedBranch(cwd: root)
         let rootURL = URL(fileURLWithPath: root).standardizedFileURL
         let outputs = status.createdPaths.compactMap { relativePath in
@@ -76,6 +91,15 @@ enum SessionWorkspaceInspector {
                 url: rootURL.appendingPathComponent(relativePath).standardizedFileURL,
                 relativePath: relativePath,
                 root: rootURL
+            )
+        }
+        let files = status.files.prefix(200).map { file in
+            let stats = numstatByPath[file.relativePath]
+            return SessionWorkspaceChangedFile(
+                relativePath: file.relativePath,
+                status: file.status,
+                additions: stats?.additions,
+                deletions: stats?.deletions
             )
         }
 
@@ -89,6 +113,7 @@ enum SessionWorkspaceInspector {
                 deletions: totals.deletions
             ),
             branch: branch,
+            files: files,
             outputs: outputs
         )
     }
@@ -151,10 +176,25 @@ enum SessionWorkspaceInspector {
         }
     }
 
-    static func parseStatus(_ output: String) -> (changedFiles: Int, createdPaths: [String]) {
+    static func parseNumstatByPath(_ output: String) -> [String: (additions: Int, deletions: Int)] {
+        output.split(separator: "\n").reduce(into: [:]) { files, line in
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count >= 3,
+                  let additions = Int(fields[0]),
+                  let deletions = Int(fields[1]) else { return }
+            let path = fields.dropFirst(2).joined(separator: "\t")
+            guard !path.isEmpty else { return }
+            let previous = files[path] ?? (additions: 0, deletions: 0)
+            files[path] = (previous.additions + additions, previous.deletions + deletions)
+        }
+    }
+
+    static func parseStatus(
+        _ output: String
+    ) -> (changedFiles: Int, createdPaths: [String], files: [SessionWorkspaceStatusEntry]) {
         let records = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
-        var changedFiles = 0
         var createdPaths: [String] = []
+        var files: [SessionWorkspaceStatusEntry] = []
         var index = 0
         while index < records.count {
             let record = records[index]
@@ -164,16 +204,31 @@ enum SessionWorkspaceInspector {
             }
             let status = String(record.prefix(2))
             let path = String(record.dropFirst(3))
-            changedFiles += 1
             if status == "??" || status.first == "A" || status.last == "A" {
                 createdPaths.append(path)
             }
+            files.append(SessionWorkspaceStatusEntry(
+                relativePath: path,
+                status: changedFileStatus(status)
+            ))
             if status.contains("R") || status.contains("C") {
                 index += 1
             }
             index += 1
         }
-        return (changedFiles, Array(Set(createdPaths)).sorted())
+        return (
+            files.count,
+            Array(Set(createdPaths)).sorted(),
+            files.sorted { $0.relativePath < $1.relativePath }
+        )
+    }
+
+    private static func changedFileStatus(_ porcelainStatus: String) -> String {
+        if porcelainStatus == "??" { return "untracked" }
+        if porcelainStatus.contains("R") || porcelainStatus.contains("C") { return "renamed" }
+        if porcelainStatus.contains("D") { return "deleted" }
+        if porcelainStatus.contains("A") { return "added" }
+        return "modified"
     }
 
     private static func resolvedBranch(cwd: String) -> String? {
@@ -200,6 +255,7 @@ enum SessionWorkspaceInspector {
             isGit: snapshot.isGit,
             changes: snapshot.changes,
             branch: snapshot.branch,
+            files: snapshot.files,
             outputs: snapshot.outputs
         )
     }
