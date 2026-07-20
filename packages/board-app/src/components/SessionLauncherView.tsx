@@ -1696,6 +1696,9 @@ function SessionRow({
   const { t } = useI18n()
   const age = compactSessionAge(session)
   const state = sessionRowState(session, t)
+  const backgroundAgents = session.backgroundAgents ?? []
+  const backgroundWorkflow = backgroundAgents.find((agent) => agent.kind === 'workflow')
+  const backgroundTaskCount = backgroundAgents.filter((agent) => agent.kind !== 'workflow').length
   const projectContext = projectName ? t('sessions.launcher.projectContext', { project: projectName }) : null
   const tooltip = sessionRowTooltip(session, title, state?.label, age)
   const handleMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
@@ -1742,6 +1745,23 @@ function SessionRow({
               {state.tone === 'done' ? <CheckCircle2 size={11} aria-hidden /> : <AlertCircle size={11} aria-hidden />}
               {state.label}
             </em>
+          )}
+          {(backgroundWorkflow || backgroundTaskCount > 0) && (
+            <span className="session-launcher__background-agents">
+              {backgroundWorkflow && (
+                <em
+                  className="session-launcher__background-agent is-workflow"
+                  title={backgroundWorkflow.description || undefined}
+                >
+                  {t('sessions.backgroundWorkflow')}
+                </em>
+              )}
+              {backgroundTaskCount > 0 && (
+                <em className="session-launcher__background-agent">
+                  {backgroundTaskCount} {t('sessions.backgroundTasks')}
+                </em>
+              )}
+            </span>
           )}
         </span>
         {age && <time aria-hidden dateTime={session.lastActivity ?? session.startedAt ?? undefined}>{age}</time>}

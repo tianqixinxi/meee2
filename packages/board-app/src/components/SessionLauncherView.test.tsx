@@ -1513,6 +1513,30 @@ describe('SessionLauncherView', () => {
     expect(screen.getByText('完成')).toBeInTheDocument()
   })
 
+  it('surfaces workflow and other background work on the replacement session row', async () => {
+    renderWithI18n(<SessionLauncherView state={makeState([
+      makeSession({
+        backgroundAgents: [
+          {
+            id: 'workflow-run',
+            kind: 'workflow',
+            description: 'Overnight recap',
+            startedAt: '2026-06-14T09:00:00Z',
+          },
+          {
+            id: 'helper-agent',
+            kind: 'agent',
+            description: 'Research helper',
+            startedAt: '2026-06-14T09:01:00Z',
+          },
+        ],
+      }),
+    ])} />)
+
+    expect(await screen.findByText('后台 workflow 运行中')).toHaveAttribute('title', 'Overnight recap')
+    expect(screen.getByText('1 后台任务')).toBeInTheDocument()
+  })
+
   it('opens a session context menu and renames the session through a modal', async () => {
     renderWithI18n(<SessionLauncherView state={makeState()} />)
 

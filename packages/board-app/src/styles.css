@@ -12964,6 +12964,35 @@ button.template-gallery__tag {
   color: #5fbb82;
 }
 
+.session-launcher__background-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.session-launcher__background-agent {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-dim) 12%, transparent);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-launcher__background-agent.is-workflow {
+  background: color-mix(in srgb, #967fd2 18%, transparent);
+  color: color-mix(in srgb, #b7a6e3 88%, var(--text));
+}
+
 .session-launcher__session-actions {
   position: absolute;
   top: 50%;
