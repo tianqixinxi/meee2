@@ -1577,7 +1577,8 @@ describe('SessionLauncherView', () => {
   })
 
   it('renames from the terminal header and collapses session context', async () => {
-    const view = renderWithI18n(<SessionLauncherView state={makeState()} />)
+    const onToast = vi.fn()
+    const view = renderWithI18n(<SessionLauncherView state={makeState()} onToast={onToast} />)
 
     await screen.findByText('我们应该在meee2-workspace中做些什么？')
     fireEvent.click(await screen.findByRole('button', { name: '新增 Session 原生 Terminal' }))
@@ -1590,6 +1591,7 @@ describe('SessionLauncherView', () => {
     fireEvent.change(input, { target: { value: '持久化标题' } })
     fireEvent.blur(input)
     await waitFor(() => expect(api.renameSessionTitle).toHaveBeenCalledWith('session-a', '持久化标题'))
+    expect(onToast).not.toHaveBeenCalled()
     expect(api.syncNativeWindowInteractiveRects).toHaveBeenCalled()
 
     expect(screen.getByRole('complementary', { name: '环境信息' })).toBeInTheDocument()

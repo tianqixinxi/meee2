@@ -915,7 +915,6 @@ export function SessionLauncherView({
       // cache. The authoritative title now lives in SessionData on disk.
       saveTitleOverride(session.id, title)
       setTitleOverrides(loadTitleOverrides())
-      onToast?.('success', t('sessions.launcher.sessionRenamed', { title }))
       return true
     } catch (error) {
       onToast?.('error', error instanceof Error && error.message
