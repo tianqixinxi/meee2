@@ -570,10 +570,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     private func layoutNativeSessionsWorkspace(frame: NSRect, hidden: Bool) {
         let view = nativeSessionsController.view
-        view.frame = frame
+        view.frame = frame.integral
         view.isHidden = hidden
         if !hidden {
             rootView.addSubview(view, positioned: .above, relativeTo: nil)
+            view.needsLayout = true
+            view.layoutSubtreeIfNeeded()
         }
     }
 

@@ -260,6 +260,9 @@ export function SessionContextPanel({ session }: SessionContextPanelProps) {
   const changedFiles = environment?.files ?? []
   const artifactCount = artifacts?.totalCount ?? 0
   const currentStatusTone = statusTone(session.status)
+  const activityLabel = session.lastActivity
+    ? contextActivityLabel(session.lastActivity, currentStatusTone === 'idle', t)
+    : ''
   const showWork = Boolean(environment?.isGit && (environment.branch || environment.changes || changedFiles.length > 0))
   const showDeliverables = outputs.length > 0 || artifactCount > 0 || environmentLoading || artifactsLoading
 
@@ -277,7 +280,9 @@ export function SessionContextPanel({ session }: SessionContextPanelProps) {
         <div className="session-context__now">
           <div className="session-context__status-line">
             <span className={`session-context__status is-${currentStatusTone}`}>
-              {contextStatusLabel(currentStatusTone, t)}
+              {currentStatusTone === 'idle' && activityLabel
+                ? activityLabel
+                : contextStatusLabel(currentStatusTone, t)}
             </span>
             <span>{session.pluginDisplayName}</span>
           </div>
@@ -285,8 +290,13 @@ export function SessionContextPanel({ session }: SessionContextPanelProps) {
           {session.currentTool ? (
             <span className="session-context__muted"><Wrench size={11} aria-hidden />{session.currentTool}</span>
           ) : null}
-          {session.lastActivity ? (
-            <span className="session-context__muted"><Clock3 size={11} aria-hidden />{formatDateTime(session.lastActivity)}</span>
+          {session.lastActivity && currentStatusTone !== 'idle' ? (
+            <span
+              className="session-context__muted"
+              title={formatDateTime(session.lastActivity)}
+            >
+              <Clock3 size={11} aria-hidden />{activityLabel}
+            </span>
           ) : null}
         </div>
       </ContextSection>
@@ -490,6 +500,26 @@ function formatDateTime(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function contextActivityLabel(
+  value: string,
+  idle: boolean,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return value
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000))
+  if (minutes < 1) return t(idle ? 'sessions.context.idleJustNow' : 'sessions.context.activeJustNow')
+  if (minutes < 60) {
+    return t(idle ? 'sessions.context.idleMinutes' : 'sessions.context.activeMinutesAgo', { count: minutes })
+  }
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    return t(idle ? 'sessions.context.idleHours' : 'sessions.context.activeHoursAgo', { count: hours })
+  }
+  const days = Math.floor(hours / 24)
+  return t(idle ? 'sessions.context.idleDays' : 'sessions.context.activeDaysAgo', { count: days })
 }
 
 function formatNumber(value: number): string {

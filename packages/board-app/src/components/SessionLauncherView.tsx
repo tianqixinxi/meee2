@@ -15,7 +15,8 @@ import {
   MoreHorizontal,
   Network,
   Paperclip,
-  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
   PencilLine,
   Pin,
   PinOff,
@@ -88,6 +89,7 @@ const DEFAULT_PROMPT = ''
 const PROVIDERS: SpawnProvider[] = ['codex', 'claude']
 const DEFAULT_PERMISSION_MODE: AgentPermissionMode = 'onRequest'
 const DEFAULT_VISIBLE_SESSIONS = 8
+const SESSION_CONTEXT_OPEN_STORAGE_KEY = 'meee2.session.contextOpen.v1'
 const RECENT_GROUP_ID = 'recent'
 const HISTORY_GROUP_ID = 'history'
 const HISTORY_SECTION_ID = 'history-section'
@@ -2247,9 +2249,7 @@ function SessionLauncherTerminal({
   const switchStartedAtRef = useRef<number>(Date.now())
   const [showRecovery, setShowRecovery] = useState(false)
   const [showRecoveryDetails, setShowRecoveryDetails] = useState(false)
-  const [contextOpen, setContextOpen] = useState(() => (
-    typeof window === 'undefined' || window.innerWidth > 900
-  ))
+  const [contextOpen, setContextOpen] = useState(loadSessionContextOpen)
   const liveTarget = nativeTerminalTargetForSession(session)
   const suppliedSurfaceId = surfaceId?.trim() || undefined
   const targetSurfaceId = liveTarget.surfaceId ?? (usingRestoredSurface ? suppliedSurfaceId : undefined)
@@ -2351,12 +2351,34 @@ function SessionLauncherTerminal({
   }, [scheduleLayout, syncTerminal, targetSessionId, targetSurfaceId])
 
   useLayoutEffect(() => {
-    // The native terminal is a sibling NSView above the WebView. Force its
-    // rectangle to follow the grid change immediately when Context toggles;
-    // relying only on ResizeObserver can leave the old native frame in place.
-    lastRectRef.current = null
-    syncTerminal('layout', true)
+    // WKWebView and the sibling AppKit terminal do not always settle in the
+    // same frame. Sync immediately, across the next two paints, and once more
+    // after layout stabilizes so collapsing Context cannot leave a blank rail.
+    const forceLayout = () => {
+      lastRectRef.current = null
+      syncTerminal('layout', true)
+    }
+    forceLayout()
+    let secondFrame: number | null = null
+    const firstFrame = window.requestAnimationFrame(() => {
+      forceLayout()
+      secondFrame = window.requestAnimationFrame(forceLayout)
+    })
+    const settledTimer = window.setTimeout(forceLayout, 120)
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame)
+      window.clearTimeout(settledTimer)
+    }
   }, [contextOpen, syncTerminal])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SESSION_CONTEXT_OPEN_STORAGE_KEY, contextOpen ? '1' : '0')
+    } catch {
+      // Storage is only a preference; layout remains functional without it.
+    }
+  }, [contextOpen])
 
   useEffect(() => {
     return () => {
@@ -2404,12 +2426,15 @@ function SessionLauncherTerminal({
             <button
               type="button"
               className="session-launcher-terminal__context-toggle"
-              aria-label={t('sessions.context.toggle')}
+              aria-label={t(contextOpen ? 'sessions.context.collapse' : 'sessions.context.expand')}
               aria-expanded={contextOpen}
-              title={t('sessions.context.toggle')}
+              aria-controls="session-launcher-context"
+              title={t(contextOpen ? 'sessions.context.collapse' : 'sessions.context.expand')}
               onClick={() => setContextOpen((value) => !value)}
             >
-              <PanelRight size={15} aria-hidden />
+              {contextOpen
+                ? <PanelRightClose size={15} aria-hidden />
+                : <PanelRightOpen size={15} aria-hidden />}
             </button>
           ) : null}
         </div>
@@ -2459,6 +2484,7 @@ function SessionLauncherTerminal({
         )}
         {session && contextOpen ? (
           <aside
+            id="session-launcher-context"
             className="session-launcher-terminal__environment-dock"
             aria-label={t('sessions.environment.title')}
           >
@@ -2471,6 +2497,18 @@ function SessionLauncherTerminal({
       </div>
     </div>
   )
+}
+
+function loadSessionContextOpen(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    const stored = window.localStorage.getItem(SESSION_CONTEXT_OPEN_STORAGE_KEY)
+    if (stored === '1') return true
+    if (stored === '0') return false
+  } catch {
+    // Fall through to the responsive default.
+  }
+  return window.innerWidth > 900
 }
 
 function SessionRuntimeIcon({ session, label }: { session: Session | null; label: string }) {

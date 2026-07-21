@@ -1592,13 +1592,32 @@ describe('SessionLauncherView', () => {
     await waitFor(() => expect(api.renameSessionTitle).toHaveBeenCalledWith('session-a', '持久化标题'))
 
     expect(screen.getByRole('complementary', { name: '环境信息' })).toBeInTheDocument()
+    const host = view.container.querySelector('.session-launcher-terminal__host') as HTMLElement
+    vi.spyOn(host, 'getBoundingClientRect').mockImplementation(() => {
+      const contextOpen = host.parentElement?.classList.contains('is-context-open') ?? false
+      const width = contextOpen ? 680 : 960
+      return {
+        x: 0,
+        y: 32,
+        width,
+        height: 600,
+        top: 32,
+        right: width,
+        bottom: 632,
+        left: 0,
+        toJSON: () => ({}),
+      }
+    })
     api.syncNativeSessionsWorkspace.mockClear()
-    fireEvent.click(within(header as HTMLElement).getByRole('button', { name: '显示或隐藏会话上下文' }))
+    fireEvent.click(within(header as HTMLElement).getByRole('button', { name: '收起会话上下文' }))
     expect(screen.queryByRole('complementary', { name: '环境信息' })).not.toBeInTheDocument()
+    expect(within(header as HTMLElement).getByRole('button', { name: '展开会话上下文' })).toHaveAttribute('aria-expanded', 'false')
+    expect(localStorage.getItem('meee2.session.contextOpen.v1')).toBe('0')
     await waitFor(() => {
       expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
         phase: 'layout',
         mode: 'terminal',
+        rect: expect.objectContaining({ width: 960 }),
       }))
     })
   })

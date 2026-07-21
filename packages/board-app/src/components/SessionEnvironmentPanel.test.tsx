@@ -231,4 +231,20 @@ describe('SessionContextPanel', () => {
       )
     })
   })
+
+  it('shows idle duration without repeating last-activity wording', async () => {
+    const now = Date.parse('2026-07-21T01:01:00Z')
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+
+    render(
+      <I18nProvider>
+        <SessionContextPanel session={session({ id: 'idle-session', status: 'idle', lastActivity: '2026-07-21T01:00:00Z' })} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(api.fetchSessionEnvironment).toHaveBeenCalledWith('idle-session'))
+    await waitFor(() => expect(api.fetchSessionArtifacts).toHaveBeenCalledWith('idle-session'))
+    expect(screen.getByText('已空闲 1 分钟')).toBeInTheDocument()
+    expect(screen.queryByText(/最后活动于/)).not.toBeInTheDocument()
+  })
 })
