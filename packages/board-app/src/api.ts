@@ -1179,6 +1179,16 @@ export function syncNativeSessionsWorkspace(input: {
   return true
 }
 
+export function syncNativeWindowInteractiveRects(rects: NativeTerminalRect[]): boolean {
+  const bridge = window.webkit?.messageHandlers?.meee2Workspace
+  if (!bridge) return false
+  bridge.postMessage({
+    type: 'interactiveRects',
+    rects,
+  })
+  return true
+}
+
 export interface NativeTerminalPrewarmAck {
   surfaceId?: string
   sessionId?: string

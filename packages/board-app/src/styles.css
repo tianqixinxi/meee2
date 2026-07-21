@@ -13735,30 +13735,40 @@ button.template-gallery__tag {
   color: var(--session-runtime-color, var(--native-terminal-fg, var(--text)));
 }
 
-.session-launcher-terminal__rename {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 auto;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
+.session-launcher-terminal__title-control {
+  width: clamp(140px, 34vw, 520px);
+  min-width: 0;
+}
+
+.session-launcher-terminal__title-input {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: none;
   background: transparent;
-  color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 48%, transparent);
-  opacity: 0;
-  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
-}
-
-.session-launcher-terminal__identity:hover .session-launcher-terminal__rename,
-.session-launcher-terminal__rename:focus-visible {
-  opacity: 1;
-}
-
-.session-launcher-terminal__rename:hover,
-.session-launcher-terminal__rename:focus-visible {
-  background: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 8%, transparent);
   color: var(--native-terminal-fg, var(--text));
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+
+.session-launcher-terminal__title-input:hover {
+  border-color: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 12%, transparent);
+  background: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 4%, transparent);
+}
+
+.session-launcher-terminal__title-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  background: color-mix(in srgb, var(--native-terminal-fg, var(--text)) 7%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.session-launcher-terminal__title-input:disabled {
+  opacity: 0.6;
 }
 
 .session-launcher-terminal__actions {

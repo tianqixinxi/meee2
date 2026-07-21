@@ -52,6 +52,7 @@ import {
   reopenLauncherSession,
   revealSessionProjectInFinder,
   syncNativeSessionsWorkspace,
+  syncNativeWindowInteractiveRects,
   updateSessionControl,
   uploadSessionLaunchAttachment,
   type NativeTerminalRect,
@@ -901,32 +902,39 @@ export function SessionLauncherView({
     setRenameSessionValue(sessionDisplayTitle(session, titleOverrides))
   }, [titleOverrides])
 
-  const handleRenameSession = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!renameSession) return
-    const title = renameSessionValue.trim()
+  const persistSessionTitle = useCallback(async (session: Session, titleValue: string): Promise<boolean> => {
+    const title = titleValue.trim()
     if (!title) {
       onToast?.('error', t('sessions.launcher.sessionNameRequired'))
-      return
+      return false
     }
-    setRenamingSessionId(renameSession.id)
+    setRenamingSessionId(session.id)
     try {
-      await renameSessionTitle(renameSession.id, title)
+      await renameSessionTitle(session.id, title)
       // Keep the existing browser override as an immediate compatibility
       // cache. The authoritative title now lives in SessionData on disk.
-      saveTitleOverride(renameSession.id, title)
+      saveTitleOverride(session.id, title)
       setTitleOverrides(loadTitleOverrides())
-      setRenameSession(null)
-      setRenameSessionValue('')
       onToast?.('success', t('sessions.launcher.sessionRenamed', { title }))
+      return true
     } catch (error) {
       onToast?.('error', error instanceof Error && error.message
         ? error.message
         : t('sessions.launcher.renameSessionFailed'))
+      return false
     } finally {
       setRenamingSessionId(null)
     }
-  }, [onToast, renameSession, renameSessionValue, t])
+  }, [onToast, t])
+
+  const handleRenameSession = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!renameSession) return
+    if (await persistSessionTitle(renameSession, renameSessionValue)) {
+      setRenameSession(null)
+      setRenameSessionValue('')
+    }
+  }, [persistSessionTitle, renameSession, renameSessionValue])
 
   const handleArchiveSession = useCallback(async (session: Session) => {
     setArchivingSessionId(session.id)
@@ -1130,7 +1138,10 @@ export function SessionLauncherView({
             onResume={() => selectedSession && reopenLauncherSessionForSession(selectedSession)}
             onRetryAttach={handleRetrySessionAttachment}
             onOpenExternal={() => selectedSession && void handleOpenExternalTerminal(selectedSession)}
-            onRename={() => selectedSession && openRenameSession(selectedSession)}
+            onRename={(title) => selectedSession
+              ? persistSessionTitle(selectedSession, title)
+              : Promise.resolve(false)}
+            renameBusy={Boolean(selectedSession && renamingSessionId === selectedSession.id)}
             switchStartedAt={sessionSwitchTraceRef.current[selection.sessionId]?.startedAt}
             switchTraceId={sessionSwitchTraceRef.current[selection.sessionId]?.traceId}
           />
@@ -2223,6 +2234,7 @@ function SessionLauncherTerminal({
   onRetryAttach,
   onOpenExternal,
   onRename,
+  renameBusy,
   switchStartedAt,
   switchTraceId,
 }: {
@@ -2237,12 +2249,15 @@ function SessionLauncherTerminal({
   onResume?: () => void
   onRetryAttach?: () => void
   onOpenExternal?: () => void
-  onRename?: () => void
+  onRename?: (title: string) => Promise<boolean>
+  renameBusy?: boolean
   switchStartedAt?: number
   switchTraceId?: string
 }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
+  const titleControlRef = useRef<HTMLDivElement | null>(null)
+  const headerActionsRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const switchTraceIdRef = useRef<string>('')
@@ -2380,6 +2395,25 @@ function SessionLauncherTerminal({
     }
   }, [contextOpen])
 
+  useLayoutEffect(() => {
+    const syncInteractiveRects = () => {
+      const rects = [titleControlRef.current, headerActionsRef.current].flatMap((element) => (
+        element ? [paddedInteractiveRect(element.getBoundingClientRect(), 5)] : []
+      ))
+      syncNativeWindowInteractiveRects(rects)
+    }
+    syncInteractiveRects()
+    const observer = new ResizeObserver(syncInteractiveRects)
+    if (titleControlRef.current) observer.observe(titleControlRef.current)
+    if (headerActionsRef.current) observer.observe(headerActionsRef.current)
+    window.addEventListener('resize', syncInteractiveRects)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', syncInteractiveRects)
+      syncNativeWindowInteractiveRects([])
+    }
+  }, [session?.id])
+
   useEffect(() => {
     return () => {
       syncNativeSessionsWorkspace({
@@ -2407,20 +2441,17 @@ function SessionLauncherTerminal({
       <header className="session-launcher-terminal__header">
         <div className="session-launcher-terminal__identity">
           <SessionRuntimeIcon session={session} label={runtime} />
-          <strong title={title}>{title}</strong>
-          {session && onRename ? (
-            <button
-              type="button"
-              className="session-launcher-terminal__rename"
-              aria-label={t('sessions.launcher.renameSessionNamed', { title })}
-              title={t('sessions.launcher.renameSession')}
-              onClick={onRename}
-            >
-              <PencilLine size={12} aria-hidden />
-            </button>
-          ) : null}
+          <div ref={titleControlRef} className="session-launcher-terminal__title-control">
+            {session && onRename ? (
+              <InlineSessionTitle
+                title={title}
+                busy={Boolean(renameBusy)}
+                onCommit={onRename}
+              />
+            ) : <strong title={title}>{title}</strong>}
+          </div>
         </div>
-        <div className="session-launcher-terminal__actions">
+        <div ref={headerActionsRef} className="session-launcher-terminal__actions">
           <em className={`session-launcher-terminal__status is-${status.tone}`}>{status.label}</em>
           {session ? (
             <button
@@ -2497,6 +2528,62 @@ function SessionLauncherTerminal({
       </div>
     </div>
   )
+}
+
+function InlineSessionTitle({
+  title,
+  busy,
+  onCommit,
+}: {
+  title: string
+  busy: boolean
+  onCommit: (title: string) => Promise<boolean>
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState(title)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => setDraft(title), [title])
+
+  const commit = async () => {
+    const next = draft.trim()
+    if (!next || next === title || busy) {
+      setDraft(title)
+      return
+    }
+    if (!await onCommit(next)) setDraft(title)
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className="session-launcher-terminal__title-input"
+      aria-label={t('sessions.launcher.displayName')}
+      title={t('sessions.launcher.renameSession')}
+      value={draft}
+      disabled={busy}
+      maxLength={200}
+      spellCheck={false}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') inputRef.current?.blur()
+        if (event.key === 'Escape') {
+          setDraft(title)
+          inputRef.current?.blur()
+        }
+      }}
+    />
+  )
+}
+
+function paddedInteractiveRect(rect: DOMRect, padding: number): NativeTerminalRect {
+  return {
+    x: Math.max(0, Math.round(rect.left - padding)),
+    y: Math.max(0, Math.round(rect.top - padding)),
+    width: Math.round(rect.width + padding * 2),
+    height: Math.round(rect.height + padding * 2),
+  }
 }
 
 function loadSessionContextOpen(): boolean {
