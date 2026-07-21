@@ -21,7 +21,7 @@ final class DragRegionWebView: WKWebView {
     ///
     /// Frame layout matches the CSS: x is "from left", y is "from top",
     /// both in points (= CSS px since we don't scale).
-    var clickThroughRects: [CGRect] = [
+    static let defaultClickThroughRects: [CGRect] = [
         // Workspace rail toggle — sits to the right of macOS traffic lights
         // (which end around x≈64 after compact-rail positioning) so it visually shares the title-bar row
         // but does NOT trigger a window drag. The CSS positions the
@@ -29,6 +29,11 @@ final class DragRegionWebView: WKWebView {
         // each side so the user doesn't have to hit the exact pixel edge.
         CGRect(x: 66, y: 0, width: 34, height: 28)
     ]
+    var clickThroughRects = defaultClickThroughRects
+
+    func setDynamicClickThroughRects(_ rects: [CGRect]) {
+        clickThroughRects = Self.defaultClickThroughRects + rects
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         // `point` 在 superview 坐标系。把它换到 window 坐标（bottom-left
@@ -494,6 +499,13 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             tracePayload["webPhase"] = payload["webPhase"] as? String ?? "sessionLauncher.nativeTraceFallback"
         }
         let type = payload["type"] as? String ?? ""
+        if type == "interactiveRects" {
+            let rects = (payload["rects"] as? [[String: Any]] ?? [])
+                .prefix(16)
+                .compactMap(Self.interactiveRect(from:))
+            webView.setDynamicClickThroughRects(rects)
+            return
+        }
         guard type == "sessionsWorkspace" else { return }
         let phase = payload["phase"] as? String ?? "layout"
         let mode = payload["mode"] as? String ?? "full"
@@ -570,10 +582,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     private func layoutNativeSessionsWorkspace(frame: NSRect, hidden: Bool) {
         let view = nativeSessionsController.view
-        view.frame = frame
+        view.frame = frame.integral
         view.isHidden = hidden
         if !hidden {
             rootView.addSubview(view, positioned: .above, relativeTo: nil)
+            view.needsLayout = true
+            view.layoutSubtreeIfNeeded()
         }
     }
 
@@ -991,6 +1005,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         if let value = value as? NSNumber { return value.doubleValue }
         if let value = value as? String { return Double(value) }
         return nil
+    }
+
+    private static func interactiveRect(from payload: [String: Any]) -> CGRect? {
+        guard
+            let x = doubleValue(payload["x"]),
+            let y = doubleValue(payload["y"]),
+            let width = doubleValue(payload["width"]),
+            let height = doubleValue(payload["height"]),
+            width > 0,
+            height > 0
+        else { return nil }
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     private static func terminalTheme(from payload: [String: Any]) -> String {

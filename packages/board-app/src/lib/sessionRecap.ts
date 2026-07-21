@@ -31,9 +31,16 @@ export function displaySessionTitle(session: Session, manualOverride?: string | 
     currentTask: session.currentTask,
     initialUserMessage: initialUserMessage(session),
     providerTitle: session.title,
-    fallbackTitle: session.pluginDisplayName,
+    fallbackTitle: projectFallbackTitle(session.project) ?? session.pluginDisplayName,
     providerDisplayName: session.pluginDisplayName,
   })
+}
+
+function projectFallbackTitle(project: string): string | null {
+  const normalized = project.trim().replace(/[\\/]+$/, '')
+  if (!normalized) return null
+  const parts = normalized.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || normalized
 }
 
 export function sessionRecapProgressText(session: Session): string | null {

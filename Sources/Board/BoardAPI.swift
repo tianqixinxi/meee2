@@ -7141,6 +7141,34 @@ enum BoardAPI {
         let alreadyDead: Bool
     }
 
+    static func renameSession(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sid.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else {
+            return errorResponse("bad_request", "title is required", status: 400)
+        }
+        guard title.count <= 200 else {
+            return errorResponse("bad_request", "title must be 200 characters or fewer", status: 400)
+        }
+        guard let stored = resolveStoredSessionData(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        SessionStore.shared.update(stored.sessionId) { session in
+            session.customTitle = title
+        }
+        BoardServer.shared.broadcastStateChanged()
+        struct RenameSessionEnvelope: Encodable {
+            let ok: Bool
+            let sessionId: String
+            let title: String
+        }
+        return jsonResponse(RenameSessionEnvelope(ok: true, sessionId: stored.sessionId, title: title))
+    }
+
     static func updateSessionControl(_ req: HttpRequest) -> HttpResponse {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
@@ -7212,6 +7240,42 @@ enum BoardAPI {
         }
         let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
         return matches.count == 1 ? matches[0].sessionId : nil
+    }
+
+    private static func resolveStoredSessionData(_ sid: String) -> SessionData? {
+        var candidateIds = [sid]
+        if let resolved = resolveSessionControlId(sid), !candidateIds.contains(resolved) {
+            candidateIds.append(resolved)
+        }
+        if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sid),
+           !candidateIds.contains(surface.sessionId) {
+            candidateIds.append(surface.sessionId)
+        }
+        if let plugin = resolvePluginSession(sid) {
+            candidateIds.append(contentsOf: pluginSessionIds(plugin))
+            candidateIds.append(inboxSessionId(for: plugin))
+        }
+        var seen = Set<String>()
+        candidateIds = candidateIds.filter { !$0.isEmpty && seen.insert($0).inserted }
+        for id in candidateIds {
+            if let stored = SessionStore.shared.get(id) { return stored }
+        }
+        let all = SessionStore.shared.listAll()
+        let exact = all.filter { session in
+            let ids = [
+                session.sessionId,
+                session.providerResumeSessionId,
+                session.terminalInfo?.cmuxSurfaceId
+            ].compactMap { $0 }
+            return ids.contains(where: candidateIds.contains)
+        }
+        if exact.count == 1 { return exact[0] }
+        let prefix = all.filter { session in
+            candidateIds.contains { candidate in
+                session.sessionId.hasPrefix(candidate) || candidate.hasPrefix(session.sessionId)
+            }
+        }
+        return prefix.count == 1 ? prefix[0] : nil
     }
 
     static func listMemoryRecords(_ req: HttpRequest) -> HttpResponse {

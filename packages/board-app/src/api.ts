@@ -993,6 +993,16 @@ export function renameSessionProject(id: string, input: SessionProjectUpdateInpu
   })
 }
 
+export function renameSessionTitle(id: string, title: string): Promise<{ ok: boolean; sessionId: string; title: string }> {
+  return jsonRequest<{ ok: boolean; sessionId: string; title: string }>(
+    `/api/sessions/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    },
+  )
+}
+
 export function revealSessionProjectInFinder(id: string): Promise<{ ok: boolean; path: string }> {
   return jsonRequest<{ ok: boolean; path: string }>(`/api/session-projects/${encodeURIComponent(id)}/reveal`, {
     method: 'POST',
@@ -1165,6 +1175,16 @@ export function syncNativeSessionsWorkspace(input: {
     clickStartedAtMs: input.clickStartedAtMs,
     sentAtMs: input.sentAtMs,
     webPhase: input.webPhase,
+  })
+  return true
+}
+
+export function syncNativeWindowInteractiveRects(rects: NativeTerminalRect[]): boolean {
+  const bridge = window.webkit?.messageHandlers?.meee2Workspace
+  if (!bridge) return false
+  bridge.postMessage({
+    type: 'interactiveRects',
+    rects,
   })
   return true
 }

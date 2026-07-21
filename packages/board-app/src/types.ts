@@ -56,6 +56,12 @@ export interface UsageStats {
   model: string
 }
 
+export interface SessionTask {
+  id: string
+  name: string
+  status: 'pending' | 'in_progress' | 'done' | 'completed' | string
+}
+
 export interface Meee2MCPStatus {
   configured: boolean
   configCommand: string | null
@@ -215,6 +221,7 @@ export interface Session {
   // 经常不准（不同模型单价 / cache read-write / local OAuth 免费额度都没算进去），
   // 只会误导，已经从 DTO 里移掉。UI 上展示 usageStats.input/output tokens 就好。
   usageStats: UsageStats | null
+  tasks?: SessionTask[]
   // 当前正在后台跑的 Claude Code 子 agent / task，和主 status 是正交维度
   backgroundAgents: BackgroundAgent[]
   // Claude CLI 最近一次 /recap 或 away_summary 产生的内容
@@ -1030,6 +1037,12 @@ export interface SessionEnvironmentSnapshot {
     deletions: number
   } | null
   branch?: string | null
+  files: Array<{
+    relativePath: string
+    status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+    additions?: number | null
+    deletions?: number | null
+  }>
   outputs: Array<{
     path: string
     relativePath: string

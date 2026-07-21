@@ -716,6 +716,7 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/open-workspace"] = BoardServer.cors(BoardAPI.openSessionWorkspace)
         server.POST["/api/sessions/:id/inject"] = BoardServer.cors(BoardAPI.injectToSession)
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
+        server.PATCH["/api/sessions/:id"] = BoardServer.cors(BoardAPI.renameSession)
         server.POST["/api/sessions/:id/control"] = BoardServer.cors(BoardAPI.updateSessionControl)
         server.POST["/api/sessions/:id/permission"] = BoardServer.cors(BoardAPI.respondToSessionPermission)
         server.GET["/api/sessions/:id/environment"] = BoardServer.cors(BoardAPI.getSessionEnvironment)

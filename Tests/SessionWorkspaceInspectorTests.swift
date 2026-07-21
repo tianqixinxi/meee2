@@ -30,6 +30,26 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
 
         XCTAssertEqual(result.changedFiles, 4)
         XCTAssertEqual(result.createdPaths, ["Sources/New.swift", "output/report.md"])
+        XCTAssertEqual(result.files, [
+            SessionWorkspaceStatusEntry(relativePath: "Sources/App.swift", status: "modified"),
+            SessionWorkspaceStatusEntry(relativePath: "Sources/New.swift", status: "added"),
+            SessionWorkspaceStatusEntry(relativePath: "old.txt", status: "deleted"),
+            SessionWorkspaceStatusEntry(relativePath: "output/report.md", status: "untracked")
+        ])
+    }
+
+    func testParseNumstatBuildsPerFileTotals() {
+        let result = SessionWorkspaceInspector.parseNumstatByPath("""
+        12\t3\tSources/App.swift
+        4\t0\tREADME.md
+        2\t1\tSources/App.swift
+        -\t-\tAssets/icon.png
+        """)
+
+        XCTAssertEqual(result["Sources/App.swift"]?.additions, 14)
+        XCTAssertEqual(result["Sources/App.swift"]?.deletions, 4)
+        XCTAssertEqual(result["README.md"]?.additions, 4)
+        XCTAssertNil(result["Assets/icon.png"])
     }
 
     func testNonGitWorkspaceHasNoInferredOutputs() throws {
@@ -45,6 +65,7 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
         XCTAssertFalse(snapshot.isGit)
         XCTAssertNil(snapshot.branch)
         XCTAssertNil(snapshot.changes)
+        XCTAssertEqual(snapshot.files, [])
         XCTAssertEqual(snapshot.outputs, [])
     }
 
@@ -69,6 +90,20 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
         XCTAssertTrue(snapshot.isGit)
         XCTAssertEqual(snapshot.branch, "main")
         XCTAssertEqual(snapshot.changes, SessionWorkspaceChangeSummary(files: 2, additions: 1, deletions: 0))
+        XCTAssertEqual(snapshot.files, [
+            SessionWorkspaceChangedFile(
+                relativePath: "result.md",
+                status: "untracked",
+                additions: nil,
+                deletions: nil
+            ),
+            SessionWorkspaceChangedFile(
+                relativePath: "tracked.txt",
+                status: "modified",
+                additions: 1,
+                deletions: 0
+            )
+        ])
         XCTAssertEqual(snapshot.outputs, [
             SessionWorkspaceOutputFile(path: created.path, relativePath: "result.md")
         ])
@@ -81,6 +116,7 @@ final class SessionWorkspaceInspectorTests: XCTestCase {
             isGit: true,
             changes: nil,
             branch: "main",
+            files: [],
             outputs: [SessionWorkspaceOutputFile(path: "/tmp/project/result.md", relativePath: "result.md")]
         )
 

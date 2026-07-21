@@ -11,14 +11,18 @@ const api = vi.hoisted(() => ({
   createProjectSession: vi.fn(),
   createSessionProject: vi.fn(),
   createTemporarySession: vi.fn(),
+  fetchSessionArtifacts: vi.fn(),
   fetchSessionEnvironment: vi.fn(),
+  fetchTranscript: vi.fn(),
   forgetSessionProject: vi.fn(),
   pickSessionLaunchAttachments: vi.fn(),
   pickSessionProjectDirectory: vi.fn(),
   renameSessionProject: vi.fn(),
+  renameSessionTitle: vi.fn(),
   reopenLauncherSession: vi.fn(),
   revealSessionProjectInFinder: vi.fn(),
   syncNativeSessionsWorkspace: vi.fn(),
+  syncNativeWindowInteractiveRects: vi.fn(),
   updateSessionControl: vi.fn(),
   uploadSessionLaunchAttachment: vi.fn(),
 }))
@@ -103,18 +107,26 @@ describe('SessionLauncherView', () => {
     storeProjectSelection()
     api.fetchSessionProjects.mockResolvedValue({ projects: [project] })
     api.activateSession.mockResolvedValue(true)
+    api.fetchSessionArtifacts.mockResolvedValue({
+      sessionId: 'session-a',
+      artifacts: [],
+      totalCount: 0,
+    })
+    api.fetchTranscript.mockResolvedValue({ sessionId: 'session-a', entries: [] })
     api.fetchSessionEnvironment.mockResolvedValue({
       sessionId: 'session-a',
       cwd: '/Users/kai/Code/meee2-workspace',
       isGit: true,
       changes: { files: 2, additions: 14, deletions: 3 },
       branch: 'codex/session-environment',
+      files: [],
       outputs: [{
         path: '/Users/kai/Code/meee2-workspace/output/result.md',
         relativePath: 'output/result.md',
       }],
     })
     api.renameSessionProject.mockResolvedValue(project)
+    api.renameSessionTitle.mockResolvedValue({ ok: true, sessionId: 'session-a', title: 'Session 标题修复' })
     api.reopenLauncherSession.mockResolvedValue({
       ok: true,
       action: 'resume',
@@ -197,7 +209,7 @@ describe('SessionLauncherView', () => {
 
     const latestButton = await screen.findByRole('button', { name: '最近一次 Session' })
     await waitFor(() => expect(latestButton.closest('.session-launcher__session-item')).toHaveClass('is-selected'))
-    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('最近一次 Session')
+    expect(view.container.querySelector('.session-launcher-terminal__title-input')).toHaveValue('最近一次 Session')
     expect(screen.queryByText('我们应该在meee2-workspace中做些什么？')).not.toBeInTheDocument()
     await waitFor(() => {
       expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
@@ -230,7 +242,7 @@ describe('SessionLauncherView', () => {
 
     const requestedButton = await screen.findByRole('button', { name: '来自 slash command 的 Session' })
     await waitFor(() => expect(requestedButton.closest('.session-launcher__session-item')).toHaveClass('is-selected'))
-    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('来自 slash command 的 Session')
+    expect(view.container.querySelector('.session-launcher-terminal__title-input')).toHaveValue('来自 slash command 的 Session')
     expect(screen.queryByText('我们应该在meee2-workspace中做些什么？')).not.toBeInTheDocument()
   })
 
@@ -509,7 +521,7 @@ describe('SessionLauncherView', () => {
     const returned = renderWithI18n(<SessionLauncherView state={makeState()} />)
 
     await waitFor(() => {
-      expect(returned.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('新增 Session 原生 Terminal')
+      expect(returned.container.querySelector('.session-launcher-terminal__title-input')).toHaveValue('新增 Session 原生 Terminal')
       expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
         phase: 'show',
         mode: 'terminal',
@@ -1234,7 +1246,7 @@ describe('SessionLauncherView', () => {
     expect(await screen.findByRole('button', { name: /^继续旧的 Session(?: ·|$)/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建出来的 restored surface' })).not.toBeInTheDocument()
     expect(view.container.querySelectorAll('.session-launcher__session-item.is-selected')).toHaveLength(1)
-    expect(view.container.querySelector('.session-launcher-terminal__header strong')).toHaveTextContent('继续旧的 Session')
+    expect(view.container.querySelector('.session-launcher-terminal__title-input')).toHaveValue('继续旧的 Session')
     expect(view.container.querySelector('.session-launcher-terminal__status')).toHaveTextContent('运行中')
   })
 
@@ -1456,10 +1468,10 @@ describe('SessionLauncherView', () => {
     fireEvent.click(screen.getByRole('button', { name: '修复 Session 标题' }))
     await screen.findByText('codex/session-environment')
 
-    const terminalHeader = container.querySelector('.session-launcher-terminal__header strong')
-    expect(terminalHeader).toHaveTextContent('修复 Session 标题')
-    expect(container.querySelector('.session-launcher-terminal__header span')).toHaveTextContent('Codex')
-    expect(container.querySelector('.session-launcher-terminal__header span')).toHaveTextContent('meee2-workspace')
+    const terminalHeader = container.querySelector('.session-launcher-terminal__title-input')
+    expect(terminalHeader).toHaveValue('修复 Session 标题')
+    expect(screen.getByRole('img', { name: 'Codex' })).toBeInTheDocument()
+    expect(container.querySelector('.session-launcher-terminal__identity')).not.toHaveTextContent('meee2-workspace')
     expect(container.querySelector('.session-launcher-terminal__status')).toHaveTextContent('运行中')
   })
 
@@ -1557,8 +1569,60 @@ describe('SessionLauncherView', () => {
     fireEvent.change(input, { target: { value: 'Session 标题修复' } })
     fireEvent.click(screen.getByRole('button', { name: '重命名' }))
 
+    await waitFor(() => {
+      expect(api.renameSessionTitle).toHaveBeenCalledWith('session-a', 'Session 标题修复')
+    })
     expect(await screen.findByRole('button', { name: 'Session 标题修复' })).toBeInTheDocument()
     expect(localStorage.getItem('meee2.session.titleOverrides.v1')).toContain('Session 标题修复')
+  })
+
+  it('renames from the terminal header and collapses session context', async () => {
+    const onToast = vi.fn()
+    const view = renderWithI18n(<SessionLauncherView state={makeState()} onToast={onToast} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    fireEvent.click(await screen.findByRole('button', { name: '新增 Session 原生 Terminal' }))
+
+    const header = view.container.querySelector('.session-launcher-terminal__header')
+    expect(header).not.toBeNull()
+    expect(within(header as HTMLElement).getByRole('img', { name: 'Codex' })).toBeInTheDocument()
+    expect(within(header as HTMLElement).queryByText('Codex')).not.toBeInTheDocument()
+    const input = within(header as HTMLElement).getByRole('textbox', { name: '显示名称' })
+    fireEvent.change(input, { target: { value: '持久化标题' } })
+    fireEvent.blur(input)
+    await waitFor(() => expect(api.renameSessionTitle).toHaveBeenCalledWith('session-a', '持久化标题'))
+    expect(onToast).not.toHaveBeenCalled()
+    expect(api.syncNativeWindowInteractiveRects).toHaveBeenCalled()
+
+    expect(screen.getByRole('complementary', { name: '环境信息' })).toBeInTheDocument()
+    const host = view.container.querySelector('.session-launcher-terminal__host') as HTMLElement
+    vi.spyOn(host, 'getBoundingClientRect').mockImplementation(() => {
+      const contextOpen = host.parentElement?.classList.contains('is-context-open') ?? false
+      const width = contextOpen ? 680 : 960
+      return {
+        x: 0,
+        y: 32,
+        width,
+        height: 600,
+        top: 32,
+        right: width,
+        bottom: 632,
+        left: 0,
+        toJSON: () => ({}),
+      }
+    })
+    api.syncNativeSessionsWorkspace.mockClear()
+    fireEvent.click(within(header as HTMLElement).getByRole('button', { name: '收起会话上下文' }))
+    expect(screen.queryByRole('complementary', { name: '环境信息' })).not.toBeInTheDocument()
+    expect(within(header as HTMLElement).getByRole('button', { name: '展开会话上下文' })).toHaveAttribute('aria-expanded', 'false')
+    expect(localStorage.getItem('meee2.session.contextOpen.v1')).toBe('0')
+    await waitFor(() => {
+      expect(api.syncNativeSessionsWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'layout',
+        mode: 'terminal',
+        rect: expect.objectContaining({ width: 960 }),
+      }))
+    })
   })
 
   it('shows changes, branch, and output files alongside the terminal', async () => {
@@ -1611,6 +1675,22 @@ describe('SessionLauncherView', () => {
 
     await screen.findByText('Codex')
     expect(screen.queryByText(/Node f9ed3716/)).not.toBeInTheDocument()
+  })
+
+  it('uses the project name instead of a generic Session title', async () => {
+    renderWithI18n(<SessionLauncherView state={makeState([makeSession({
+      title: 'Session',
+      currentTask: null,
+      recentMessages: [],
+      latestRecap: null,
+      lastActivity: new Date().toISOString(),
+    })])} />)
+
+    await screen.findByText('我们应该在meee2-workspace中做些什么？')
+    expect(screen.getAllByRole('button', { name: /^meee2-workspace(?: ·|$)/ }).some(
+      (button) => button.classList.contains('session-launcher__session-row'),
+    )).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Session' })).not.toBeInTheDocument()
   })
 
   it('opens project actions from the hover toolbar and renames the display name', async () => {
